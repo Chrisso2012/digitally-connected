@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/topic-package.schema.json",
+  "title": "Topic Package",
+  "description": "The canonical object for one approved content topic. Defined in DC-003-T002 §1.",
+  "type": "object",
+  "required": [
+    "topic_id", "working_title", "audience", "primary_goal", "funnel_stage",
+    "core_message", "supporting_points", "cta", "brand_voice", "status",
+    "created_date", "updated_date", "version", "schema_version",
+    "source", "locale", "owner"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "topic_id": { "type": "string", "pattern": "^topic_[A-Za-z0-9]+$" },
+    "working_title": { "type": "string", "minLength": 1 },
+    "audience": { "type": "string", "minLength": 1 },
+    "primary_goal": { "type": "string", "minLength": 1 },
+    "funnel_stage": { "type": "string", "enum": ["awareness", "consideration", "decision"] },
+    "core_message": { "type": "string", "minLength": 1 },
+    "supporting_points": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "cta": { "type": "string", "minLength": 1 },
+    "keywords": { "type": "array", "items": { "type": "string" } },
+    "brand_voice": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["draft", "approved", "in_production", "completed", "archived"] },
+    "created_date": { "type": "string", "format": "date-time" },
+    "updated_date": { "type": "string", "format": "date-time" },
+    "version": { "type": "integer", "minimum": 1 },
+    "schema_version": { "type": "string" },
+    "source": { "type": "string", "enum": ["manual", "backlog"] },
+    "backlog_reference_id": { "type": ["string", "null"] },
+    "content_pillar": { "type": ["string", "null"] },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "priority": { "type": ["integer", "null"] },
+    "related_topic_ids": { "type": "array", "items": { "type": "string" } },
+    "locale": { "type": "string", "minLength": 2 },
+    "owner": { "type": "string", "format": "email" },
+    "notes": { "type": ["string", "null"] }
+  }
+}

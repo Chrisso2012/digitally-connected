@@ -1,0 +1,23 @@
+{
+  "execution_id": "exec_20260731_a1f9",
+  "topic_id": "topic_01J9X8QZ3K",
+  "carousel_content_id": "cc_01J9X9A1",
+  "carousel_id": "car_01J9X9C7",
+  "started_at": "2026-07-31T02:10:58Z",
+  "finished_at": "2026-07-31T02:11:18Z",
+  "duration_ms": 20000,
+  "llm_model": "claude-sonnet-5",
+  "prompt_version": "carousel-copy.v1",
+  "template_version": "v1",
+  "token_usage": { "input_tokens": 1180, "output_tokens": 640 },
+  "llm_retry_count": 0,
+  "render_retry_count": 0,
+  "validation_attempts": 1,
+  "render_status": "completed",
+  "overall_status": "success",
+  "errors": [],
+  "execution_trigger": "manual",
+  "environment": "production",
+  "n8n_execution_url": null,
+  "cost_estimate": null
+}

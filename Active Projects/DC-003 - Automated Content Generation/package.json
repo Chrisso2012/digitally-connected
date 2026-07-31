@@ -1,0 +1,11 @@
+{
+  "name": "dc-003-content-factory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DC-003 Automated Content Generation — project foundation (config, template registry, JSON schemas, schema validation). No content generation, payload mapping, rendering, or n8n workflow implemented yet.",
+  "type": "module",
+  "scripts": {
+    "validate": "node tests/validation/validate.mjs"
+  },
+  "dependencies": {}
+}

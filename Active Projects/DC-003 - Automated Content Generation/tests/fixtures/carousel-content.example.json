@@ -1,0 +1,70 @@
+{
+  "carousel_content_id": "cc_01J9X9A1",
+  "topic_id": "topic_01J9X8QZ3K",
+  "generated_at": "2026-07-31T02:11:04Z",
+  "llm_model": "claude-sonnet-5",
+  "prompt_version": "carousel-copy.v1",
+  "schema_version": "1.0",
+  "slides": [
+    {
+      "slide_type": "cover",
+      "content": {
+        "eyebrow_text": "CLIENT ACQUISITION SERIES",
+        "headline_text": "The revenue is already in your database",
+        "body_text": "Most businesses are sitting on six figures of recoverable revenue."
+      }
+    },
+    {
+      "slide_type": "content",
+      "content": {
+        "eyebrow_text": "02 — DATABASE REACTIVATION",
+        "headline_text": "Your past enquiries didn't disappear. They went cold.",
+        "body_text": "A structured re-engagement sequence turns that list back into booked appointments.",
+        "list_items": [
+          "Reactivation — automated sequences reopen conversations with contacts who already know you.",
+          "Segmentation — every message is matched to where that contact actually is in their decision.",
+          "Follow-through — no lead goes quiet again after the first reply."
+        ]
+      }
+    },
+    {
+      "slide_type": "statistic",
+      "content": {
+        "eyebrow_text": "BY THE NUMBERS",
+        "stat_value": "63%",
+        "supporting_stat_text": "of past enquiries never received a second follow-up message.",
+        "stat_caption": "Based on enquiry-database audits across 40+ service businesses."
+      }
+    },
+    {
+      "slide_type": "quote",
+      "content": {
+        "quote_text": "We didn't need more leads. We needed to follow up with the ones we had.",
+        "attribution_name": "Operations Lead",
+        "attribution_role": "Mid-market services business"
+      }
+    },
+    {
+      "slide_type": "infographic",
+      "content": {
+        "eyebrow_text": "HOW IT WORKS",
+        "headline_text": "A connected system, not a checklist",
+        "steps": [
+          { "title": "Audit", "description": "We map your existing enquiry database and score it for hidden opportunity." },
+          { "title": "Segment", "description": "Contacts are grouped by where they actually are in their decision." },
+          { "title": "Reactivate", "description": "Automated sequences reopen the conversation without new ad spend." },
+          { "title": "Convert", "description": "Warm replies are routed straight to a booked call." }
+        ]
+      }
+    },
+    {
+      "slide_type": "cta",
+      "content": {
+        "eyebrow_text": "READY WHEN YOU ARE",
+        "headline_text": "Stop paying for leads you already have",
+        "body_text": "Book a 20-minute audit of your enquiry database and see the revenue sitting inside it.",
+        "button_label": "Book your audit"
+      }
+    }
+  ]
+}

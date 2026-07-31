@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/finished-carousel.schema.json",
+  "title": "Finished Carousel Object",
+  "description": "What the pipeline returns after rendering. Carries render identity, image location, timing, errors, and the fields reserved for future approval. Defined in DC-003-T002 §4 and §7.",
+  "type": "object",
+  "required": ["carousel_id", "topic_id", "carousel_content_id", "generated_at", "overall_status", "slides", "metadata"],
+  "additionalProperties": false,
+  "properties": {
+    "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
+    "topic_id": { "type": "string", "pattern": "^topic_[A-Za-z0-9]+$" },
+    "carousel_content_id": { "type": "string", "pattern": "^cc_[A-Za-z0-9]+$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "overall_status": { "type": "string", "enum": ["completed", "partial", "failed"] },
+    "slides": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "required": [
+          "slide_number", "slide_type", "template_id", "render_id", "status",
+          "image_url", "width", "height", "format",
+          "render_started_at", "render_completed_at", "duration_ms", "error"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "slide_number": { "type": "integer", "minimum": 1, "maximum": 6 },
+          "slide_type": { "type": "string", "enum": ["cover", "content", "statistic", "quote", "infographic", "cta"] },
+          "template_id": { "type": "string", "minLength": 1 },
+          "render_id": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["pending", "processing", "completed", "failed"] },
+          "image_url": { "type": ["string", "null"] },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
+          "format": { "type": "string", "enum": ["png", "jpg", "webp"] },
+          "render_started_at": { "type": ["string", "null"], "format": "date-time" },
+          "render_completed_at": { "type": ["string", "null"], "format": "date-time" },
+          "duration_ms": { "type": ["integer", "null"] },
+          "error": {
+            "type": ["object", "null"],
+            "required": ["code", "message"],
+            "additionalProperties": false,
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["total_slides", "completed_slides", "failed_slides", "total_duration_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "total_slides": { "type": "integer" },
+        "completed_slides": { "type": "integer" },
+        "failed_slides": { "type": "integer" },
+        "total_duration_ms": { "type": ["integer", "null"] }
+      }
+    },
+    "approval": {
+      "type": ["object", "null"],
+      "description": "Reserved for future use — see DC-003-T002 §7. No approval workflow is implemented; this block is always null or all-default in the MVP.",
+      "required": ["approved", "approved_by", "approved_at", "rejected", "rejection_reason", "published", "published_at"],
+      "additionalProperties": false,
+      "properties": {
+        "approved": { "type": "boolean" },
+        "approved_by": { "type": ["string", "null"] },
+        "approved_at": { "type": ["string", "null"], "format": "date-time" },
+        "rejected": { "type": "boolean" },
+        "rejection_reason": { "type": ["string", "null"] },
+        "published": { "type": "boolean" },
+        "published_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

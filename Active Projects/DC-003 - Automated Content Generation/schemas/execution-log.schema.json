@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/execution-log.schema.json",
+  "title": "Execution Log",
+  "description": "One record per pipeline run, tying Topic Package, Carousel Content Object, Templated Payload Objects, and Finished Carousel Object together. Defined in DC-003-T002 §5.",
+  "type": "object",
+  "required": [
+    "execution_id", "topic_id", "carousel_content_id", "carousel_id",
+    "started_at", "finished_at", "duration_ms",
+    "llm_model", "prompt_version", "template_version", "token_usage",
+    "llm_retry_count", "render_retry_count", "validation_attempts",
+    "render_status", "overall_status", "errors",
+    "execution_trigger", "environment", "n8n_execution_url", "cost_estimate"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "execution_id": { "type": "string", "pattern": "^exec_[0-9]{8}_[A-Za-z0-9]+$" },
+    "topic_id": { "type": "string", "pattern": "^topic_[A-Za-z0-9]+$" },
+    "carousel_content_id": { "type": ["string", "null"], "pattern": "^cc_[A-Za-z0-9]+$" },
+    "carousel_id": { "type": ["string", "null"], "pattern": "^car_[A-Za-z0-9]+$" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": ["string", "null"], "format": "date-time" },
+    "duration_ms": { "type": ["integer", "null"] },
+    "llm_model": { "type": "string", "minLength": 1 },
+    "prompt_version": { "type": "string", "minLength": 1 },
+    "template_version": { "type": ["string", "null"] },
+    "token_usage": {
+      "type": ["object", "null"],
+      "required": ["input_tokens", "output_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" }
+      }
+    },
+    "llm_retry_count": { "type": "integer", "minimum": 0 },
+    "render_retry_count": { "type": "integer", "minimum": 0 },
+    "validation_attempts": { "type": "integer", "minimum": 1 },
+    "render_status": { "type": "string", "enum": ["completed", "partial", "failed", "not_started"] },
+    "overall_status": { "type": "string", "enum": ["success", "partial_success", "failed"] },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stage", "code", "message", "occurred_at"],
+        "additionalProperties": false,
+        "properties": {
+          "stage": { "type": "string" },
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "occurred_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "execution_trigger": { "type": "string", "enum": ["manual", "backlog", "scheduled"] },
+    "environment": { "type": "string", "minLength": 1 },
+    "n8n_execution_url": { "type": ["string", "null"] },
+    "cost_estimate": { "type": ["number", "null"] }
+  }
+}

@@ -1,0 +1,192 @@
+{
+  "registry_version": "1.0",
+  "design_system_version": "dc-002-v1",
+  "source": "Verified live against the Templated account (chris@digitallyconnected.net, Starter plan) during DC-003-T001/T002/I001.",
+  "slide_order": ["cover", "content", "statistic", "quote", "infographic", "cta"],
+  "templates": {
+    "cover": {
+      "template_id": "748d17c5-c58e-48eb-9f12-434252a6d17f",
+      "name": "DC Carousel — 1. Cover",
+      "slide_number": 1,
+      "background": "#06040F",
+      "width": 1080,
+      "height": 1350,
+      "format": "png",
+      "template_version": "v1",
+      "layers": {
+        "variable": [
+          { "name": "eyebrow_text", "type": "text" },
+          { "name": "headline_text", "type": "text" },
+          { "name": "body_text", "type": "text" }
+        ],
+        "fixed": [
+          { "name": "hex_cluster", "type": "shape", "note": "brand mark, identical across all six templates" },
+          { "name": "logo_mark_bg", "type": "shape" },
+          { "name": "logo_mark_text", "type": "text", "note": "static \"DC\"" },
+          { "name": "logo_wordmark", "type": "text", "note": "static \"DIGITALLY CONNECTED\" — only slide carrying the full logo lockup" },
+          { "name": "tick_left", "type": "shape" },
+          { "name": "tick_bar", "type": "shape" },
+          { "name": "tick_right", "type": "shape" },
+          { "name": "accent_punctuation", "type": "text", "note": "static \".\"" },
+          { "name": "footer_rule", "type": "shape" }
+        ]
+      }
+    },
+    "content": {
+      "template_id": "587e1163-b2e0-4cf5-9827-25922f5705bf",
+      "name": "DC Carousel — 2. Content",
+      "slide_number": 2,
+      "background": "#FFFFFF",
+      "width": 1080,
+      "height": 1350,
+      "format": "png",
+      "template_version": "v1",
+      "layers": {
+        "variable": [
+          { "name": "eyebrow_text", "type": "text" },
+          { "name": "headline_text", "type": "text" },
+          { "name": "body_text", "type": "text" },
+          { "name": "list_item_1_text", "type": "text" },
+          { "name": "list_item_2_text", "type": "text" },
+          { "name": "list_item_3_text", "type": "text" },
+          { "name": "list_item_4_text", "type": "text", "optional": true, "note": "hidden by default in the template — unhide list_item_4_text/number/rule together only when a 4th supporting point exists" }
+        ],
+        "fixed": [
+          { "name": "tick_left", "type": "shape" },
+          { "name": "tick_bar", "type": "shape" },
+          { "name": "tick_right", "type": "shape" },
+          { "name": "list_item_1_number", "type": "text", "note": "static \"01\"" },
+          { "name": "list_item_2_number", "type": "text", "note": "static \"02\"" },
+          { "name": "list_item_3_number", "type": "text", "note": "static \"03\"" },
+          { "name": "list_item_4_number", "type": "text", "note": "static \"04\", hidden by default" },
+          { "name": "list_item_1_rule", "type": "shape" },
+          { "name": "list_item_2_rule", "type": "shape" },
+          { "name": "list_item_3_rule", "type": "shape" },
+          { "name": "list_item_4_rule", "type": "shape", "note": "hidden by default" },
+          { "name": "hex_cluster", "type": "shape" }
+        ]
+      }
+    },
+    "statistic": {
+      "template_id": "1ce82c33-f1ec-41d6-bb76-e4010e07816b",
+      "name": "DC Carousel — 3. Statistic",
+      "slide_number": 3,
+      "background": "#06040F",
+      "width": 1080,
+      "height": 1350,
+      "format": "png",
+      "template_version": "v1",
+      "layers": {
+        "variable": [
+          { "name": "eyebrow_text", "type": "text" },
+          { "name": "stat_value", "type": "text" },
+          { "name": "supporting_stat_text", "type": "text" },
+          { "name": "stat_caption", "type": "text" }
+        ],
+        "fixed": [
+          { "name": "tick_left", "type": "shape" },
+          { "name": "tick_bar", "type": "shape" },
+          { "name": "tick_right", "type": "shape" },
+          { "name": "divider_rule", "type": "shape" },
+          { "name": "hex_cluster", "type": "shape" }
+        ]
+      }
+    },
+    "quote": {
+      "template_id": "5daf71d6-8aeb-4c8b-b542-27557057ed5a",
+      "name": "DC Carousel — 4. Quote",
+      "slide_number": 4,
+      "background": "#FFFFFF",
+      "width": 1080,
+      "height": 1350,
+      "format": "png",
+      "template_version": "v1",
+      "layers": {
+        "variable": [
+          { "name": "quote_text", "type": "text" },
+          { "name": "attribution_name", "type": "text" },
+          { "name": "attribution_role", "type": "text" }
+        ],
+        "fixed": [
+          { "name": "quote_mark_decoration", "type": "text", "note": "static decorative opening quote mark" },
+          { "name": "attribution_tick", "type": "shape" },
+          { "name": "hex_cluster", "type": "shape" }
+        ]
+      }
+    },
+    "infographic": {
+      "template_id": "bb18c409-9c96-4430-98ed-5812519134b2",
+      "name": "DC Carousel — 5. Infographic",
+      "slide_number": 5,
+      "background": "#FFFFFF",
+      "width": 1080,
+      "height": 1350,
+      "format": "png",
+      "template_version": "v1",
+      "layers": {
+        "variable": [
+          { "name": "eyebrow_text", "type": "text" },
+          { "name": "headline_text", "type": "text" },
+          { "name": "step_1_title", "type": "text" },
+          { "name": "step_1_description", "type": "text" },
+          { "name": "step_2_title", "type": "text" },
+          { "name": "step_2_description", "type": "text" },
+          { "name": "step_3_title", "type": "text" },
+          { "name": "step_3_description", "type": "text" },
+          { "name": "step_4_title", "type": "text" },
+          { "name": "step_4_description", "type": "text" }
+        ],
+        "fixed": [
+          { "name": "tick_left", "type": "shape" },
+          { "name": "tick_bar", "type": "shape" },
+          { "name": "tick_right", "type": "shape" },
+          { "name": "connector_line", "type": "shape" },
+          { "name": "step_1_node", "type": "shape" },
+          { "name": "step_1_badge", "type": "shape" },
+          { "name": "step_1_icon", "type": "shape", "note": "resolved during DC-003-I001: static decorative shape, not an image_url layer — the open item flagged in DC-003-T002 §3 is closed" },
+          { "name": "step_1_number", "type": "text", "note": "static \"01\"" },
+          { "name": "step_2_node", "type": "shape" },
+          { "name": "step_2_badge", "type": "shape" },
+          { "name": "step_2_icon", "type": "shape" },
+          { "name": "step_2_number", "type": "text", "note": "static \"02\"" },
+          { "name": "step_3_node", "type": "shape" },
+          { "name": "step_3_badge", "type": "shape" },
+          { "name": "step_3_icon", "type": "shape" },
+          { "name": "step_3_number", "type": "text", "note": "static \"03\"" },
+          { "name": "step_4_node", "type": "shape" },
+          { "name": "step_4_badge", "type": "shape" },
+          { "name": "step_4_icon", "type": "shape" },
+          { "name": "step_4_number", "type": "text", "note": "static \"04\"" },
+          { "name": "hex_cluster", "type": "shape" }
+        ]
+      }
+    },
+    "cta": {
+      "template_id": "366ceefc-d9ea-4fbc-9ffc-eac8f978fa59",
+      "name": "DC Carousel — 6. CTA",
+      "slide_number": 6,
+      "background": "#06040F",
+      "width": 1080,
+      "height": 1350,
+      "format": "png",
+      "template_version": "v1",
+      "layers": {
+        "variable": [
+          { "name": "eyebrow_text", "type": "text" },
+          { "name": "headline_text", "type": "text" },
+          { "name": "body_text", "type": "text" },
+          { "name": "button_label", "type": "text" }
+        ],
+        "fixed": [
+          { "name": "tick_left", "type": "shape" },
+          { "name": "tick_bar", "type": "shape" },
+          { "name": "tick_right", "type": "shape" },
+          { "name": "accent_punctuation", "type": "text", "note": "static \".\"" },
+          { "name": "cta_button_bg", "type": "shape" },
+          { "name": "footer_handle", "type": "text", "note": "static \"@digitallyconnected\"" },
+          { "name": "hex_cluster", "type": "shape" }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/carousel-content.schema.json",
+  "title": "Carousel Content Object",
+  "description": "LLM output before any Templated template is involved. Template-agnostic — knows only slide_type, never template_id. Defined in DC-003-T002 §2. Per-slide-type content shape (e.g. that a 'cover' slide's content needs eyebrow_text/headline_text/body_text) is documented in T002 §2 and config/templates.json's 'variable' layer lists, not enforced here as a conditional schema — kept simple deliberately for the foundation phase.",
+  "type": "object",
+  "required": ["carousel_content_id", "topic_id", "generated_at", "llm_model", "prompt_version", "schema_version", "slides"],
+  "additionalProperties": false,
+  "properties": {
+    "carousel_content_id": { "type": "string", "pattern": "^cc_[A-Za-z0-9]+$" },
+    "topic_id": { "type": "string", "pattern": "^topic_[A-Za-z0-9]+$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "llm_model": { "type": "string", "minLength": 1 },
+    "prompt_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string" },
+    "slides": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "required": ["slide_type", "content"],
+        "additionalProperties": false,
+        "properties": {
+          "slide_type": { "type": "string", "enum": ["cover", "content", "statistic", "quote", "infographic", "cta"] },
+          "content": {
+            "type": "object",
+            "description": "Shape depends on slide_type — see DC-003-T002 §2 for the field list per type."
+          }
+        }
+      }
+    }
+  }
+}

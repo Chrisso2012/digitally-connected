@@ -1,0 +1,15 @@
+{
+  "payload_id": "pl_01J9X9B2_1",
+  "carousel_content_id": "cc_01J9X9A1",
+  "slide_number": 1,
+  "slide_type": "cover",
+  "template_id": "748d17c5-c58e-48eb-9f12-434252a6d17f",
+  "template_version": "v1",
+  "format": "png",
+  "layers": {
+    "eyebrow_text": { "text": "CLIENT ACQUISITION SERIES" },
+    "headline_text": { "text": "The revenue is already in your database" },
+    "body_text": { "text": "Most businesses are sitting on six figures of recoverable revenue." }
+  },
+  "created_at": "2026-07-31T02:11:06Z"
+}

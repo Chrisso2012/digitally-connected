@@ -1,0 +1,24 @@
+{
+  "slide_count": 6,
+  "slide_types": ["cover", "content", "statistic", "quote", "infographic", "cta"],
+  "image_width": 1080,
+  "image_height": 1350,
+  "default_render_format": "png",
+  "supported_render_formats": ["png", "jpg", "webp"],
+  "default_locale": "en",
+  "topic_statuses": ["draft", "approved", "in_production", "completed", "archived"],
+  "topic_sources": ["manual", "backlog"],
+  "funnel_stages": ["awareness", "consideration", "decision"],
+  "render_statuses": ["pending", "processing", "completed", "failed"],
+  "carousel_overall_statuses": ["completed", "partial", "failed"],
+  "execution_render_statuses": ["completed", "partial", "failed", "not_started"],
+  "execution_overall_statuses": ["success", "partial_success", "failed"],
+  "execution_triggers": ["manual", "backlog", "scheduled"],
+  "id_prefixes": {
+    "topic": "topic_",
+    "carousel_content": "cc_",
+    "templated_payload": "pl_",
+    "finished_carousel": "car_",
+    "execution": "exec_"
+  }
+}

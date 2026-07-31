@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/templated-payload.schema.json",
+  "title": "Templated Payload Object",
+  "description": "One per slide (six per carousel), produced by the Payload Mapper. Maps a Carousel Content Object slide onto a template_id and its variable layers. Defined in DC-003-T002 §3. The mapper is not implemented as part of DC-003-I001 — this schema only describes the shape its output must have.",
+  "type": "object",
+  "required": ["payload_id", "carousel_content_id", "slide_number", "slide_type", "template_id", "format", "layers", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "payload_id": { "type": "string", "pattern": "^pl_[A-Za-z0-9_]+$" },
+    "carousel_content_id": { "type": "string", "pattern": "^cc_[A-Za-z0-9]+$" },
+    "slide_number": { "type": "integer", "minimum": 1, "maximum": 6 },
+    "slide_type": { "type": "string", "enum": ["cover", "content", "statistic", "quote", "infographic", "cta"] },
+    "template_id": { "type": "string", "minLength": 1 },
+    "template_version": { "type": ["string", "null"] },
+    "format": { "type": "string", "enum": ["png", "jpg", "webp"] },
+    "layers": {
+      "type": "object",
+      "description": "Keyed by layer name (see config/templates.json 'variable' list for the slide_type). Each value is { \"text\": string }. Not enforced key-by-key here — the set of valid keys is per-template config, not schema."
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}
