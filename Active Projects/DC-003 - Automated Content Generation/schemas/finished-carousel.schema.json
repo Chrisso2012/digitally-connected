@@ -4,7 +4,7 @@
   "title": "Finished Carousel Object",
   "description": "What the pipeline returns after rendering. Carries render identity, image location, timing, errors, and the fields reserved for future approval. Defined in DC-003-T002 §4 and §7.",
   "type": "object",
-  "required": ["carousel_id", "topic_id", "carousel_content_id", "generated_at", "overall_status", "slides", "metadata"],
+  "required": ["carousel_id", "topic_id", "carousel_content_id", "generated_at", "overall_status", "slides", "metadata", "execution_metadata"],
   "additionalProperties": false,
   "properties": {
     "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
@@ -58,6 +58,18 @@
         "completed_slides": { "type": "integer" },
         "failed_slides": { "type": "integer" },
         "total_duration_ms": { "type": ["integer", "null"] }
+      }
+    },
+    "execution_metadata": {
+      "type": "object",
+      "description": "This carousel's execution trace identity, introduced in DC-003-I007. execution_id is the trace identifier future milestones (DC-003-I008 Execution Logging) are expected to carry forward — its pattern matches execution-log.schema.json's own execution_id exactly for that reason.",
+      "required": ["execution_id", "rendered_at", "provider", "render_duration_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "execution_id": { "type": "string", "pattern": "^exec_[0-9]{8}_[A-Za-z0-9]+$" },
+        "rendered_at": { "type": "string", "format": "date-time" },
+        "provider": { "type": "string", "minLength": 1 },
+        "render_duration_ms": { "type": "integer", "minimum": 0 }
       }
     },
     "approval": {

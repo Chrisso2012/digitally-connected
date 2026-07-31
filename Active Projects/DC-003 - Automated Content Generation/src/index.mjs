@@ -68,3 +68,8 @@ export {
   RenderRejected,
   RetryLimitExceeded,
 } from "./renderer-errors.mjs";
+
+// DC-003-I007 — Finished Carousel Builder
+export { createExecutionMetadata, generateExecutionId } from "./execution-metadata.mjs";
+export { createFinishedCarousel } from "./finished-carousel-builder.mjs";
+export { FinishedCarouselCompositionError, FinishedCarouselValidationError } from "./finished-carousel-errors.mjs";

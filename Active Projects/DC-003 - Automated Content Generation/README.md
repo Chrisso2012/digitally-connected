@@ -6,11 +6,12 @@ established by DC-003-I001 (configuration, template registry, JSON schemas),
 the configuration-loading and validation runtime added in DC-003-I002, the
 Topic Package Loader added in DC-003-I003, the Carousel Content Generator
 added in DC-003-I004 (mock LLM provider only — I004 explicitly does not
-call a real one), the Carousel Payload Mapper added in DC-003-I005, and the
-Templated Renderer added in DC-003-I006 — mock-transport-tested; the real
-HTTP transport exists but has not made a live call yet, pending explicit
-live verification (see "Live verification procedure" below). n8n workflow
-logic does not exist yet.
+call a real one), the Carousel Payload Mapper added in DC-003-I005, the
+Templated Renderer added in DC-003-I006 (live-verified against the real
+Templated API — see "Live verification procedure" below), and the Finished
+Carousel Builder added in DC-003-I007 — this pipeline's first stable public
+contract; see "Finished Carousel Builder" below. n8n workflow logic does not
+exist yet.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -73,7 +74,10 @@ DC-003 - Automated Content Generation/
 │   ├── renderer-transport-mock.mjs   # DC-003-I006 — the ONLY transport tests use
 │   ├── renderer-transport-http.mjs   # DC-003-I006 — real Templated transport, untested live
 │   ├── renderer-config.mjs           # DC-003-I006 — env-var config (incl. the API key)
-│   └── renderer.mjs                  # DC-003-I006 — see "Templated Renderer"
+│   ├── renderer.mjs                  # DC-003-I006 — see "Templated Renderer"
+│   ├── execution-metadata.mjs        # DC-003-I007 — immutable ExecutionMetadata + execution_id generation
+│   ├── finished-carousel-builder.mjs # DC-003-I007 — see "Finished Carousel Builder"
+│   └── finished-carousel-errors.mjs  # DC-003-I007 — builder-specific errors
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -85,7 +89,8 @@ DC-003 - Automated Content Generation/
 │       ├── check-topic-package.mjs   # DC-003-I003 — thin CLI wrapper around the loader
 │       ├── generate-mock-carousel.mjs# DC-003-I004 — thin CLI wrapper around the generator
 │       ├── map-payload.mjs           # DC-003-I005 — thin CLI wrapper around the mapper
-│       └── render-payload.mjs        # DC-003-I006 — thin CLI wrapper around the renderer
+│       ├── render-payload.mjs        # DC-003-I006 — thin CLI wrapper around the renderer
+│       └── build-finished-carousel.mjs# DC-003-I007 — end-to-end offline capstone CLI
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -167,6 +172,17 @@ constraints explicitly warned against:
 - **Templated Payload Object** — `layers` is typed as a generic object rather
   than enumerating every possible layer key, since the valid key set is
   per-template config, not a schema concern.
+
+**Finished Carousel Object, extended in DC-003-I007:** the schema as
+originally written in DC-003-I001 had no field for execution trace identity.
+DC-003-I007's Strategy Office brief explicitly requires one ("Introduce an
+immutable execution metadata object containing at least: executionId,
+renderedAt, provider, renderDuration"), so `execution_metadata` (required,
+`additionalProperties: false`) was added as this milestone's own schema
+deliverable — see "Finished Carousel Builder" below for the rationale. No
+other DC-003-T002-approved field changed. The approved fixture
+(`tests/fixtures/finished-carousel.example.json`) was updated in the same
+commit so it stays valid against the extended schema.
 
 ## Configuration loader (`src/config-loader.mjs`)
 
@@ -941,6 +957,192 @@ in order:
    explicit re-authorization — a hardening pass is not a standing license
    for another live call.
 
+## Finished Carousel Builder (`src/finished-carousel-builder.mjs`)
+
+**From DC-003-I007 onward, `FinishedCarousel` is this pipeline's public,
+stable contract.** Downstream consumers — a future execution logger
+(DC-003-I008) or n8n orchestration (DC-003-I009) — should depend on
+`FinishedCarousel`, never on `RenderResult`, `TemplatedPayload`, or any
+other intermediate object. Those objects still exist and still do their own
+jobs; they're simply no longer meant to be depended on from *outside* the
+pipeline.
+
+```mermaid
+flowchart LR
+    CC[Carousel Content] --> B{{Finished Carousel Builder}}
+    TP["Templated Payload x6"] --> B
+    RR["RenderResult x6"] --> B
+    EM[Execution Metadata] --> B
+    B --> FC[Immutable Finished Carousel Object]
+    B -. inconsistent/missing input .-> ERR[FinishedCarouselCompositionError]
+    B -. schema-invalid result .-> ERR2[FinishedCarouselValidationError]
+```
+
+### Why this object, why now
+
+DC-003-I001 through DC-003-I006 each added one pipeline stage but left
+every stage's output as the next stage's *input* — nothing tied a carousel's
+content, its six payloads, and its six renders back together into one
+object a caller could reasonably hand to something else. `FinishedCarousel`
+closes that gap: it's the first object in this pipeline whose shape a
+downstream system can commit to without needing to know anything about
+Templated, the renderer's retry policy, or the payload mapper's layer
+registry — see "Provider independence" below.
+
+### Construction rules
+
+A `FinishedCarousel` may only be built from already-validated objects, and
+the builder **fails fast** the moment any input is missing, malformed, or
+mutually inconsistent with another input — it never guesses, never drops a
+slide, and never silently reorders anything. It is never built from a raw
+transport/provider response — `renderer-response-validator.mjs` remains the
+only place in this codebase a raw response is inspected; by the time a
+`RenderResult` reaches this builder, that boundary has already been
+crossed.
+
+### Required inputs
+
+`createFinishedCarousel({ carouselContent, slideRenders, executionMetadata }, options)`
+takes exactly three things:
+
+- **`carouselContent`** — one validated Carousel Content Object (DC-003-I004).
+- **`slideRenders`** — an array of exactly 6 `{ templatedPayload, renderResult }`
+  pairs, in the same slide order as `carouselContent.slides`. The DC-003-I007
+  brief describes "TemplatedPayload" and "RenderResult" in the singular, but
+  a Finished Carousel Object always has exactly six slides
+  (`finished-carousel.schema.json`: `minItems`/`maxItems` 6) — there is no
+  other way to populate six `render_id`/`image_url`/... entries than one
+  validated Templated Payload Object (DC-003-I005) and one `RenderResult`
+  (DC-003-I006) per slide.
+- **`executionMetadata`** — one validated `ExecutionMetadata` object (below).
+
+The builder is responsible **only for composition, not transformation**:
+every value in its output came directly from one of these three inputs.
+The one mechanical exception is renaming `RenderResult`'s camelCase fields
+(`renderId`, `imageUrl`, `requestedAt`, `completedAt`, `durationMs`) onto
+this schema's snake_case field names — the same kind of renaming
+DC-003-I005's Payload Mapper already does going from a Carousel Content
+Object onto a Templated Payload Object. Image `width`/`height` are the one
+value not sourced from either input: neither `RenderResult` (DC-003-I006
+deliberately keeps it minimal) nor Templated Payload tracks dimensions, and
+every DC-002 template is a fixed 1080x1350, so the builder reads that from
+`config/constants.json` rather than hardcoding it a second time or inventing
+a new place to store an already-known constant.
+
+Before assembling anything, the builder cross-checks that the three inputs
+actually describe the same carousel and the same slide in the same
+position — e.g. `templatedPayload.carousel_content_id` must match
+`carouselContent.carousel_content_id`, and `renderResult.templateId` must
+match its own `templatedPayload.template_id` — catching a shuffled or
+mismatched `slideRenders` array before it can ever reach schema validation.
+
+### Execution metadata (`src/execution-metadata.mjs`)
+
+`createExecutionMetadata({ provider, renderDurationMs, executionId?, renderedAt? })`
+builds a small, separate, immutable domain object — the DC-003-I007 brief
+calls for this explicitly, as its own construct, not an inline field on the
+builder. `executionId` and `renderedAt` are generated automatically when
+omitted (`exec_YYYYMMDD_<12 hex chars>`, matching
+`execution-log.schema.json`'s own `execution_id` pattern exactly); `provider`
+and `renderDurationMs` must be supplied by the caller, since they describe
+what actually happened during rendering, not something this factory can
+infer.
+
+**`execution_id` is this carousel's trace identifier**, carried forward as
+`finished_carousel.execution_metadata.execution_id`. DC-003-I008 (Execution
+Logging) is expected to reuse this exact ID to tie its own persisted record
+back to this carousel — this is why its format is locked to
+`execution-log.schema.json`'s pattern now, even though I008 doesn't exist
+yet.
+
+### Provider independence
+
+`FinishedCarousel` never exposes a provider-specific implementation detail.
+Every field in a slide entry is either a schema-level identifier
+(`render_id`, `template_id`), a plain value (`image_url`, `width`, `height`,
+`format`), or a timestamp/duration — nothing about *how* Templated (or any
+future provider) represents a render leaks through. `renderer-response-validator.mjs`
+remains the one place a raw provider response is inspected; `RenderResult`
+remains the one provider-facing domain object this builder is allowed to
+read from, and it does not re-expose anything from `RenderResult` that
+`RenderResult` itself doesn't already normalize (`status`, `imageUrl`, etc.
+— see "Provider status contract" above for how `RenderResult.status` itself
+already never leaks a provider's raw casing).
+
+### Schema extension
+
+`finished-carousel.schema.json` (written in DC-003-I001, never consumed by
+code until this milestone) gained one new required property,
+`execution_metadata` (`additionalProperties: false`, matching every other
+object in this schema), to carry the execution metadata the DC-003-I007
+brief requires. No other DC-003-T002-approved field changed — see "Schemas"
+above.
+
+### Validation
+
+Schema validation happens **after** every composition check, via the same
+DC-003-I002 validator every other stage uses
+(`validator.validate("finishedCarousel", ...)`)  — never before, and never
+skipped. This exists specifically so a composition-valid-but-schema-invalid
+input (e.g. an `ExecutionMetadata`-shaped object whose `renderedAt` isn't
+actually a valid date-time) is still caught, rather than trusting that
+passing the builder's own shape checks is equivalent to passing the full
+schema. No silent coercion anywhere in this path: a malformed input always
+throws, it is never quietly repaired or defaulted.
+
+| Error | When |
+|---|---|
+| `FinishedCarouselCompositionError` | Any required input is missing, malformed, or mutually inconsistent with another input — thrown before schema validation is even attempted |
+| `FinishedCarouselValidationError` | Every composition check passed, but the assembled object still fails schema validation — carries `.errors`, the same structured shape every other DC-003 validation error uses |
+
+### CLI check
+
+```bash
+npm run build:carousel -- tests/fixtures/carousel-content.example.json
+```
+
+Runs the entire pipeline end-to-end, offline, from one Carousel Content
+Object file: DC-003-I005's mapper produces six Templated Payloads,
+DC-003-I006's renderer (mock transport only — **no live API interaction**,
+by design, matching the "Mock First" constraint every demonstration CLI in
+this repo follows) produces six `RenderResult`s, `createExecutionMetadata()`
+builds the execution metadata, and this milestone's builder composes all of
+it into one `FinishedCarousel`. Prints carousel ID, overall status, slide
+completion count, total duration, execution ID, provider, and a one-line
+summary per slide. Exits `0` on success, non-zero with a structured error
+otherwise. Does not write any file.
+
+### Rendering in code
+
+```js
+import {
+  mapCarouselToTemplatedPayload,
+  renderTemplatedPayload,
+  createMockTransport,
+  createExecutionMetadata,
+  createFinishedCarousel,
+} from "./src/index.mjs";
+
+const templatedPayloads = mapCarouselToTemplatedPayload(carouselContent);
+const transport = createMockTransport(); // or createHttpTransport(config)
+
+const slideRenders = [];
+for (const templatedPayload of templatedPayloads) {
+  const renderResult = await renderTemplatedPayload(templatedPayload, { transport });
+  slideRenders.push({ templatedPayload, renderResult });
+}
+
+const executionMetadata = createExecutionMetadata({
+  provider: transport.name,
+  renderDurationMs: slideRenders.reduce((sum, { renderResult }) => sum + renderResult.durationMs, 0),
+});
+
+const finishedCarousel = createFinishedCarousel({ carouselContent, slideRenders, executionMetadata });
+// finishedCarousel: { carousel_id, topic_id, carousel_content_id, generated_at,
+//                     overall_status, slides[6], metadata, execution_metadata,
+//                     approval } — immutable, schema-valid.
+```
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -954,6 +1156,7 @@ npm run check:topic -- <path>  # CLI check of one Topic Package file
 npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
 npm run map:payload -- <path>  # CLI map one Carousel Content file into six Templated Payloads
 npm run render:mock -- <path>  # CLI mock-render one Templated Payload file
+npm run build:carousel -- <path>  # CLI build one Finished Carousel end-to-end, offline
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -985,7 +1188,22 @@ decoupled from `TEMPLATED_RENDER_MAX_ATTEMPTS` even when that's set to a
 higher value in the same environment; a bad `--live-max-attempts` value
 failing before any transport is constructed; the mock transport's every
 configurable mode; and CLI exit codes for success and every failure
-mode — always via the mock transport, never live. Tests that need a
+mode — always via the mock transport, never live. From DC-003-I007:
+`createExecutionMetadata()` (successful construction, immutability, ID/
+timestamp auto-generation and uniqueness, and a `TypeError` for every
+missing/malformed field, including an out-of-pattern `executionId` and a
+non-date-time `renderedAt`); the Finished Carousel Builder's successful
+construction against a full, real (mock-rendered) six-slide pipeline;
+`FinishedCarouselCompositionError` for a missing dependency, fewer than 6
+`slideRenders`, an invalid `CarouselContent`, a malformed `TemplatedPayload`
+or `RenderResult`, and a mismatched/reordered `slideRenders` entry;
+`FinishedCarouselValidationError` for a composition-valid-but-schema-invalid
+input (proving the builder's own checks are deliberately not a full schema
+re-implementation); deep immutability of the assembled object, including
+nested `slides[]`/`metadata`/`execution_metadata`; that no `RenderResult`/
+`TemplatedPayload` field name leaks into the output; and CLI exit codes for
+success and every failure mode — always via the mock transport, `build:carousel`
+has no `--live` flag at all. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
 small stub defined inline in the test file, the mock transport's
@@ -1020,14 +1238,16 @@ test ever sets `--live` or reaches the network.**
 | Credentials are rejected | `AuthenticationError`, thrown immediately, never retried |
 | A request exceeds the configured timeout | `TimeoutError`, retried |
 | A network-level failure occurs | `TransportError`, retried |
-| A transport response has an untrustworthy shape | `ValidationError`, with `.details`, retried |
+| A transport response has an untrustworthy shape | `ValidationError`, with `.details`, thrown immediately, **never retried** (hardened post-incident — see "Live-verification safety rule") |
 | Templated returns a well-formed `status: "FAILED"` | `RenderRejected`, thrown immediately, never retried |
 | Every render retry attempt fails | `RetryLimitExceeded`, with `.attempts` (every attempt's error, in order) and `.maxAttempts` |
+| A Finished Carousel input is missing, malformed, or inconsistent with another input | `FinishedCarouselCompositionError`, thrown immediately, before schema validation is attempted |
+| The assembled Finished Carousel fails schema validation despite passing every composition check | `FinishedCarouselValidationError`, with `.errors` — every failure reported, not just the first |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I006 all added no new dependencies:**
+**DC-003-I003 through DC-003-I007 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -1046,7 +1266,9 @@ Templated SDK — I005 explicitly forbids calling Templated;
 `node:crypto`'s built-in `randomUUID()` was enough for payload IDs. The
 Templated Renderer's HTTP transport needed no HTTP client library either —
 Node's built-in global `fetch` (Node 18+) plus `AbortController` for
-timeouts was enough.
+timeouts was enough. The Finished Carousel Builder needed nothing beyond
+what DC-003-I005 already established — the same `node:crypto` `randomUUID()`
+for `carousel_id`/`execution_id` generation.
 
 ## Implementation status
 
@@ -1074,16 +1296,21 @@ timeouts was enough.
 | Payload mapping CLI check | Done (DC-003-I005) — `npm run map:payload` |
 | Renderer service | Done (DC-003-I006) — `src/renderer.mjs` |
 | Transport abstraction + mock transport | Done (DC-003-I006) — `src/renderer-transport-mock.mjs`; the only transport tests use |
-| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; endpoint/auth confirmed live (connectivity + auth succeeded on the one authorized attempt); response shape's `status` field cause diagnosed and fixed (see "Provider status contract") — **not yet re-verified against a fresh live call** |
+| HTTP transport | Done (DC-003-I006) — `src/renderer-transport-http.mjs`; endpoint/auth/response shape all confirmed against a successful live render (see "Live verification procedure") |
 | Retry / timeout / response validation / RenderResult | Done (DC-003-I006), hardened post-incident — see "Live-verification safety rule" and "Provider status contract" |
 | Render CLI check | Done (DC-003-I006) — `npm run render:mock` / `npm run render:live` (now single-attempt by default) |
-| Unit test suite | Done — 188 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006 including 6 added by the DC-003-I006 corrective pass's provider-status-contract tests) |
+| Live Templated rendering | **Done.** One authorized live render completed successfully: exactly one request, response validation succeeded, `RenderResult` returned with a real rendered image URL. (An earlier attempt failed `ValidationError` on `status` casing; root cause was diagnosed against Templated's official docs and fixed in a code-only corrective pass with no live calls — see "Provider status contract" — before this successful re-verification.) |
+| Finished Carousel Builder | Done (DC-003-I007) — `src/finished-carousel-builder.mjs`; see "Finished Carousel Builder" |
+| Execution Metadata | Done (DC-003-I007) — `src/execution-metadata.mjs`; immutable, generates its own `execution_id`/`rendered_at` when not supplied |
+| Finished Carousel schema extension | Done (DC-003-I007) — `execution_metadata` added to `finished-carousel.schema.json`; approved fixture updated to match |
+| Finished Carousel CLI check | Done (DC-003-I007) — `npm run build:carousel`, fully offline (mock transport only) |
+| Unit test suite | Done — 222 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
-| Live Templated rendering | **One authorized attempt made, failed `ValidationError` on `status` casing; root cause diagnosed against Templated's official docs and fixed in a code-only corrective pass (no live calls made during the fix).** Fresh explicit authorization required before another live attempt — see "Live verification procedure" |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
-| n8n workflow | Not started |
+| n8n workflow | Not started — DC-003-I009 is expected to consume `FinishedCarousel` as its orchestration contract |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started |
-| Approval workflow | Not started (fields reserved on Finished Carousel Object only, per DC-003-T002 §7) |
+| Approval workflow | Not started — `approval` remains an all-default stub on every Finished Carousel Object DC-003-I007 builds, per DC-003-T002 §7 |
+| Execution Logging (persisting FinishedCarousel + execution metadata) | Not started — DC-003-I008 |
 
 Nothing above "Unit test suite" should require restructuring this
 foundation — it should only add to it.

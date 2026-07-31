@@ -67,6 +67,12 @@
     }
   ],
   "metadata": { "total_slides": 6, "completed_slides": 6, "failed_slides": 0, "total_duration_ms": 20570 },
+  "execution_metadata": {
+    "execution_id": "exec_20260731_9f3a2e1c8b4d",
+    "rendered_at": "2026-07-31T02:11:12Z",
+    "provider": "templated-http",
+    "render_duration_ms": 20570
+  },
   "approval": {
     "approved": false, "approved_by": null, "approved_at": null,
     "rejected": false, "rejection_reason": null,
