@@ -4,10 +4,11 @@ Project foundation for the AI content factory: one approved topic in, a six-slid
 Templated carousel out. This directory currently contains the foundation
 established by DC-003-I001 (configuration, template registry, JSON schemas),
 the configuration-loading and validation runtime added in DC-003-I002, the
-Topic Package Loader added in DC-003-I003, and the Carousel Content
-Generator added in DC-003-I004 — with a mock LLM provider, since I004
-explicitly does not call a real one. Payload mapping, Templated rendering,
-and n8n workflow logic do not exist yet.
+Topic Package Loader added in DC-003-I003, the Carousel Content Generator
+added in DC-003-I004 (mock LLM provider only — I004 explicitly does not
+call a real one), and the Carousel Payload Mapper added in DC-003-I005.
+Templated rendering and n8n workflow logic do not exist yet — I005
+explicitly does not call Templated.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -60,16 +61,21 @@ DC-003 - Automated Content Generation/
 │   ├── carousel-content-validator.mjs# DC-003-I004 — parse + schema + shape, staged
 │   ├── retry.mjs                     # DC-003-I004 — generic retry primitive
 │   ├── carousel-generator.mjs        # DC-003-I004 — orchestrator
-│   └── carousel-generator-errors.mjs # DC-003-I004 — PromptBuilderError, CarouselGenerationFailedError
+│   ├── carousel-generator-errors.mjs # DC-003-I004 — PromptBuilderError, CarouselGenerationFailedError
+│   ├── carousel-payload-mapping.mjs  # DC-003-I005 — Mapping Registry, single source of truth
+│   ├── carousel-payload-mapper.mjs   # DC-003-I005 — see "Carousel Payload Mapper"
+│   └── carousel-payload-errors.mjs   # DC-003-I005 — mapper-specific errors
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
-│   │   └── topic-packages/           # DC-003-I003 — readiness/failure-mode fixtures, test-only
+│   │   ├── topic-packages/           # DC-003-I003 — readiness/failure-mode fixtures, test-only
+│   │   └── carousel-content/         # DC-003-I005 — mapper failure-mode fixtures, test-only
 │   ├── unit/                        # node:test suite, see "Running tests"
 │   └── validation/
 │       ├── validate.mjs              # thin CLI wrapper around src/validator.mjs
 │       ├── check-topic-package.mjs   # DC-003-I003 — thin CLI wrapper around the loader
-│       └── generate-mock-carousel.mjs# DC-003-I004 — thin CLI wrapper around the generator
+│       ├── generate-mock-carousel.mjs# DC-003-I004 — thin CLI wrapper around the generator
+│       └── map-payload.mjs           # DC-003-I005 — thin CLI wrapper around the mapper
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -510,35 +516,158 @@ prints structured errors (no raw stack trace for expected failure modes)
 and exits non-zero. Does not render slides. Does not write any file — the
 carousel exists only in memory for the life of the process.
 
+## Carousel Payload Mapper (`src/carousel-payload-mapper.mjs`)
+
+Translation only — turns a Carousel Content Object into six Templated
+Payload Objects, one per slide. Never calls Templated, never renders, never
+touches the network.
+
+```mermaid
+flowchart LR
+    CC[Carousel Content Object] --> MAP[Payload Mapper]
+    MAP -- reads --> REG[(Mapping Registry\ncarousel-payload-mapping.mjs)]
+    MAP -- resolves template via --> TPL[(config/templates.json)]
+    MAP --> VAL[I002 schema validation\nper payload]
+    VAL --> OUT[Immutable Templated\nPayload Object x6]
+```
+
+### Mapping Registry (`src/carousel-payload-mapping.mjs`)
+
+The single source of truth for how a Carousel Content field becomes a
+Templated layer. No layer name is hardcoded anywhere else in the mapper —
+everything reads from this table. Three transform kinds:
+
+| Kind | Example | Behavior |
+|---|---|---|
+| `direct` | `headline_text` → `headline_text` | value copied as-is |
+| `array-fanout` | `list_items[0..3]` → `list_item_1..4_text` | each array entry becomes one indexed layer |
+| `object-array-fanout` | `steps[i].title`/`.description` → `step_{i+1}_title`/`_description` | each array-of-objects entry becomes a pair of indexed layers |
+
+For four of the six slide types (`cover`, `statistic`, `quote`, `cta`) the
+Carousel Content field names and the Templated layer names are already
+identical — that's inherited from how DC-003-T002 §2's field names were
+originally chosen to mirror `config/templates.json`'s layer names, not a
+mapping this registry invents. The two genuinely transformative mappings
+are `content`'s `list_items` and `infographic`'s `steps`, both fan-outs.
+
+`validateMappingRegistry(templatesConfig)` cross-checks this table against
+the live template registry and returns `{ ok, issues }`: every
+`templateKey` must exist in `config/templates.json`, no two mapping entries
+for the same slide type may target the same layer ("mappings unique" / "no
+duplicate layer names"), and every layer name the registry could ever
+produce must be a real `variable` layer on that template ("mapping
+references only templates defined in `templates.json`"). This runs in the
+test suite against the real registry on every test run — if the mapping
+table and `config/templates.json` ever drift apart, a test fails
+immediately rather than the drift surfacing as a runtime mapping bug.
+
+### Template resolution
+
+`config/templates.json` is the only source of template IDs — the mapper
+never hardcodes one. For each slide, `slide_type` resolves to a
+`templateKey` (via the Mapping Registry) which resolves to a `template_id`,
+`template_version`, `format`, `slide_number`, and the template's `variable`
+layer list (via `loadTemplatesConfig()`, the I002 config loader). All six
+approved carousel templates are supported — there's no partial coverage.
+
+### Layer validation
+
+After a slide's layers are computed, two checks run before that slide's
+payload is even assembled:
+
+- **Every required editable layer is populated** — every non-optional
+  `variable` layer on the template must appear in the computed `layers`
+  object (`list_item_4_text` is the one layer marked `optional` in
+  `config/templates.json`, and is correctly skipped when there's no 4th
+  supporting point).
+- **No unknown layer names** — every layer the mapping produces must be a
+  real `variable` layer on that template; a layer name that doesn't match
+  is rejected, never silently written.
+
+Duplicate assignment is guarded at two levels: within one slide's own
+mapping (a registry-authoring bug — unreachable through the real registry,
+covered by `validateMappingRegistry`'s static check instead of a runtime
+fixture, since a correct registry can't trigger it), and across the whole
+carousel (two slides sharing the same `slide_type` — genuinely reachable
+from a malformed input, see `duplicate-layer.json` below).
+
+### Payload validation
+
+The finished payload for each slide is validated against
+`schemas/templated-payload.schema.json` via the unmodified I002 validator
+runtime — not reimplemented here. This catches things layer validation
+above can't: a malformed `carousel_content_id` copied through from the
+input, for instance (see `invalid-payload.json` — every layer maps
+correctly, but the final schema check still rejects it).
+
+### Mapping errors
+
+Five distinct, structured error classes — never a generic message:
+
+| Error | When |
+|---|---|
+| `UnknownTemplateError` | `slide_type` doesn't resolve to any registered template |
+| `MissingLayerError` | a required layer's source content field is blank, absent, or the layer itself never got assigned |
+| `DuplicateLayerMappingError` | the same layer would be assigned twice — within one slide's mapping, or by two slides sharing a `slide_type` |
+| `UnsupportedContentError` | an array/object-shaped field doesn't match its fan-out contract (wrong length, blank sub-field), or the mapper produces a layer name the template doesn't define |
+| `TemplatedPayloadValidationError` | the assembled payload fails schema validation — carries `.errors`, the same structured shape the I002 validator returns |
+
+### Mapping a carousel in code
+
+```js
+import { mapCarouselToTemplatedPayload } from "./src/index.mjs";
+
+const payloads = mapCarouselToTemplatedPayload(carouselContent);
+// payloads: 6 Templated Payload Objects, in slide order — deep-frozen,
+// same immutability approach as every other output in this codebase.
+```
+
+### CLI check
+
+```bash
+npm run map:payload -- tests/fixtures/carousel-content/valid.json
+```
+
+Prints one block per slide — template name, template ID, editable layer
+count, mapped layer count, payload validation result — and exits `0`. On
+failure, prints the specific structured error (no raw stack trace for the
+five expected failure modes) and exits non-zero. Does not render. Does not
+write any file.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
-no test framework dependency was added, and none was needed in DC-003-I003
-or DC-003-I004 either:
+no test framework dependency was added, and none was needed in DC-003-I003,
+DC-003-I004, or DC-003-I005 either:
 
 ```bash
 npm test       # unit tests: tests/unit/*.test.mjs
 npm run validate  # CLI summary: all 5 approved fixtures against their schemas
 npm run check:topic -- <path>  # CLI check of one Topic Package file
 npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
+npm run map:payload -- <path>  # CLI map one Carousel Content file into six Templated Payloads
 ```
 
-`npm test` covers everything from DC-003-I002 and DC-003-I003 (config/schema
-loading, fixture validation, integrity checks, Topic Package loading and
-readiness) plus, from DC-003-I004: deterministic prompts, every required
-prompt section present, whitespace/special-character handling, blank-field
-rejection; the mock provider producing valid, topic-grounded, deterministic
-output; parse/schema/content-shape validation failures each caught at the
-right stage with structured errors; retry succeeding on a later attempt,
-retry exhausting its limit and calling the provider exactly `maxAttempts`
-times (no more, no fewer); a full generation run producing a schema-valid,
-shape-valid, immutable Carousel Content Object; swapping in a structurally
-different stub provider with no orchestrator changes; and CLI exit codes
-for both success and failure. Tests that need a "broken" file or a failing
-provider use a `node:fs` temporary directory, an in-memory
-`structuredClone()`/object literal, or a small stub provider defined inline
-in the test file — **no test ever writes to or modifies a file under
-`config/`, `schemas/`, or an existing approved fixture.**
+`npm test` covers everything from DC-003-I002 through DC-003-I004
+(config/schema loading, fixture validation, integrity checks, Topic Package
+loading and readiness, prompt building, mock generation, retry behavior)
+plus, from DC-003-I005: the Mapping Registry loading and validating cleanly
+against the real template registry, no duplicate layer targets within any
+slide type's mapping, valid content mapping to six correctly-ordered
+payloads with every required layer populated, template IDs resolved (never
+hardcoded) from `config/templates.json`, deterministic output given the
+same clock/ID-generator injection, immutable return, the `list_items` and
+`steps` fan-outs producing the exact expected indexed layers, and all five
+mapper error classes — unknown template, missing layer, duplicate mapping
+(both the carousel-level and, via a corrupted-registry check, the
+registry-level form), unsupported content shape, and final payload schema
+validation failure — each triggered through its own dedicated fixture, plus
+CLI exit codes for both success and every failure mode. Tests that need a
+"broken" file or a failing provider use a `node:fs` temporary directory, an
+in-memory `structuredClone()`/object literal, a small stub provider defined
+inline in the test file, or one of the dedicated fixtures under
+`tests/fixtures/carousel-content/` — **no test ever writes to or modifies a
+file under `config/`, `schemas/`, or an existing approved fixture.**
 
 ## Expected error behavior
 
@@ -557,11 +686,16 @@ in the test file — **no test ever writes to or modifies a file under
 | The Topic Package has no usable content to build a prompt from | `PromptBuilderError`, thrown immediately, no provider call, no retry |
 | A single generation attempt fails (parse / schema / content-shape / the provider itself throwing) | `{ ok: false, stage, message, details }` from `validateGeneratedCarousel` — never thrown directly, collected by the retry loop |
 | Every retry attempt fails | `CarouselGenerationFailedError`, with `.attempts` (every stage's result, in order) and `.maxAttempts` |
+| A slide's `slide_type` doesn't resolve to a registered template | `UnknownTemplateError`, naming the slide_type |
+| A required layer can't be populated | `MissingLayerError`, naming the slide_type, layer, and (when known) the blank/absent source content field |
+| The same layer would be assigned twice | `DuplicateLayerMappingError`, naming the slide_type and, when applicable, the layer |
+| An array/object-shaped content field doesn't match its fan-out contract | `UnsupportedContentError`, naming the slide_type, field, and reason |
+| The assembled Templated Payload fails schema validation | `TemplatedPayloadValidationError`, with `.errors` — every failure reported, not just the first |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 and DC-003-I004 both added no new dependencies:**
+**DC-003-I003, DC-003-I004, and DC-003-I005 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -570,12 +704,14 @@ Still just two, both added in DC-003-I002, both maintained and widely used —
   unchecked. Required for Ajv's strict mode to accept the schemas as-is.
 
 No test framework was added — `node:test` and `node:assert/strict` (both
-built into Node.js 18+) cover every test in every task so far. Neither CLI
-(`check-topic-package.mjs`, `generate-mock-carousel.mjs`) needed a CLI
-framework — `process.argv[2]` and a `try`/`catch` on structured errors was
-enough both times. The Carousel Content Generator needed no HTTP client or
-LLM SDK either — I004 explicitly forbids calling a real provider, and the
-mock provider is pure, synchronous logic wrapped in an `async` function.
+built into Node.js 18+) cover every test in every task so far. No CLI
+(`check-topic-package.mjs`, `generate-mock-carousel.mjs`, `map-payload.mjs`)
+needed a CLI framework — `process.argv[2]` and a `try`/`catch` on structured
+errors was enough every time. The Carousel Content Generator needed no HTTP
+client or LLM SDK — I004 explicitly forbids calling a real provider. The
+Carousel Payload Mapper needed no Templated SDK — I005 explicitly forbids
+calling Templated; `node:crypto`'s built-in `randomUUID()` was enough for
+payload IDs.
 
 ## Implementation status
 
@@ -598,9 +734,11 @@ mock provider is pure, synchronous logic wrapped in an `async` function.
 | Retry strategy | Done (DC-003-I004) — `src/retry.mjs`, generic and reusable |
 | Carousel Content Generator orchestrator | Done (DC-003-I004) — `src/carousel-generator.mjs` |
 | Carousel generation CLI check | Done (DC-003-I004) — `npm run generate:mock` |
-| Unit test suite | Done — 100 tests, `npm test` (20 from I002, 29 from I003, 51 added in I004) |
+| Carousel Payload Mapping Registry | Done (DC-003-I005) — `src/carousel-payload-mapping.mjs`, self-validating |
+| Carousel Payload Mapper | Done (DC-003-I005) — `src/carousel-payload-mapper.mjs`, all six templates supported |
+| Payload mapping CLI check | Done (DC-003-I005) — `npm run map:payload` |
+| Unit test suite | Done — 127 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 added in I005) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
-| Payload mapping | Not started |
 | Templated rendering calls | Not started |
 | n8n workflow | Not started |
 | Error handling / retries (pipeline-level, beyond generation) | Not started |

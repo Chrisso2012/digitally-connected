@@ -35,3 +35,19 @@ export { withRetry } from "./retry.mjs";
 export { generateCarouselFromTopicPackage } from "./carousel-generator.mjs";
 export { PromptBuilderError, CarouselGenerationFailedError } from "./carousel-generator-errors.mjs";
 export { deepFreezeClone } from "./immutable.mjs";
+
+// DC-003-I005 — Carousel Payload Mapper
+export {
+  CAROUSEL_PAYLOAD_MAPPING,
+  getSlideMapping,
+  expandLayerTemplate,
+  validateMappingRegistry,
+} from "./carousel-payload-mapping.mjs";
+export { mapCarouselToTemplatedPayload } from "./carousel-payload-mapper.mjs";
+export {
+  UnknownTemplateError,
+  MissingLayerError,
+  DuplicateLayerMappingError,
+  UnsupportedContentError,
+  TemplatedPayloadValidationError,
+} from "./carousel-payload-errors.mjs";

@@ -1,0 +1,70 @@
+{
+  "carousel_content_id": "cc_01J9Z1A2B3C4",
+  "topic_id": "topic_01J9Y1B2C3",
+  "generated_at": "2026-07-31T02:11:04Z",
+  "llm_model": "mock-provider-v1",
+  "prompt_version": "carousel-copy.v1",
+  "schema_version": "1.0",
+  "slides": [
+    {
+      "slide_type": "cover",
+      "content": {
+        "eyebrow_text": "INSIGHT SERIES",
+        "headline_text": "Stop chasing new leads before you've worked the old ones",
+        "body_text": "Unconverted enquiries are still recoverable revenue, not a dead list."
+      }
+    },
+    {
+      "slide_type": "cover",
+      "content": {
+        "eyebrow_text": "INSIGHT SERIES — DUPLICATE",
+        "headline_text": "This slide_type is deliberately repeated",
+        "body_text": "Two \"cover\" slides in one carousel, to exercise the duplicate-mapping guard."
+      }
+    },
+    {
+      "slide_type": "content",
+      "content": {
+        "eyebrow_text": "KEY POINTS",
+        "headline_text": "What this means for owner-operators",
+        "body_text": "Unconverted enquiries are still recoverable revenue, not a dead list.",
+        "list_items": [
+          "Every unconverted lead already raised its hand once",
+          "Automated re-engagement costs nothing new in ad spend",
+          "Segmented follow-up outperforms a single blast"
+        ]
+      }
+    },
+    {
+      "slide_type": "statistic",
+      "content": {
+        "eyebrow_text": "BY THE NUMBERS",
+        "stat_value": "63%",
+        "supporting_stat_text": "of past enquiries never received a second follow-up message.",
+        "stat_caption": "Placeholder statistic — illustrative only."
+      }
+    },
+    {
+      "slide_type": "infographic",
+      "content": {
+        "eyebrow_text": "HOW IT WORKS",
+        "headline_text": "A connected system, not a checklist",
+        "steps": [
+          { "title": "Understand", "description": "We map your existing enquiry database and score it for hidden opportunity." },
+          { "title": "Plan", "description": "Contacts are grouped by where they actually are in their decision." },
+          { "title": "Act", "description": "Automated sequences reopen the conversation without new ad spend." },
+          { "title": "Review", "description": "Warm replies are routed straight to a booked call." }
+        ]
+      }
+    },
+    {
+      "slide_type": "cta",
+      "content": {
+        "eyebrow_text": "READY WHEN YOU ARE",
+        "headline_text": "Stop paying for leads you already have",
+        "body_text": "Book a 20-minute audit of your enquiry database and see the revenue sitting inside it.",
+        "button_label": "Book your audit"
+      }
+    }
+  ]
+}
