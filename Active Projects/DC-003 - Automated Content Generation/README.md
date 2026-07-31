@@ -169,11 +169,13 @@ Six [JSON Schema](https://json-schema.org/) (2020-12) documents in
 `schemas/` — the five objects defined in DC-003-T002, plus
 `execution-record.schema.json`, DC-003-I008's own schema for the
 Execution Ledger's operational event model (not part of the original T002
-five — see "Operational layer" below for why it's a separate schema rather
-than a repurposed `execution-log.schema.json`). Each schema is standards-
-compliant so a full validator (e.g. Ajv) can consume it unchanged later. Two
-simplifications were made deliberately, to avoid the complexity DC-003-T002's
-constraints explicitly warned against:
+five). One of the original five, `execution-log.schema.json`, is now
+formally **deprecated** — see "`execution-log.schema.json` — deprecated"
+under "Operational layer" below for the DC-003-I008.1 reconciliation
+findings and why it's a separate schema rather than a repurposed one. Each
+schema is standards-compliant so a full validator (e.g. Ajv) can consume it
+unchanged later. Two simplifications were made deliberately, to avoid the
+complexity DC-003-T002's constraints explicitly warned against:
 
 - **Carousel Content Object** — each slide's `content` field is typed as a
   generic object rather than a `slide_type`-conditional schema (`cover` needs
@@ -227,7 +229,7 @@ are also exported for callers that only need one file. Behavior:
 
 ## Schema registry (`src/schema-registry.mjs`)
 
-Loads the five approved schemas and exposes them behind stable, camelCase
+Loads the six registered schemas and exposes them behind stable, camelCase
 identifiers rather than filesystem paths:
 
 ```js
@@ -238,7 +240,8 @@ schemas.topicPackage;      // schemas/topic-package.schema.json, parsed
 schemas.carouselContent;   // schemas/carousel-content.schema.json, parsed
 schemas.templatedPayload;
 schemas.finishedCarousel;
-schemas.executionLog;
+schemas.executionLog;      // deprecated/dormant — see "Operational layer"
+schemas.executionRecord;   // the active operational record model
 ```
 
 Same fail-fast behavior as the config loader (`ConfigFileNotFoundError` /
@@ -1363,20 +1366,50 @@ const execution = ledger.reconstructExecution("exec_20260801_9f3a2e1c8b4d");
 //              finalStatus, records[] } — immutable.
 ```
 
-### Relationship to `execution-log.schema.json`
+### `execution-log.schema.json` — deprecated
 
-`execution-log.schema.json` was written in DC-003-I001 (per DC-003-T002 §5)
-as a single aggregate record per pipeline run — never consumed by any code
-in this repository. DC-003-I008's `ExecutionRecord` is a different shape
-entirely: many small immutable events per execution, event-sourced and
-appendable. Rather than repurpose an approved-but-unconsumed T002 schema
-into a structurally different design, DC-003-I008 adds a new, separate
-schema (`execution-record.schema.json`) and leaves `execution-log.schema.json`
-completely untouched. Both schemas are registered; only `executionRecord`
-has a consumer today. This distinction is flagged here for future Strategy
-Office awareness — reconciling or retiring the older schema, if desired, is
-a decision for a future milestone, not something this one makes
-unilaterally.
+**There is exactly one active operational record model in this repository:
+`ExecutionRecord` / the Execution Ledger, above.** `execution-log.schema.json`
+is retained but formally **deprecated** (DC-003-I008.1, Schema Reconciliation)
+— not part of the active architecture, not to be built against.
+
+**Findings (DC-003-I008.1 review):**
+
+- **Not referenced by any production code path.** Every reference to it in
+  `src/` is either a schema *registration* (`schema-registry.mjs`, so it
+  remains independently validatable) or a version-key presence check
+  (`integrity-checks.mjs`'s `REQUIRED_SCHEMA_VERSION_KEYS`). No module
+  constructs an Execution Log object, and no builder validates data against
+  it. Its only other references are its own approved fixture
+  (`tests/fixtures/execution-log.example.json`) and the generic "validate
+  every approved fixture" test/CLI (`validator.test.mjs`, `validate.mjs`)
+  that exercises it structurally, not operationally.
+- **Not obviously abandoned, either.** It was written in DC-003-I001 per
+  DC-003-T002 §5 as a single aggregate record per pipeline run
+  (`token_usage`, `cost_estimate`, `llm_retry_count`, `n8n_execution_url`,
+  etc.) — a *rolled-up summary* shape, structurally different from
+  `ExecutionRecord`'s per-event design, but not necessarily in conflict
+  with it: a future rolled-up projection *built from* Execution Ledger
+  records is still a plausible shape for DC-003-I009 (Orchestrator) or
+  DC-003-I010 (n8n Adapter) to want, once their real requirements
+  (retry counting, token accounting, n8n's own execution URL format) are
+  actually known — the same position `finished-carousel.schema.json` was
+  in from DC-003-I001 until DC-003-I007 finally consumed it.
+- **Removal risk:** none today (no consumer exists to break), but deleting
+  an approved DC-003-T002 §5 object schema is a contract change, not
+  housekeeping — that decision belongs to the Strategy Office explicitly
+  revisiting T002, not to an unprompted deletion here.
+
+**Decision: retain, deprecate, document — not remove.** The schema file,
+its fixture, and its registry/integrity-check entries are all unchanged in
+this milestone (removing any of them would be an untested behavioral
+change, which DC-003-I008.1 is explicitly scoped not to make). What
+changed is presentation only: this section now states plainly that it is
+deprecated, so it is never mistaken for a second, competing operational
+model alongside the Execution Ledger. If DC-003-I009/I010 conclude a
+rolled-up execution summary is genuinely needed, that milestone should
+explicitly decide whether to revive, redesign, or finally retire this
+schema — DC-003-I008.1 does not pre-empt that call.
 
 ## Running tests
 

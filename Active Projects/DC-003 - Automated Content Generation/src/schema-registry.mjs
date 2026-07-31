@@ -15,7 +15,12 @@ const SCHEMA_FILES = {
   carouselContent: "carousel-content.schema.json",
   templatedPayload: "templated-payload.schema.json",
   finishedCarousel: "finished-carousel.schema.json",
+  // DEPRECATED (DC-003-I008.1) — not part of the active architecture, no
+  // production consumer. Retained (not removed) for the schema's own
+  // fixture/validation coverage and a possible future rolled-up-summary
+  // role; see README "execution-log.schema.json — deprecated".
   executionLog: "execution-log.schema.json",
+  // The active operational record model — see README "Operational layer".
   executionRecord: "execution-record.schema.json",
 };
 
