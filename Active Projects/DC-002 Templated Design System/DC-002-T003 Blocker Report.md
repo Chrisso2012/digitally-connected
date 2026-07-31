@@ -1,6 +1,26 @@
 # DC-002-T003 — Build Templated Design System — Blocker Report
 
-**Status:** Stopped before template creation. No templates were created in Templated.io. No account settings were changed.
+**Status:** Stopped before template creation (again — see Update below). No templates were created in Templated.io. No account settings were changed by me.
+
+## Update (2026-07-31, same day) — plan blocker resolved, new technical blocker found
+
+The account was upgraded from Free to **Starter** ($29/mo, 1000 API quota) between the first blocker report and this update — confirmed via `get_account`. This should have resolved the original blocker (font upload is documented as available from the Starter tier up: *"Custom + Google Fonts — Upload your own fonts or use Google Fonts"*, per templated.io/pricing/).
+
+Re-attempted `upload_font` with the account now on Starter, and it still fails — but the failure signature ruled out plan-gating entirely:
+
+- Tried true static (non-variable) per-weight files this time — Source Sans 3 (700, 900), Nunito (400, 700), Lato (400, 600) — sourced via jsDelivr's fontsource CDN and jsDelivr's GitHub passthrough (both serve correct `font/ttf` content-type headers, unlike `raw.githubusercontent.com` which was the source used in the first attempt).
+- All 6 calls: identical `API error (500): Internal Server Error` at `/v1/font`.
+- Control test: uploaded a completely generic, ubiquitous font (**Roboto**, standard static TTF, simple one-word name, known-good content-type) — **also failed identically.**
+
+Seven consecutive uploads, three different hosting sources, two font formats (variable + static), one totally unrelated control font — all fail with the exact same 500. This rules out plan tier, file format, source host, content-type, and the specific fonts as causes. **The `/v1/font` upload endpoint itself appears to have a platform-side fault**, independent of anything on this end.
+
+No partial or orphaned font entries were left behind (`list_fonts` confirmed unchanged, still the same 143 built-in Google Fonts, zero uploaded fonts) — the account is in a clean state.
+
+**This is now a Templated support issue, not an account-configuration one.** Recommend contacting Templated support directly with: account email, the exact endpoint (`POST /v1/font`), and the reproducible 500 (happens on every payload, including a plain Roboto upload). Once support confirms the endpoint is fixed, the build can resume immediately — everything else (package, schema, layout plan) is ready.
+
+---
+
+## Original report (Free plan)
 
 ## Package verification (passed)
 
