@@ -1,0 +1,12 @@
+{
+  "record_id": "rec_01J9X9D4A1B2C3",
+  "execution_id": "exec_20260731_9f3a2e1c8b4d",
+  "sequence": 1,
+  "event_type": "execution.started",
+  "status": "started",
+  "stage": null,
+  "occurred_at": "2026-07-31T02:10:58Z",
+  "source": "cli",
+  "data": { "topic_id": "topic_01J9X8QZ3K" },
+  "diagnostics": null
+}

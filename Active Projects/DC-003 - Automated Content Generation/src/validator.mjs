@@ -1,7 +1,7 @@
 // DC-003 — validation runtime.
 //
 // The single source of truth for validating any object against any of the
-// five registered schemas. Built on Ajv (2020-12 dialect) + ajv-formats —
+// six registered schemas. Built on Ajv (2020-12 dialect) + ajv-formats —
 // see README "Dependencies" for why these two were chosen.
 //
 // Unknown schema identifiers are a caller bug, not a data problem, so

@@ -29,6 +29,7 @@ const REQUIRED_SCHEMA_VERSION_KEYS = [
   "templated_payload",
   "finished_carousel",
   "execution_log",
+  "execution_record",
 ];
 // Deliberately loose substring match — this is a safety net against obvious
 // mistakes (pasting a real key into config), not a secrets scanner.

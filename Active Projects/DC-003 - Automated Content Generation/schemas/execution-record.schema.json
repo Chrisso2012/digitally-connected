@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/execution-record.schema.json",
+  "title": "Execution Record",
+  "description": "One event in the Execution Ledger — the platform's operational audit layer, introduced in DC-003-I008. Records HOW the system executed (this event), independent of WHAT it produced (see Finished Carousel Object). Distinct from the pre-existing, still-unconsumed execution-log.schema.json (a DC-003-T002 single-aggregate-record design) — see README 'Operational layer' for the relationship between the two.",
+  "type": "object",
+  "required": ["record_id", "execution_id", "sequence", "event_type", "status", "occurred_at"],
+  "additionalProperties": false,
+  "properties": {
+    "record_id": { "type": "string", "pattern": "^rec_[A-Za-z0-9]+$" },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^exec_[0-9]{8}_[A-Za-z0-9]+$",
+      "description": "Matches execution-log.schema.json's own execution_id pattern and DC-003-I007's ExecutionMetadata.executionId — the same trace identifier is expected to be carried across all three."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Must increase monotonically within one execution_id. Enforced at append time by the Execution Ledger (src/execution-ledger.mjs), not by this schema alone — a single record has no visibility into its siblings."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "execution.started",
+        "execution.completed",
+        "execution.failed",
+        "topic.loaded",
+        "content.generated",
+        "payload.mapped",
+        "render.started",
+        "render.completed",
+        "render.failed",
+        "finished_carousel.created"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["started", "succeeded", "failed", "cancelled"],
+      "description": "Canonical internal vocabulary only — never a provider-specific status string."
+    },
+    "stage": { "type": ["string", "null"], "minLength": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "source": { "type": ["string", "null"], "minLength": 1 },
+    "data": {
+      "type": ["object", "null"],
+      "description": "Event-specific, non-sensitive payload (e.g. a carousel_id). Opaque here, same treatment as templated-payload.schema.json's 'layers' — the valid shape is per-event-type, not a schema concern."
+    },
+    "diagnostics": {
+      "type": ["object", "null"],
+      "description": "Allowlisted, not blacklisted: additionalProperties is false, so any field not explicitly listed below (an API key, an Authorization header, an environment variable, a raw provider response, a stack trace) is rejected by schema validation, never filtered after the fact.",
+      "additionalProperties": false,
+      "properties": {
+        "error_category": { "type": "string", "minLength": 1 },
+        "error_code": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "field_path": { "type": "string" },
+        "safe_message": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

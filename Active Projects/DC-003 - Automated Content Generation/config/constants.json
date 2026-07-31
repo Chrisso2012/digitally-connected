@@ -14,11 +14,25 @@
   "execution_render_statuses": ["completed", "partial", "failed", "not_started"],
   "execution_overall_statuses": ["success", "partial_success", "failed"],
   "execution_triggers": ["manual", "backlog", "scheduled"],
+  "execution_record_statuses": ["started", "succeeded", "failed", "cancelled"],
+  "execution_record_event_types": [
+    "execution.started",
+    "execution.completed",
+    "execution.failed",
+    "topic.loaded",
+    "content.generated",
+    "payload.mapped",
+    "render.started",
+    "render.completed",
+    "render.failed",
+    "finished_carousel.created"
+  ],
   "id_prefixes": {
     "topic": "topic_",
     "carousel_content": "cc_",
     "templated_payload": "pl_",
     "finished_carousel": "car_",
-    "execution": "exec_"
+    "execution": "exec_",
+    "execution_record": "rec_"
   }
 }

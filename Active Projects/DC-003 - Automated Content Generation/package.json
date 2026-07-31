@@ -2,7 +2,7 @@
   "name": "dc-003-content-factory",
   "version": "0.1.0",
   "private": true,
-  "description": "DC-003 Automated Content Generation — project foundation, config/schema loader, validation runtime, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer, and Finished Carousel Builder. No n8n workflow implemented yet.",
+  "description": "DC-003 Automated Content Generation — project foundation, config/schema loader, validation runtime, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer, Finished Carousel Builder, and the Execution Ledger. No orchestration or n8n workflow implemented yet.",
   "type": "module",
   "scripts": {
     "validate": "node tests/validation/validate.mjs",
@@ -12,6 +12,7 @@
     "render:mock": "node tests/validation/render-payload.mjs",
     "render:live": "node tests/validation/render-payload.mjs --live",
     "build:carousel": "node tests/validation/build-finished-carousel.mjs",
+    "ledger": "node tests/validation/ledger.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

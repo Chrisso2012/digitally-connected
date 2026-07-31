@@ -73,3 +73,17 @@ export {
 export { createExecutionMetadata, generateExecutionId } from "./execution-metadata.mjs";
 export { createFinishedCarousel } from "./finished-carousel-builder.mjs";
 export { FinishedCarouselCompositionError, FinishedCarouselValidationError } from "./finished-carousel-errors.mjs";
+
+// DC-003-I008 — Execution Ledger (operational layer)
+export { createExecutionRecord, generateRecordId } from "./execution-record.mjs";
+export { assertValidLedgerStore } from "./execution-ledger-store.mjs";
+export { createJsonlLedgerStore } from "./jsonl-ledger-store.mjs";
+export { createExecutionLedger } from "./execution-ledger.mjs";
+export {
+  ExecutionRecordValidationError,
+  DuplicateSequenceError,
+  InvalidLedgerStoreError,
+  MalformedLedgerLineError,
+  ExecutionNotFoundError,
+  LedgerFileExistsError,
+} from "./execution-ledger-errors.mjs";

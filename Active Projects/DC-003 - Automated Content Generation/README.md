@@ -8,10 +8,12 @@ Topic Package Loader added in DC-003-I003, the Carousel Content Generator
 added in DC-003-I004 (mock LLM provider only — I004 explicitly does not
 call a real one), the Carousel Payload Mapper added in DC-003-I005, the
 Templated Renderer added in DC-003-I006 (live-verified against the real
-Templated API — see "Live verification procedure" below), and the Finished
+Templated API — see "Live verification procedure" below), the Finished
 Carousel Builder added in DC-003-I007 — this pipeline's first stable public
-contract; see "Finished Carousel Builder" below. n8n workflow logic does not
-exist yet.
+contract; see "Finished Carousel Builder" below — and the Execution Ledger
+added in DC-003-I008, the platform's operational audit layer; see
+"Operational layer" below. No orchestration and no n8n workflow logic
+exists yet.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -77,7 +79,12 @@ DC-003 - Automated Content Generation/
 │   ├── renderer.mjs                  # DC-003-I006 — see "Templated Renderer"
 │   ├── execution-metadata.mjs        # DC-003-I007 — immutable ExecutionMetadata + execution_id generation
 │   ├── finished-carousel-builder.mjs # DC-003-I007 — see "Finished Carousel Builder"
-│   └── finished-carousel-errors.mjs  # DC-003-I007 — builder-specific errors
+│   ├── finished-carousel-errors.mjs  # DC-003-I007 — builder-specific errors
+│   ├── execution-record.mjs          # DC-003-I008 — immutable ExecutionRecord + record_id generation
+│   ├── execution-ledger-store.mjs    # DC-003-I008 — Ledger Store abstraction (shape + assertValidLedgerStore)
+│   ├── jsonl-ledger-store.mjs        # DC-003-I008 — the one Ledger Store implementation
+│   ├── execution-ledger.mjs          # DC-003-I008 — see "Operational layer"
+│   └── execution-ledger-errors.mjs   # DC-003-I008 — ledger/record/store-specific errors
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -90,7 +97,8 @@ DC-003 - Automated Content Generation/
 │       ├── generate-mock-carousel.mjs# DC-003-I004 — thin CLI wrapper around the generator
 │       ├── map-payload.mjs           # DC-003-I005 — thin CLI wrapper around the mapper
 │       ├── render-payload.mjs        # DC-003-I006 — thin CLI wrapper around the renderer
-│       └── build-finished-carousel.mjs# DC-003-I007 — end-to-end offline capstone CLI
+│       ├── build-finished-carousel.mjs# DC-003-I007 — end-to-end offline capstone CLI
+│       └── ledger.mjs                # DC-003-I008 — init/append/read/reconstruct subcommands
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -157,8 +165,12 @@ carried forward as reviewable config, exactly as DC-003-T001 §7 intended.
 
 ## Schemas
 
-Five [JSON Schema](https://json-schema.org/) (2020-12) documents in
-`schemas/`, one per object defined in DC-003-T002. Each schema is standards-
+Six [JSON Schema](https://json-schema.org/) (2020-12) documents in
+`schemas/` — the five objects defined in DC-003-T002, plus
+`execution-record.schema.json`, DC-003-I008's own schema for the
+Execution Ledger's operational event model (not part of the original T002
+five — see "Operational layer" below for why it's a separate schema rather
+than a repurposed `execution-log.schema.json`). Each schema is standards-
 compliant so a full validator (e.g. Ajv) can consume it unchanged later. Two
 simplifications were made deliberately, to avoid the complexity DC-003-T002's
 constraints explicitly warned against:
@@ -1143,6 +1155,229 @@ const finishedCarousel = createFinishedCarousel({ carouselContent, slideRenders,
 //                     approval } — immutable, schema-valid.
 ```
 
+## Operational layer (`src/execution-ledger.mjs`)
+
+DC-003-I008 introduces the platform's second layer. The **pipeline layer**
+(everything above `FinishedCarousel`) produces outputs. The new
+**operational layer** records how execution happened — independently of
+what was produced. No orchestration exists yet; that's explicitly
+DC-003-I009's job. This milestone only records.
+
+```mermaid
+flowchart LR
+    subgraph Pipeline Layer
+    TP2[Topic Package] --> CC2[Carousel Content] --> TPL[Templated Payload] --> RR2[Render Result] --> FC2[Finished Carousel]
+    end
+    subgraph Operational Layer
+    EL{{Execution Ledger}} --> ER["Execution Records (immutable, ordered)"]
+    ER --> LSI{{Ledger Store interface}}
+    LSI --> JSONL[JSONL Store]
+    end
+```
+
+Nothing in the pipeline layer changed to add this — no renderer
+modification, no `FinishedCarousel` modification, per the DC-003-I008 brief.
+The two layers connect only in the sense that a future orchestrator
+(DC-003-I009) is expected to call both.
+
+### Execution Record (`src/execution-record.mjs`)
+
+One immutable event — `createExecutionRecord(fields, { clock, idGenerator })`.
+Unlike `RenderResult`/`ExecutionMetadata` (DC-003-I006/I007's own invented,
+schema-less domain objects), `ExecutionRecord` has its own JSON Schema
+(`execution-record.schema.json`), so its field names are snake_case,
+matching the schema directly — the same convention TopicPackage/
+CarouselContent/TemplatedPayload/FinishedCarousel already use, rather than
+a camelCase JS convenience shape translated at some other boundary.
+
+Required: `record_id`, `execution_id`, `sequence`, `event_type`, `status`,
+`occurred_at`. `record_id`/`occurred_at` are generated automatically when
+omitted; `stage`/`source`/`data`/`diagnostics` default to `null`.
+
+**Status vocabulary is canonical and closed:** `started` / `succeeded` /
+`failed` / `cancelled` — never a provider-specific string (Templated's
+`PENDING`/`COMPLETED`/`FAILED`, or any future provider's own terminology,
+never appears here; see "Provider status contract" above for the boundary
+that already keeps this true one layer down).
+
+**Event types**, also a closed enum: `execution.started`,
+`execution.completed`, `execution.failed`, `topic.loaded`,
+`content.generated`, `payload.mapped`, `render.started`,
+`render.completed`, `render.failed`, `finished_carousel.created`. Adding a
+new one later means extending `execution-record.schema.json`'s enum
+deliberately — the same evolution pattern DC-003-I007 already established
+for `finished-carousel.schema.json`.
+
+### Identity and monotonic sequencing
+
+Every record carries `record_id`, `execution_id`, and `sequence`. `sequence`
+must increase monotonically **within one `execution_id`** — a single
+record can't detect a duplicate or out-of-order sequence on its own (it has
+no visibility into siblings), so that check lives in the Execution Ledger's
+`appendRecord()`, the only place with access to a store's existing records:
+a new record's `sequence` must be strictly greater than the highest
+existing `sequence` already stored for the same `execution_id`, or
+`DuplicateSequenceError` is thrown — covering exact duplicates and any
+lower/out-of-order value, matching "must increase monotonically" literally,
+not just "must be unique."
+
+### Execution Ledger (`src/execution-ledger.mjs`)
+
+`createExecutionLedger({ store })` returns
+`{ appendRecord, readAll, reconstructExecution }`. **"The ledger itself is
+not mutable"** is satisfied literally: the returned object carries no
+mutable internal state of its own at all — every method is a pure function
+of its arguments plus whatever the injected store currently holds.
+Appending changes the *store* (necessarily, since persistence is external),
+never this wrapper; every value handed back to a caller — one
+`ExecutionRecord`, a `readAll()` snapshot, a `reconstructExecution()`
+summary — is deep-frozen.
+
+No orchestration logic lives here: the ledger records events, it does not
+decide what should happen next, retry anything, or call the renderer,
+generator, or mapper.
+
+**Failure behavior:** `appendRecord()` always throws on any failure — a
+malformed record, a non-monotonic sequence, or a store I/O error — for
+every event type, with no silent-failure mode. The DC-003-I008 brief
+distinguishes "critical" records (`execution.started`/`completed`/`failed`,
+which must never silently fail) from "stage-level" records (which "may
+return structured write errors"), but also explicitly defers "the exact
+orchestration behaviour" to DC-003-I009. Building two different failure
+modes into this milestone would mean guessing at a policy this milestone
+isn't the one to set — a future orchestrator can wrap `appendRecord()` in
+its own `try`/`catch` and decide, per event type, whether a given failure
+is fatal to the whole execution. What DC-003-I008 guarantees is narrower
+and unconditional: **nothing is ever swallowed.**
+
+### Ledger Store abstraction (`src/execution-ledger-store.mjs`)
+
+The domain layer knows nothing about files. A Ledger Store is any object
+shaped `{ name: string, append(record): void, readAll(): object[] }` — the
+same no-implicit-default, no-base-class pattern DC-003-I006's transport
+abstraction already established. `assertValidLedgerStore()` is a runtime
+guard `createExecutionLedger()` calls immediately, so a malformed store
+fails fast with `InvalidLedgerStoreError` rather than crashing confusingly
+on the first `append`/`readAll` call. A future store (SQLite, Postgres,
+cloud storage, a real event store) plugs in by implementing this same
+shape — no change to `execution-ledger.mjs`.
+
+### JSONL Ledger Store (`src/jsonl-ledger-store.mjs`)
+
+The one implementation this milestone ships: one `ExecutionRecord` per
+line of a `.jsonl` file, e.g.:
+
+```
+{"record_id":"rec_001","execution_id":"exec_20260801_9f3a2e1c8b4d","sequence":1,"event_type":"execution.started", ...}
+{"record_id":"rec_002","execution_id":"exec_20260801_9f3a2e1c8b4d","sequence":2,"event_type":"execution.completed", ...}
+```
+
+`append()` appends one line, creating the file if it doesn't exist yet.
+`readAll()` returns `[]` for a file that doesn't exist (an empty ledger,
+not an error), otherwise parses every non-blank line. A line that isn't
+valid JSON throws `MalformedLedgerLineError`, naming the file and the
+1-based line number — **never the line's own content**: Node's
+`JSON.parse` `SyntaxError` message embeds a snippet of the offending text
+itself, so this store deliberately discards that message and substitutes a
+fixed, content-free reason rather than passing it through (caught by a
+test that asserts the malformed text never appears in the thrown error).
+
+### Reconstruction
+
+`ledger.reconstructExecution(executionId)` loads every record from the
+store, filters to the given `execution_id`, sorts by `sequence` ascending,
+and returns a small immutable summary (`recordCount`, `firstEventAt`,
+`lastEventAt`, `finalStatus`, and the ordered `records` themselves). It
+explicitly does **not** trust the store's own return order — records are
+always sorted here regardless of file/storage order — and it does not
+interpret or judge the outcome beyond reporting the last record's own
+`status`. No orchestration logic belongs here, matching the brief exactly.
+Throws `ExecutionNotFoundError` for an `execution_id` with no records at
+all.
+
+### Security model
+
+Diagnostics use an **allowlist, not a blacklist** —
+`execution-record.schema.json`'s `diagnostics` object has
+`additionalProperties: false` with exactly six allowed fields
+(`error_category`, `error_code`, `retryable`, `attempt`, `field_path`,
+`safe_message`). Anything not on that list — an API key, an `Authorization`
+header, an environment variable, a raw provider response, a stack trace —
+is **rejected by schema validation**, never filtered after the fact. This
+is enforced at the schema level (tested directly: a `diagnostics.api_key`
+or `diagnostics.raw_response` field fails validation), not merely as a
+documented convention. The CLI prints whatever diagnostics a record
+actually carries verbatim — no separate redaction step exists, because the
+allowlist already guarantees there's nothing to redact.
+
+### Deterministic testing
+
+Per the brief's own example signature, `createExecutionRecord(input, { clock, idGenerator })`
+— note these option names deliberately differ from the `now` convention
+every earlier DC-003 factory uses (`renderer.mjs`, `finished-carousel-builder.mjs`,
+etc.), since the brief specified this exact shape for I008. `clock` and
+`idGenerator` propagate through `ledger.appendRecord()`'s second argument
+unchanged. No test in `execution-record.test.mjs`, `execution-ledger.test.mjs`,
+or `execution-ledger-cli.test.mjs` depends on the real clock or a random UUID.
+
+### CLI (`tests/validation/ledger.mjs`, `npm run ledger`)
+
+One CLI, four subcommands — no network, no renderer, no provider
+interaction:
+
+```bash
+npm run ledger -- init <ledgerPath>
+npm run ledger -- append <ledgerPath> <recordFieldsJsonPath>
+npm run ledger -- read <ledgerPath> [executionId]
+npm run ledger -- reconstruct <ledgerPath> <executionId>
+```
+
+`init` creates a new empty ledger file and refuses to overwrite an existing
+one (`LedgerFileExistsError`) — the store itself doesn't need an explicit
+"create" step (`append` creates the file lazily), `init` exists purely so
+an operator can stake out an empty ledger deliberately. `append` reads
+record fields from a JSON file (the same "point the CLI at a JSON file"
+convention every other DC-003 CLI uses) and prints a safe summary. `read`
+prints every record, optionally filtered to one `executionId`. `reconstruct`
+prints the full reconstructed summary for one execution. Every subcommand
+exits `0` on success, non-zero with a structured, named error otherwise.
+
+### Rendering in code
+
+```js
+import { createJsonlLedgerStore, createExecutionLedger } from "./src/index.mjs";
+
+const store = createJsonlLedgerStore({ filePath: "./execution.jsonl" });
+const ledger = createExecutionLedger({ store });
+
+ledger.appendRecord({
+  execution_id: "exec_20260801_9f3a2e1c8b4d",
+  sequence: 1,
+  event_type: "execution.started",
+  status: "started",
+  source: "cli",
+});
+
+const execution = ledger.reconstructExecution("exec_20260801_9f3a2e1c8b4d");
+// execution: { executionId, recordCount, firstEventAt, lastEventAt,
+//              finalStatus, records[] } — immutable.
+```
+
+### Relationship to `execution-log.schema.json`
+
+`execution-log.schema.json` was written in DC-003-I001 (per DC-003-T002 §5)
+as a single aggregate record per pipeline run — never consumed by any code
+in this repository. DC-003-I008's `ExecutionRecord` is a different shape
+entirely: many small immutable events per execution, event-sourced and
+appendable. Rather than repurpose an approved-but-unconsumed T002 schema
+into a structurally different design, DC-003-I008 adds a new, separate
+schema (`execution-record.schema.json`) and leaves `execution-log.schema.json`
+completely untouched. Both schemas are registered; only `executionRecord`
+has a consumer today. This distinction is flagged here for future Strategy
+Office awareness — reconciling or retiring the older schema, if desired, is
+a decision for a future milestone, not something this one makes
+unilaterally.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -1151,12 +1386,13 @@ through DC-003-I006 either:
 
 ```bash
 npm test       # unit tests: tests/unit/*.test.mjs
-npm run validate  # CLI summary: all 5 approved fixtures against their schemas
+npm run validate  # CLI summary: all 6 approved fixtures against their schemas
 npm run check:topic -- <path>  # CLI check of one Topic Package file
 npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
 npm run map:payload -- <path>  # CLI map one Carousel Content file into six Templated Payloads
 npm run render:mock -- <path>  # CLI mock-render one Templated Payload file
 npm run build:carousel -- <path>  # CLI build one Finished Carousel end-to-end, offline
+npm run ledger -- <subcommand> ...  # CLI: init/append/read/reconstruct an Execution Ledger
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -1203,7 +1439,25 @@ re-implementation); deep immutability of the assembled object, including
 nested `slides[]`/`metadata`/`execution_metadata`; that no `RenderResult`/
 `TemplatedPayload` field name leaks into the output; and CLI exit codes for
 success and every failure mode — always via the mock transport, `build:carousel`
-has no `--live` flag at all. Tests that need a
+has no `--live` flag at all. From DC-003-I008: `createExecutionRecord()`
+(successful construction with every field explicit; auto-generated
+`record_id`/`occurred_at` via injected `clock`/`idGenerator`; every
+documented `event_type` and `status` accepted; a `TypeError`-style
+`ExecutionRecordValidationError` for a missing/malformed field, an
+unregistered `event_type`, a provider-specific (non-canonical) `status`,
+and — proving the diagnostics allowlist — a rejected `api_key` or
+`raw_response` field); the JSONL Ledger Store (round-trip append/readAll,
+file-order preservation, lazy file creation, an empty array for a
+not-yet-created file, and `MalformedLedgerLineError` for a bad line that
+never leaks the line's own content); the Execution Ledger (`InvalidLedgerStoreError`
+for a malformed store; monotonic-sequence enforcement rejecting both exact
+duplicates and out-of-order-lower sequences, scoped per `execution_id`;
+deep-frozen `readAll()`/`reconstructExecution()` results; grouping and
+sequence-ordering independent of underlying storage order; `ExecutionNotFoundError`
+for an unknown execution; and deterministic `clock`/`idGenerator`
+propagation); and CLI exit codes for `init`/`append`/`read`/`reconstruct`
+success and failure — no network, no renderer, no `TEMPLATED_API_KEY`
+dependency at all. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
 small stub defined inline in the test file, the mock transport's
@@ -1243,16 +1497,22 @@ test ever sets `--live` or reaches the network.**
 | Every render retry attempt fails | `RetryLimitExceeded`, with `.attempts` (every attempt's error, in order) and `.maxAttempts` |
 | A Finished Carousel input is missing, malformed, or inconsistent with another input | `FinishedCarouselCompositionError`, thrown immediately, before schema validation is attempted |
 | The assembled Finished Carousel fails schema validation despite passing every composition check | `FinishedCarouselValidationError`, with `.errors` — every failure reported, not just the first |
+| An Execution Record fails schema validation (missing field, unregistered `event_type`, non-canonical `status`, or a diagnostics field outside the allowlist) | `ExecutionRecordValidationError`, with `.errors` — every failure reported, not just the first |
+| A record's `sequence` is not strictly greater than the highest existing sequence for the same `execution_id` | `DuplicateSequenceError`, thrown immediately by the Execution Ledger, before the store is written to |
+| A Ledger Store doesn't implement `{ name, append(), readAll() }` | `InvalidLedgerStoreError`, thrown immediately by `createExecutionLedger()` |
+| A line in a `.jsonl` ledger file isn't valid JSON | `MalformedLedgerLineError`, naming the file and 1-based line number — never the line's own content |
+| `reconstructExecution()` is called for an `execution_id` with no records at all | `ExecutionNotFoundError` |
+| The ledger CLI's `init` subcommand targets a file that already exists | `LedgerFileExistsError` — never silently overwritten |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I007 all added no new dependencies:**
+**DC-003-I003 through DC-003-I008 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
 - **`ajv-formats`** — registers `format` keywords (`date-time`, `email`) that
-  the five schemas already declare; without it those formats are silently
+  the six schemas already declare; without it those formats are silently
   unchecked. Required for Ajv's strict mode to accept the schemas as-is.
 
 No test framework was added — `node:test` and `node:assert/strict` (both
@@ -1268,7 +1528,11 @@ Templated Renderer's HTTP transport needed no HTTP client library either —
 Node's built-in global `fetch` (Node 18+) plus `AbortController` for
 timeouts was enough. The Finished Carousel Builder needed nothing beyond
 what DC-003-I005 already established — the same `node:crypto` `randomUUID()`
-for `carousel_id`/`execution_id` generation.
+for `carousel_id`/`execution_id` generation. The Execution Ledger needed no
+database driver or event-store client — the JSONL Ledger Store is Node's
+built-in `node:fs` (`readFileSync`/`appendFileSync`/`existsSync`), the same
+kind of dependency-free file I/O `topic-package-loader.mjs` (DC-003-I003)
+already established.
 
 ## Implementation status
 
@@ -1304,13 +1568,18 @@ for `carousel_id`/`execution_id` generation.
 | Execution Metadata | Done (DC-003-I007) — `src/execution-metadata.mjs`; immutable, generates its own `execution_id`/`rendered_at` when not supplied |
 | Finished Carousel schema extension | Done (DC-003-I007) — `execution_metadata` added to `finished-carousel.schema.json`; approved fixture updated to match |
 | Finished Carousel CLI check | Done (DC-003-I007) — `npm run build:carousel`, fully offline (mock transport only) |
-| Unit test suite | Done — 222 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007) |
+| Execution Record domain model + schema | Done (DC-003-I008) — `src/execution-record.mjs`, `execution-record.schema.json`; snake_case, matches its own schema directly |
+| Ledger Store abstraction | Done (DC-003-I008) — `src/execution-ledger-store.mjs`, `assertValidLedgerStore()` |
+| JSONL Ledger Store | Done (DC-003-I008) — `src/jsonl-ledger-store.mjs` |
+| Execution Ledger (append, read, reconstruct) | Done (DC-003-I008) — `src/execution-ledger.mjs`; see "Operational layer" |
+| Execution Ledger CLI check | Done (DC-003-I008) — `npm run ledger`, init/append/read/reconstruct subcommands, no network |
+| Unit test suite | Done — 266 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
-| n8n workflow | Not started — DC-003-I009 is expected to consume `FinishedCarousel` as its orchestration contract |
+| Pipeline orchestration | Not started — DC-003-I009, expected to consume `FinishedCarousel` and call the Execution Ledger, coordinating generation/rendering/logging without itself being n8n |
+| n8n adapter | Not started — DC-003-I010 per the revised roadmap; n8n becomes one consumer of the orchestration layer, not the orchestration layer itself |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started |
 | Approval workflow | Not started — `approval` remains an all-default stub on every Finished Carousel Object DC-003-I007 builds, per DC-003-T002 §7 |
-| Execution Logging (persisting FinishedCarousel + execution metadata) | Not started — DC-003-I008 |
 
 Nothing above "Unit test suite" should require restructuring this
 foundation — it should only add to it.
