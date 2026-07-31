@@ -730,10 +730,11 @@ the retry loop itself. Configurable via `options.maxAttempts`, defaulting
 to `TEMPLATED_RENDER_MAX_ATTEMPTS` (default `3`) when driven from the CLI's
 config loader. Not every failure is retried:
 
-- **Retried**: `TimeoutError`, `TransportError`, `ValidationError`
-  (malformed response) — all plausibly transient.
+- **Retried**: `TimeoutError`, `TransportError` — both plausibly transient.
 - **Not retried, fails on the first attempt**: `AuthenticationError` (bad
-  credentials won't become good credentials on attempt two) and
+  credentials won't become good credentials on attempt two),
+  `ValidationError` (a response-shape mismatch is deterministic — the same
+  malformed response recurs on every retry of the same request), and
   `RenderRejected` (Templated understood the request and rejected it — the
   same payload will be rejected again). These bypass `withRetry` by
   throwing directly out of the attempt callback, which `withRetry` doesn't
@@ -742,6 +743,10 @@ config loader. Not every failure is retried:
 Retry exhaustion raises `RetryLimitExceeded` carrying every attempt's
 result in order — never a collapsed generic message. No infinite retries:
 `maxAttempts` is always a specific, finite, configured number.
+
+**`ValidationError` was retryable until a hardening pass** — see
+"Live-verification safety rule" below for what happened and why that
+changed.
 
 ### Timeout behaviour
 
@@ -758,13 +763,21 @@ Every response — mock or real — passes through
 `validateTransportResponse()` before it can become a `RenderResult`:
 structurally untrustworthy responses (not an object, missing/invalid `id`,
 an invalid explicit `status` when one is given) fail fast as
-`ValidationError`. `status` itself is optional on the wire — Templated's
-real response has no such field, so when it's absent, status is inferred:
-present `url` → `completed`, otherwise → `processing`. An explicit `status`
-(as the mock transport always sends) is honored as-is. A well-formed
-response that resolves to `status: "failed"` is a distinct case,
-`RenderRejected`, since the response itself was trustworthy — Templated
-just declined the render.
+`ValidationError`, and are **not retried** (see "Retry behaviour"). `status`
+itself is optional on the wire — Templated's real response has no such
+field, so when it's absent, status is inferred: present `url` →
+`completed`, otherwise → `processing`. An explicit `status` (as the mock
+transport always sends) is honored as-is. A well-formed response that
+resolves to `status: "failed"` is a distinct case, `RenderRejected`, since
+the response itself was trustworthy — Templated just declined the render.
+
+Every `ValidationError` carries `.details` — an array of
+`{ field, expected, received, message }`. `received` is a safe type/reason
+descriptor (`"missing"`, `"empty string"`, `"number"`, ...), **never the
+actual value**, for any field that could plausibly carry something
+sensitive. The one exception is `status`: a short, non-sensitive, closed
+enum string, safe to show verbatim. Nothing in this diagnostic path ever
+includes the raw response body, the API key, or an authorization header.
 
 ### RenderResult
 
@@ -790,7 +803,7 @@ directly), this one is a genuine hierarchy — every renderer error extends
 | `AuthenticationError` | credentials rejected | No |
 | `TransportError` | network-level failure | Yes |
 | `TimeoutError` | request exceeded the configured timeout | Yes |
-| `ValidationError` | transport response has an untrustworthy shape | Yes |
+| `ValidationError` | transport response has an untrustworthy shape | **No** (was Yes — see below) |
 | `RenderRejected` | Templated returned a well-formed `status: "failed"` | No |
 | `RetryLimitExceeded` | every retry attempt failed | — (terminal) |
 
@@ -813,34 +826,79 @@ const result = await renderTemplatedPayload(payload, {
 ```bash
 npm run render:mock -- tests/fixtures/templated-payload.example.json
 npm run render:live -- tests/fixtures/templated-payload.example.json  # requires TEMPLATED_API_KEY
+npm run render:live -- tests/fixtures/templated-payload.example.json --live-max-attempts=2  # explicit opt-in only
 ```
 
 `render:mock` (the default) always uses the mock transport — safe to run
 anytime, no credentials, no network. `render:live` uses the real HTTP
 transport and performs an actual, credentialed API call; it fails fast
 with a clear message if `TEMPLATED_API_KEY` isn't set, and is not run by
-any automated test. Prints render ID, status, image URL, template ID,
+any automated test. **`--live` always defaults to exactly one attempt**,
+regardless of `TEMPLATED_RENDER_MAX_ATTEMPTS` — see "Live-verification
+safety rule" below. Prints render ID, status, image URL, template ID,
 slide type, provider, and duration; exits `0` on success, non-zero with a
-structured error otherwise. Does not write any file.
+structured error (including safe field-level diagnostics for
+`ValidationError`) otherwise. Does not write any file.
+
+### Live-verification safety rule
+
+**Incident (DC-003-I006):** the first authorized live-verification attempt
+fired **three** real requests against Templated's production API instead
+of the one that was approved. The CLI loaded `maxAttempts` from
+`TEMPLATED_RENDER_MAX_ATTEMPTS` (the normal production retry default, `3`)
+with no live-specific override, and `ValidationError` was retryable at the
+time — so a response-shape mismatch (see "Transport abstraction" above)
+was retried twice more automatically. Connectivity and auth both worked;
+only the response shape was wrong, but the retry count was the real
+failure. Reported transparently; the CEO/Strategy Office authorized a
+code-only hardening pass (no further live calls) before another live
+attempt would be considered. Two independent fixes landed as a result,
+tested entirely without network access:
+
+1. **`ValidationError` is no longer retried anywhere in the renderer** (see
+   "Retry behaviour" and the error hierarchy table above) — a response-shape
+   mismatch is deterministic, so retrying was always going to waste calls,
+   live or mock.
+2. **`--live` is decoupled from production retry config entirely.**
+   `resolveLiveMaxAttempts()` (`renderer-config.mjs`) always returns `1`
+   unless the CLI is given an explicit `--live-max-attempts=N` flag on that
+   specific invocation — never picked up from an env var or config file, so
+   it can't be silently inherited. `TEMPLATED_RENDER_MAX_ATTEMPTS` no longer
+   has any effect on `--live` runs at all.
+
+Both fixes are proven by tests that run entirely against the mock
+transport: `renderer.test.mjs` asserts a malformed response calls the
+transport exactly once even with `maxAttempts: 5` available;
+`renderer-config.test.mjs` asserts `resolveLiveMaxAttempts()` defaults to
+`1` and stays `1` even when `TEMPLATED_RENDER_MAX_ATTEMPTS` is set to `7`
+in the same environment; `renderer-cli.test.mjs` asserts a bad
+`--live-max-attempts` value fails before a transport is even constructed.
 
 ### Live verification procedure
 
-Mandated by the DC-003-I006 brief: no live Templated call happens until
-explicitly approved. Steps, in order:
+No live Templated call happens until explicitly approved, and every
+verification session ends with exactly one live attempt, never more. Steps,
+in order:
 
 1. **Architecture review** — confirm the renderer depends only on the
    transport abstraction (dependency-injected, no implicit default).
 2. **Authorization** — explicit confirmation to perform exactly one live
    render.
 3. **Verify the base URL and auth scheme** against Templated's official
-   docs before risking the one authorized call — this is what caught the
+   docs before risking the authorized call — this is what caught the
    response-shape mismatch described above and got it fixed pre-emptively.
 4. **A locally configured `TEMPLATED_API_KEY`** — set in the shell
-   environment or a local (gitignored) `.env`, never pasted into chat.
+   environment or a local (gitignored) `.env`, never pasted into chat, and
+   verified present (never displayed) before use.
 5. Run `npm run render:live -- <path>` exactly once, against one sample
-   payload.
+   payload — now safe by default per the safety rule above, since a second
+   attempt requires a deliberate, visible `--live-max-attempts` override
+   typed on that specific command.
 6. Record the response characteristics, re-run the full mock test suite to
    confirm nothing regressed, and stop.
+7. If the attempt reveals a problem, fix and re-verify **only** with fresh,
+   explicit re-authorization — a hardening pass is not a standing license
+   for another live call.
 
 ## Running tests
 
@@ -866,13 +924,19 @@ well-formed immutable `RenderResult` that exposes only its documented
 fields; timeout handling; retry exhaustion calling the transport exactly
 `maxAttempts` times, no more and no fewer; retry succeeding after transient
 transport failures and stopping immediately once it does; a malformed
-response being treated as retryable; a well-formed rejected render
-(`RenderRejected`) and an authentication failure both failing on the
-*first* attempt, never retried; `timeoutMs` being passed through to the
-transport rather than hardcoded; `RenderResult` construction (success,
-immutability, missing-field/invalid-status guards); status inference for
-Templated's real no-explicit-status response shape (confirmed during live
-verification, before any live call); the mock transport's every
+response failing after **exactly one** transport call, never retried; a
+well-formed rejected render (`RenderRejected`) and an authentication
+failure both also failing on the *first* attempt; a consolidated regression
+check that only `TimeoutError`/`TransportError` still retry while every
+other failure mode stops at one attempt; `timeoutMs` being passed through
+to the transport rather than hardcoded; `RenderResult` construction
+(success, immutability, missing-field/invalid-status guards); status
+inference for Templated's real no-explicit-status response shape; safe
+diagnostic detail (field/expected/received, never raw values) on every
+`ValidationError`; `resolveLiveMaxAttempts()` defaulting to `1` and staying
+decoupled from `TEMPLATED_RENDER_MAX_ATTEMPTS` even when that's set to a
+higher value in the same environment; a bad `--live-max-attempts` value
+failing before any transport is constructed; the mock transport's every
 configurable mode; and CLI exit codes for success and every failure
 mode — always via the mock transport, never live. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
@@ -963,12 +1027,12 @@ timeouts was enough.
 | Payload mapping CLI check | Done (DC-003-I005) — `npm run map:payload` |
 | Renderer service | Done (DC-003-I006) — `src/renderer.mjs` |
 | Transport abstraction + mock transport | Done (DC-003-I006) — `src/renderer-transport-mock.mjs`; the only transport tests use |
-| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; endpoint/auth/response shape confirmed against Templated's docs; **not yet exercised against a live request** |
-| Retry / timeout / response validation / RenderResult | Done (DC-003-I006) |
-| Render CLI check | Done (DC-003-I006) — `npm run render:mock` / `npm run render:live` |
-| Unit test suite | Done — 168 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 41 added in I006) |
+| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; endpoint/auth confirmed live (connectivity + auth succeeded on the one authorized attempt); **exact live response shape still not confirmed** — the attempt failed `ValidationError`, cause not yet diagnosed |
+| Retry / timeout / response validation / RenderResult | Done (DC-003-I006), hardened post-incident — see "Live-verification safety rule" |
+| Render CLI check | Done (DC-003-I006) — `npm run render:mock` / `npm run render:live` (now single-attempt by default) |
+| Unit test suite | Done — 182 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 55 from I006) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
-| Live Templated rendering | **Blocked on a locally configured `TEMPLATED_API_KEY`** — none found in this environment; see "Live verification procedure" |
+| Live Templated rendering | **One authorized attempt made, failed validation; hardening pass complete.** Fresh explicit authorization required before another live attempt — see "Live verification procedure" |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | n8n workflow | Not started |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started |

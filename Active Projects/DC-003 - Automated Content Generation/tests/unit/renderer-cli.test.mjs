@@ -42,6 +42,32 @@ test("CLI --live without TEMPLATED_API_KEY fails fast without attempting a netwo
   assert.match(result.stderr, /TEMPLATED_API_KEY/);
 });
 
+// --- Live-verification safety (added after an incident where a --live run
+// fired three real requests instead of one): --live-max-attempts is
+// validated and reported BEFORE a transport is ever constructed, so a bad
+// override value is caught without any network attempt. The API key below
+// is an obviously fake placeholder used only to pass the presence check —
+// execution never reaches a point where it would be sent anywhere. ---------
+
+test("CLI --live with an invalid --live-max-attempts value fails fast, before any transport is constructed", () => {
+  const result = spawnSync(process.execPath, [CLI_PATH, PAYLOAD_FIXTURE, "--live", "--live-max-attempts=0"], {
+    encoding: "utf-8",
+    env: { ...process.env, TEMPLATED_API_KEY: "fake-key-never-sent-validation-fails-first" },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--live-max-attempts must be a positive integer/);
+  assert.doesNotMatch(result.stdout, /Rendering LIVE/, "must fail before even announcing a live attempt");
+});
+
+test("CLI --live with a non-numeric --live-max-attempts value fails fast with a clear message", () => {
+  const result = spawnSync(process.execPath, [CLI_PATH, PAYLOAD_FIXTURE, "--live", "--live-max-attempts=abc"], {
+    encoding: "utf-8",
+    env: { ...process.env, TEMPLATED_API_KEY: "fake-key-never-sent-validation-fails-first" },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--live-max-attempts must be a positive integer/);
+});
+
 test("CLI exits non-zero for a missing file, without a raw stack trace", () => {
   const result = runCliMock(path.join(PROJECT_ROOT, "tests", "fixtures", "does-not-exist.json"));
   assert.notEqual(result.status, 0);

@@ -56,7 +56,7 @@ export {
 export { renderTemplatedPayload } from "./renderer.mjs";
 export { createMockTransport } from "./renderer-transport-mock.mjs";
 export { createHttpTransport } from "./renderer-transport-http.mjs";
-export { loadRendererConfig } from "./renderer-config.mjs";
+export { loadRendererConfig, resolveLiveMaxAttempts, DEFAULT_LIVE_MAX_ATTEMPTS } from "./renderer-config.mjs";
 export { validateTransportResponse } from "./renderer-response-validator.mjs";
 export { createRenderResult, RENDER_STATUSES } from "./render-result.mjs";
 export {

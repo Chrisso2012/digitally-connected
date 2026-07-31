@@ -9,6 +9,7 @@ import {
   RendererError,
   AuthenticationError,
   RenderRejected,
+  ValidationError,
   RetryLimitExceeded,
 } from "../../src/renderer-errors.mjs";
 
@@ -100,17 +101,37 @@ test("a transport failure is retried and reported with the underlying TransportE
   }
 });
 
-// --- Malformed response -----------------------------------------------------
+// --- Malformed response / validation failure (hardened after the
+// DC-003-I006 live-verification incident: this used to be retryable and
+// fired three live calls instead of one) -------------------------------
 
-test("a malformed response is treated as retryable and eventually raises RetryLimitExceeded", async () => {
+test("a malformed response fails after exactly ONE transport call — NOT retried", async () => {
   const transport = createMockTransport({ mode: "malformed" });
-  try {
-    await renderTemplatedPayload(loadPayload(), { transport, maxAttempts: 2 });
-    assert.fail("expected to throw");
-  } catch (error) {
-    assert.ok(error instanceof RetryLimitExceeded);
-    assert.ok(error.attempts.every((a) => a.error.name === "ValidationError"));
+  await assert.rejects(
+    () => renderTemplatedPayload(loadPayload(), { transport, maxAttempts: 5 }),
+    ValidationError
+  );
+  assert.equal(
+    transport.callCount(),
+    1,
+    "a deterministic response-shape mismatch must never be retried, even with room left in maxAttempts"
+  );
+});
+
+test("hardening regression check: only TimeoutError and TransportError are retried; every other failure stops at one attempt", async () => {
+  const nonRetryableModes = ["malformed", "rejected", "auth-error"];
+  for (const mode of nonRetryableModes) {
+    const transport = createMockTransport({ mode });
+    await assert.rejects(() => renderTemplatedPayload(loadPayload(), { transport, maxAttempts: 5 }));
+    assert.equal(transport.callCount(), 1, `mode "${mode}" must fail after exactly one transport call`);
   }
+
+  // Sanity check the other half of the same guarantee: genuinely transient
+  // failures still retry normally — the hardening must not have collapsed
+  // retry behavior across the board.
+  const retryableTransport = createMockTransport({ mode: "timeout" });
+  await assert.rejects(() => renderTemplatedPayload(loadPayload(), { transport: retryableTransport, maxAttempts: 3 }));
+  assert.equal(retryableTransport.callCount(), 3, "TimeoutError must still retry up to maxAttempts");
 });
 
 // --- Validation failure (well-formed-but-rejected response) -----------------

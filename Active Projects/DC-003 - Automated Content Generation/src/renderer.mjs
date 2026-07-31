@@ -17,11 +17,19 @@
 //
 // Retries are handled entirely by src/retry.mjs (the generic I004
 // primitive, reused here unmodified) — no retry logic lives in this file.
+//
+// Retryability, hardened after the DC-003-I006 live-verification incident
+// (three live calls fired instead of one, because a deterministic response-
+// shape mismatch was treated as transient): only TimeoutError and
+// TransportError are retried. AuthenticationError, ValidationError, and
+// RenderRejected all propagate immediately on the first attempt — each
+// represents a failure that will reproduce identically on retry, so
+// retrying only wastes calls (and, against a real transport, quota).
 
 import { withRetry } from "./retry.mjs";
 import { validateTransportResponse } from "./renderer-response-validator.mjs";
 import { createRenderResult } from "./render-result.mjs";
-import { RendererError, AuthenticationError, RenderRejected, RetryLimitExceeded } from "./renderer-errors.mjs";
+import { RendererError, AuthenticationError, RetryLimitExceeded } from "./renderer-errors.mjs";
 
 function buildRenderRequest(payload) {
   return {
@@ -42,11 +50,11 @@ function buildRenderRequest(payload) {
  *   inside a code path with no way to change it.
  * options.now — override the clock (used by tests).
  *
- * Throws AuthenticationError or RenderRejected immediately, bypassing
- * retry entirely — retrying with the same bad credentials or the same
- * rejected payload would never help. Throws RetryLimitExceeded if every
- * retryable attempt (timeout, transport failure, malformed response) is
- * exhausted.
+ * Throws AuthenticationError, ValidationError, or RenderRejected
+ * immediately, bypassing retry entirely — none of these become a different
+ * outcome on a second attempt with the same request. Throws
+ * RetryLimitExceeded only if every retryable attempt (timeout or transport
+ * failure) is exhausted.
  */
 export async function renderTemplatedPayload(payload, options = {}) {
   if (!options.transport) {
@@ -76,14 +84,10 @@ export async function renderTemplatedPayload(payload, options = {}) {
         return { ok: false, error };
       }
 
-      let normalized;
-      try {
-        normalized = validateTransportResponse(rawResponse);
-      } catch (error) {
-        if (error instanceof RenderRejected) throw error; // non-retryable
-        return { ok: false, error }; // ValidationError — retryable
-      }
-
+      // Throws ValidationError or RenderRejected — both non-retryable, so
+      // deliberately not caught here; they propagate straight out of
+      // withRetry after exactly this one transport call.
+      const normalized = validateTransportResponse(rawResponse);
       return { ok: true, normalized };
     },
     { maxAttempts }

@@ -87,3 +87,55 @@ test("an explicit status always wins over inference, even if a url is also prese
   const normalized = validateTransportResponse({ id: "render_7", status: "pending", url: "https://example.test/a.png" });
   assert.equal(normalized.status, "pending");
 });
+
+// --- Diagnostic safety (DC-003-I006 hardening pass): every issue carries a
+// field path and expected/received descriptor, but received is a safe
+// type/reason descriptor for id/url — never the raw value — while status
+// (a short, non-sensitive closed-enum string) may be shown verbatim. ------
+
+test("a missing id issue reports field/expected/received without leaking any value", () => {
+  try {
+    validateTransportResponse({ status: "completed" });
+    assert.fail("expected to throw");
+  } catch (error) {
+    const idIssue = error.details.find((d) => d.field === "id");
+    assert.equal(idIssue.expected, "non-empty string");
+    assert.equal(idIssue.received, "missing");
+    assert.equal(typeof idIssue.message, "string");
+  }
+});
+
+test("a wrongly-typed id reports its type, not its value", () => {
+  try {
+    validateTransportResponse({ id: 12345, status: "completed" });
+    assert.fail("expected to throw");
+  } catch (error) {
+    const idIssue = error.details.find((d) => d.field === "id");
+    assert.equal(idIssue.received, "number");
+    // The actual value (12345) must never appear in the message.
+    assert.doesNotMatch(idIssue.message, /12345/);
+  }
+});
+
+test("an invalid status issue safely includes the received status value (non-sensitive closed enum)", () => {
+  try {
+    validateTransportResponse({ id: "render_8", status: "not-a-real-status" });
+    assert.fail("expected to throw");
+  } catch (error) {
+    const statusIssue = error.details.find((d) => d.field === "status");
+    assert.match(statusIssue.received, /not-a-real-status/);
+    assert.match(statusIssue.expected, /pending|processing|completed|failed/);
+  }
+});
+
+test("a non-object response issue never includes the raw response value", () => {
+  try {
+    validateTransportResponse("some raw string that must never leak");
+    assert.fail("expected to throw");
+  } catch (error) {
+    assert.doesNotMatch(error.message, /some raw string that must never leak/);
+    for (const detail of error.details) {
+      assert.doesNotMatch(detail.message, /some raw string that must never leak/);
+    }
+  }
+});
