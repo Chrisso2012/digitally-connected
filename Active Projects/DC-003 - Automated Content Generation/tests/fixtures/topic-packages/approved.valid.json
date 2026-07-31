@@ -1,0 +1,30 @@
+{
+  "topic_id": "topic_01J9Y1B2C3",
+  "working_title": "Stop chasing new leads before you've worked the old ones",
+  "audience": "Owner-operators running 10-50 staff service businesses",
+  "primary_goal": "Book a database audit call",
+  "funnel_stage": "consideration",
+  "core_message": "Unconverted enquiries are still recoverable revenue, not a dead list.",
+  "supporting_points": [
+    "Every unconverted lead already raised its hand once",
+    "Automated re-engagement costs nothing new in ad spend",
+    "Segmented follow-up outperforms a single blast"
+  ],
+  "cta": "Book your audit",
+  "keywords": ["database reactivation", "lead follow-up"],
+  "brand_voice": "confident-direct",
+  "status": "approved",
+  "created_date": "2026-07-20T09:14:00Z",
+  "updated_date": "2026-07-28T11:02:00Z",
+  "version": 2,
+  "schema_version": "1.0",
+  "source": "manual",
+  "backlog_reference_id": null,
+  "content_pillar": "database reactivation",
+  "tags": ["evergreen"],
+  "priority": null,
+  "related_topic_ids": [],
+  "locale": "en",
+  "owner": "chris@digitallyconnected.net",
+  "notes": null
+}

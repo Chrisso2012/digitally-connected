@@ -1,0 +1,29 @@
+{
+  "topic_id": "topic_01J9Y5K1L2",
+  "working_title": "A topic updated before it was created",
+  "audience": "Owner-operators running 10-50 staff service businesses",
+  "primary_goal": "Book a database audit call",
+  "funnel_stage": "consideration",
+  "core_message": "Schema-valid and approved, but updated_date precedes created_date.",
+  "supporting_points": [
+    "Point one",
+    "Point two"
+  ],
+  "cta": "Book your audit",
+  "keywords": [],
+  "brand_voice": "confident-direct",
+  "status": "approved",
+  "created_date": "2026-07-29T12:00:00Z",
+  "updated_date": "2026-07-28T09:00:00Z",
+  "version": 2,
+  "schema_version": "1.0",
+  "source": "manual",
+  "backlog_reference_id": null,
+  "content_pillar": null,
+  "tags": [],
+  "priority": null,
+  "related_topic_ids": [],
+  "locale": "en",
+  "owner": "chris@digitallyconnected.net",
+  "notes": "updated_date is earlier than created_date on purpose, to exercise the timestamp-sequence readiness check."
+}

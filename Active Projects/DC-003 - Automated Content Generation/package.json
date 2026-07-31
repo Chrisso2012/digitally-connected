@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "validate": "node tests/validation/validate.mjs",
+    "check:topic": "node tests/validation/check-topic-package.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

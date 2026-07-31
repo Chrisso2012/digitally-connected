@@ -1,0 +1,29 @@
+{
+  "topic_id": "topic_01J9Y2D4E5",
+  "working_title": "A topic still being drafted",
+  "audience": "Owner-operators running 10-50 staff service businesses",
+  "primary_goal": "Book a database audit call",
+  "funnel_stage": "consideration",
+  "core_message": "Schema-valid in every way except that it has not been approved yet.",
+  "supporting_points": [
+    "Point one",
+    "Point two"
+  ],
+  "cta": "Book your audit",
+  "keywords": [],
+  "brand_voice": "confident-direct",
+  "status": "draft",
+  "created_date": "2026-07-29T09:00:00Z",
+  "updated_date": "2026-07-29T09:00:00Z",
+  "version": 1,
+  "schema_version": "1.0",
+  "source": "manual",
+  "backlog_reference_id": null,
+  "content_pillar": null,
+  "tags": [],
+  "priority": null,
+  "related_topic_ids": [],
+  "locale": "en",
+  "owner": "chris@digitallyconnected.net",
+  "notes": "Deliberately left as status: draft to exercise the approval-state readiness check."
+}

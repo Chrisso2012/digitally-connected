@@ -13,3 +13,14 @@ export {
   UnknownSchemaError,
   ConfigIntegrityError,
 } from "./errors.mjs";
+
+// DC-003-I003 — Topic Package Loader
+export { loadTopicPackage, prepareTopicPackage } from "./topic-package-loader.mjs";
+export { checkTopicPackageReadiness } from "./topic-package-readiness.mjs";
+export {
+  TopicPackageNotFoundError,
+  TopicPackageUnreadableError,
+  TopicPackageParseError,
+  TopicPackageValidationError,
+  TopicPackageReadinessError,
+} from "./topic-package-errors.mjs";

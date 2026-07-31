@@ -1,0 +1,6 @@
+{
+  "topic_id": "topic_BROKEN_SYNTAX",
+  "working_title": "This file is not valid JSON on purpose",
+  "status": "approved"
+  "missing_comma_above": true
+}

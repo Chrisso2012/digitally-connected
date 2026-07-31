@@ -2,10 +2,10 @@
 
 Project foundation for the AI content factory: one approved topic in, a six-slide
 Templated carousel out. This directory currently contains the foundation
-established by DC-003-I001 (configuration, template registry, JSON schemas)
-plus the reusable configuration-loading and validation runtime added in
-DC-003-I002. No content generation, payload mapping, rendering, or n8n
-workflow logic exists yet.
+established by DC-003-I001 (configuration, template registry, JSON schemas),
+the configuration-loading and validation runtime added in DC-003-I002, and
+the Topic Package Loader added in DC-003-I003. No content generation,
+payload mapping, rendering, or n8n workflow logic exists yet.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -38,21 +38,26 @@ DC-003 - Automated Content Generation/
 │   ├── templated-payload.schema.json
 │   ├── finished-carousel.schema.json
 │   └── execution-log.schema.json
-├── src/                            # DC-003-I002 — reusable runtime, see below
+├── src/                            # reusable runtime — see below
 │   ├── index.mjs                    # public entry point — import from here
-│   ├── config-loader.mjs
-│   ├── schema-registry.mjs
-│   ├── validator.mjs
-│   ├── integrity-checks.mjs
-│   ├── read-json-file.mjs           # shared "read + parse JSON, fail clearly" helper
-│   ├── paths.mjs                    # project-root resolution
-│   └── errors.mjs                   # ConfigFileNotFoundError, ConfigParseError, etc.
+│   ├── config-loader.mjs             # DC-003-I002
+│   ├── schema-registry.mjs           # DC-003-I002
+│   ├── validator.mjs                 # DC-003-I002
+│   ├── integrity-checks.mjs          # DC-003-I002
+│   ├── read-json-file.mjs            # DC-003-I002 — shared "read + parse JSON" helper
+│   ├── paths.mjs                     # DC-003-I002 — project-root resolution
+│   ├── errors.mjs                    # DC-003-I002 — ConfigFileNotFoundError, etc.
+│   ├── topic-package-loader.mjs      # DC-003-I003 — see "Topic Package Loader"
+│   ├── topic-package-readiness.mjs   # DC-003-I003 — operational readiness rules
+│   └── topic-package-errors.mjs      # DC-003-I003 — Topic Package-specific errors
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
-│   │   └── invalid/                  # deliberately-broken JSON, test-only, never "approved"
-│   ├── unit/                        # DC-003-I002 — node:test suite, see "Running tests"
+│   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
+│   │   └── topic-packages/           # DC-003-I003 — readiness/failure-mode fixtures, test-only
+│   ├── unit/                        # node:test suite, see "Running tests"
 │   └── validation/
-│       └── validate.mjs              # thin CLI wrapper around src/validator.mjs
+│       ├── validate.mjs              # thin CLI wrapper around src/validator.mjs
+│       └── check-topic-package.mjs   # DC-003-I003 — thin CLI wrapper around the loader
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -256,25 +261,131 @@ Two categories, never mixed:
   this task creates or touches. `runIntegrityChecks` actively scans
   configuration for anything that looks like a stray credential.
 
+## Topic Package Loader (`src/topic-package-loader.mjs`)
+
+A **Topic Package** is one approved content topic — the object defined by
+`schemas/topic-package.schema.json` and DC-003-T002 §1 (working title,
+audience, primary goal, core message, supporting points, CTA, brand voice,
+approval status, and version/traceability metadata). It's what a future LLM
+content generator will read to produce carousel copy — the loader's job is
+to make sure a Topic Package is actually safe to hand to that generator
+before any of that happens.
+
+### Schema validity vs. operational readiness
+
+Two separate, sequential gates — a Topic Package must pass both:
+
+1. **Schema validity** (via the I002 validator runtime — not reimplemented
+   here) — is every field present and correctly typed? A `working_title` of
+   `"   "` is schema-valid: `minLength: 1` counts whitespace as characters.
+2. **Operational readiness** (`src/topic-package-readiness.mjs`, runs only
+   after schema validity passes) — is the *content* actually usable, and is
+   the package internally consistent and cleared for use? A whitespace-only
+   `working_title` fails here, even though it passed schema validation.
+
+### Approval checks
+
+The Topic Package schema has a `status` field (`draft` / `approved` /
+`in_production` / `completed` / `archived`) but — deliberately, per
+DC-003-T002 §7 — no separate approval-metadata block; that metadata lives on
+the *Finished Carousel Object* instead, because approval there applies to a
+rendered output, not a topic draft. Confirmed with the Strategy Office
+during DC-003-I003 rather than inventing new Topic Package fields. So:
+**`status === "approved"` is the sole approval signal.** Anything else
+(`draft`, `in_production`, `completed`, `archived`) fails the
+`approval-state` readiness check.
+
+### Version checks
+
+The Topic Package's only version field is `schema_version` (there is no
+`prompt_version` on this object — that belongs to the Carousel Content
+Object and Execution Log, generated later). Readiness compares it against
+`config/versions.json`'s `schema_versions.topic_package` value. A mismatch
+is reported as a `schema-version-compatible` issue and the package is
+rejected — **never silently upgraded or coerced.**
+
+### Other readiness checks
+
+- **Usable content** — `topic_id`, `working_title`, `audience`,
+  `primary_goal`, `core_message`, `cta`, `brand_voice`, `owner`, and every
+  entry in `supporting_points` must be non-blank after trimming.
+- **Internal consistency** — `updated_date` must not be earlier than
+  `created_date`; `related_topic_ids` must not list the package's own
+  `topic_id` or contain duplicates.
+
+All readiness issues are collected and reported together (not just the
+first one found), each as `{ check, message }`.
+
+### Immutability
+
+The returned Topic Package is **deep-cloned via `structuredClone()`, then
+deep-frozen via a recursive `Object.freeze()`** — never the original parsed
+object. The input passed to `prepareTopicPackage()` / read from disk by
+`loadTopicPackage()` is never mutated. Mutation attempts against the
+returned object throw `TypeError` in strict-mode/ESM callers (which this
+codebase's `.mjs` files always are) and are silent no-ops in non-strict
+contexts — in both cases the value never actually changes.
+
+### Loading a Topic Package in code
+
+```js
+import { loadTopicPackage, prepareTopicPackage } from "./src/index.mjs";
+
+// From a file — relative paths resolve against process.cwd(), pass an
+// absolute path when the caller must not depend on it.
+const topic = loadTopicPackage("tests/fixtures/topic-packages/approved.valid.json");
+
+// From an already-parsed object (e.g. future n8n/API/database ingestion) —
+// same validation, same readiness checks, same immutable return, no
+// file-specific errors involved.
+const sameTopic = prepareTopicPackage(rawObjectFromSomewhereElse);
+```
+
+Both throw structured errors on failure — `TopicPackageNotFoundError`,
+`TopicPackageUnreadableError`, `TopicPackageParseError`,
+`TopicPackageValidationError` (with `.errors`, the same
+`{ path, keyword, message, params }` shape the I002 validator returns), or
+`TopicPackageReadinessError` (with `.issues`, `{ check, message }`).
+
+### CLI check
+
+```bash
+npm run check:topic -- tests/fixtures/topic-packages/approved.valid.json
+```
+
+Prints safe summary metadata (topic ID, working title, status, schema
+version, version, readiness) and exits `0` for a ready package; prints
+structured errors to stderr and exits non-zero otherwise — no raw stack
+trace for the five expected/known failure modes, only for a genuinely
+unexpected error. Uses the same loader as production code; no independent
+validation logic.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
-no test framework dependency was added:
+no test framework dependency was added, and none was needed in DC-003-I003
+either:
 
 ```bash
 npm test       # unit tests: tests/unit/*.test.mjs
 npm run validate  # CLI summary: all 5 approved fixtures against their schemas
+npm run check:topic -- <path>  # CLI check of one Topic Package file
 ```
 
-`npm test` covers: successful loading of all config files and all schemas,
-every approved fixture validating successfully, malformed-JSON handling,
-missing-file handling, an intentionally invalid fixture being rejected with
-structured errors, an unknown schema identifier throwing, duplicate
-`template_id` detection, missing required version identifier detection, and
-a stray-credential detection. Tests that need a "broken" file use a
+`npm test` covers everything from DC-003-I002 (config/schema loading,
+fixture validation, integrity checks) plus, from DC-003-I003: loading a
+valid Topic Package from both absolute and relative paths, preparing one
+from an in-memory object, confirming the source object is never mutated and
+the returned object cannot be mutated, missing-file/malformed-JSON/
+directory-instead-of-file handling, schema-invalid rejection with multiple
+structured errors, every readiness-check failure mode (unapproved status,
+incompatible schema version, whitespace-only content, inconsistent
+timestamps, self-referencing/duplicate related topic IDs), and CLI exit
+codes for both success and failure. Tests that need a "broken" file use a
 `node:fs` temporary directory (`mkdtempSync` in the OS temp dir) or an
-in-memory `structuredClone()` of the real config — **no test ever writes to
-or modifies a file under `config/` or `schemas/`.**
+in-memory `structuredClone()`/object literal — **no test ever writes to or
+modifies a file under `config/`, `schemas/`, or an existing approved
+fixture.**
 
 ## Expected error behavior
 
@@ -285,10 +396,16 @@ or modifies a file under `config/` or `schemas/`.**
 | Data fails schema validation | `{ valid: false, errors: [...] }` — never thrown, never a bare boolean, never a generic message |
 | An unregistered schema identifier is requested | `UnknownSchemaError`, thrown immediately, listing the valid identifiers |
 | A configuration integrity relationship is violated | `{ ok: false, issues: [...] }` from `runIntegrityChecks` — every issue found, not just the first |
+| A Topic Package file doesn't exist | `TopicPackageNotFoundError`, naming the resolved path |
+| A Topic Package path is a directory, or otherwise unreadable | `TopicPackageUnreadableError`, naming the path and the underlying cause |
+| A Topic Package file has malformed JSON | `TopicPackageParseError`, naming the path and the underlying JSON parser error |
+| A Topic Package fails schema validation | `TopicPackageValidationError`, with `.errors` (`{ path, keyword, message, params }[]`) — every failure reported, not just the first |
+| A Topic Package is schema-valid but not ready (unapproved, incompatible version, blank content, inconsistent timestamps, etc.) | `TopicPackageReadinessError`, with `.issues` (`{ check, message }[]`) — every issue reported, not just the first |
 
 ## Dependencies
 
-Two, both added in DC-003-I002, both maintained and widely used:
+Still just two, both added in DC-003-I002, both maintained and widely used —
+**DC-003-I003 added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -297,7 +414,10 @@ Two, both added in DC-003-I002, both maintained and widely used:
   unchecked. Required for Ajv's strict mode to accept the schemas as-is.
 
 No test framework was added — `node:test` and `node:assert/strict` (both
-built into Node.js 18+) cover every test in this task.
+built into Node.js 18+) cover every test in every task so far. The Topic
+Package CLI (`check-topic-package.mjs`) needed no CLI framework either —
+`process.argv[2]` and a `try`/`catch` on the loader's structured errors was
+enough.
 
 ## Implementation status
 
@@ -311,13 +431,16 @@ built into Node.js 18+) cover every test in this task.
 | Schema registry | Done (DC-003-I002) — `src/schema-registry.mjs` |
 | Validation runtime | Done (DC-003-I002) — `src/validator.mjs`, Ajv 2020-12 |
 | Configuration integrity checks | Done (DC-003-I002) — `src/integrity-checks.mjs` |
-| Unit test suite | Done (DC-003-I002) — 20 tests, `npm test` |
+| Topic Package loader | Done (DC-003-I003) — `src/topic-package-loader.mjs`, file + in-memory entry points |
+| Topic Package readiness checks | Done (DC-003-I003) — `src/topic-package-readiness.mjs` |
+| Topic Package CLI check | Done (DC-003-I003) — `npm run check:topic` |
+| Unit test suite | Done — 49 tests, `npm test` (20 from I002, 29 added in I003) |
 | LLM prompt | Not started |
 | Payload mapping | Not started |
 | Templated rendering calls | Not started |
 | n8n workflow | Not started |
 | Error handling / retries (pipeline-level) | Not started |
-| Approval workflow | Not started (fields reserved only, per DC-003-T002 §7) |
+| Approval workflow | Not started (fields reserved on Finished Carousel Object only, per DC-003-T002 §7) |
 
 Nothing above "Unit test suite" should require restructuring this
 foundation — it should only add to it.

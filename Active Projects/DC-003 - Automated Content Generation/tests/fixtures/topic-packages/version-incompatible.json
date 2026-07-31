@@ -1,0 +1,29 @@
+{
+  "topic_id": "topic_01J9Y3F6G7",
+  "working_title": "A topic authored against an old schema version",
+  "audience": "Owner-operators running 10-50 staff service businesses",
+  "primary_goal": "Book a database audit call",
+  "funnel_stage": "consideration",
+  "core_message": "Schema-valid, approved, but schema_version predates the currently approved contract.",
+  "supporting_points": [
+    "Point one",
+    "Point two"
+  ],
+  "cta": "Book your audit",
+  "keywords": [],
+  "brand_voice": "confident-direct",
+  "status": "approved",
+  "created_date": "2026-01-05T09:00:00Z",
+  "updated_date": "2026-01-05T09:00:00Z",
+  "version": 1,
+  "schema_version": "0.9",
+  "source": "manual",
+  "backlog_reference_id": null,
+  "content_pillar": null,
+  "tags": [],
+  "priority": null,
+  "related_topic_ids": [],
+  "locale": "en",
+  "owner": "chris@digitallyconnected.net",
+  "notes": "Deliberately schema_version 0.9 (config/versions.json currently expects 1.0) to exercise the version-compatibility readiness check."
+}
