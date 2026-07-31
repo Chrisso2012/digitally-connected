@@ -1,0 +1,6 @@
+{
+  "topic_id": "topic_BROKEN",
+  "working_title": "Deliberately invalid — missing required fields, bad enums",
+  "funnel_stage": "not-a-real-funnel-stage",
+  "status": "not-a-real-status"
+}
