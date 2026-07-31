@@ -16,6 +16,7 @@ import path from "node:path";
 import { createValidator } from "./validator.mjs";
 import { loadVersions } from "./config-loader.mjs";
 import { checkTopicPackageReadiness } from "./topic-package-readiness.mjs";
+import { deepFreezeClone } from "./immutable.mjs";
 import {
   TopicPackageNotFoundError,
   TopicPackageUnreadableError,
@@ -23,16 +24,6 @@ import {
   TopicPackageValidationError,
   TopicPackageReadinessError,
 } from "./topic-package-errors.mjs";
-
-function deepFreeze(value) {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const key of Object.keys(value)) {
-    deepFreeze(value[key]);
-  }
-  return Object.freeze(value);
-}
 
 /**
  * Validate and apply readiness checks to an already-parsed Topic Package
@@ -76,7 +67,7 @@ export function prepareTopicPackage(rawObject, options = {}) {
     throw new TopicPackageReadinessError(readiness.issues, sourceFilePath);
   }
 
-  return deepFreeze(structuredClone(rawObject));
+  return deepFreezeClone(rawObject);
 }
 
 /**

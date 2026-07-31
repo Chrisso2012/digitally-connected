@@ -1,6 +1,6 @@
 {
   "project_version": "0.1.0",
-  "foundation_status": "DC-003-I001 complete — repository structure, config, template registry, and schemas only. No generation, mapping, rendering, or workflow logic implemented.",
+  "foundation_status": "DC-003-I004 complete — foundation, config/schema loader, Topic Package loader, and mock carousel content generator. No payload mapping, rendering, or n8n workflow implemented.",
   "design_system_version": "dc-002-v1",
   "template_registry_version": "1.0",
   "schema_versions": {
@@ -10,5 +10,5 @@
     "finished_carousel": "1.0",
     "execution_log": "1.0"
   },
-  "prompt_version": null
+  "prompt_version": "carousel-copy.v1"
 }

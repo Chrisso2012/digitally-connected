@@ -24,3 +24,14 @@ export {
   TopicPackageValidationError,
   TopicPackageReadinessError,
 } from "./topic-package-errors.mjs";
+
+// DC-003-I004 — Carousel Content Generator
+export { buildCarouselPrompt, PROMPT_VERSION } from "./carousel-prompt-builder.mjs";
+export { createMockProvider } from "./carousel-mock-provider.mjs";
+export { validateGeneratedCarousel } from "./carousel-content-validator.mjs";
+export { checkCarouselContentShape } from "./carousel-content-shape.mjs";
+export { SLIDE_ORDER, SLIDE_CONTENT_SPEC } from "./carousel-slide-spec.mjs";
+export { withRetry } from "./retry.mjs";
+export { generateCarouselFromTopicPackage } from "./carousel-generator.mjs";
+export { PromptBuilderError, CarouselGenerationFailedError } from "./carousel-generator-errors.mjs";
+export { deepFreezeClone } from "./immutable.mjs";

@@ -3,9 +3,11 @@
 Project foundation for the AI content factory: one approved topic in, a six-slide
 Templated carousel out. This directory currently contains the foundation
 established by DC-003-I001 (configuration, template registry, JSON schemas),
-the configuration-loading and validation runtime added in DC-003-I002, and
-the Topic Package Loader added in DC-003-I003. No content generation,
-payload mapping, rendering, or n8n workflow logic exists yet.
+the configuration-loading and validation runtime added in DC-003-I002, the
+Topic Package Loader added in DC-003-I003, and the Carousel Content
+Generator added in DC-003-I004 — with a mock LLM provider, since I004
+explicitly does not call a real one. Payload mapping, Templated rendering,
+and n8n workflow logic do not exist yet.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -49,7 +51,16 @@ DC-003 - Automated Content Generation/
 │   ├── errors.mjs                    # DC-003-I002 — ConfigFileNotFoundError, etc.
 │   ├── topic-package-loader.mjs      # DC-003-I003 — see "Topic Package Loader"
 │   ├── topic-package-readiness.mjs   # DC-003-I003 — operational readiness rules
-│   └── topic-package-errors.mjs      # DC-003-I003 — Topic Package-specific errors
+│   ├── topic-package-errors.mjs      # DC-003-I003 — Topic Package-specific errors
+│   ├── immutable.mjs                 # DC-003-I004 — shared deep-clone-then-freeze helper
+│   ├── carousel-slide-spec.mjs       # DC-003-I004 — per-slide-type content shape, single source of truth
+│   ├── carousel-prompt-builder.mjs   # DC-003-I004 — see "Carousel Content Generator"
+│   ├── carousel-mock-provider.mjs    # DC-003-I004 — deterministic mock LLM provider
+│   ├── carousel-content-shape.mjs    # DC-003-I004 — per-slide-type content checks
+│   ├── carousel-content-validator.mjs# DC-003-I004 — parse + schema + shape, staged
+│   ├── retry.mjs                     # DC-003-I004 — generic retry primitive
+│   ├── carousel-generator.mjs        # DC-003-I004 — orchestrator
+│   └── carousel-generator-errors.mjs # DC-003-I004 — PromptBuilderError, CarouselGenerationFailedError
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -57,7 +68,8 @@ DC-003 - Automated Content Generation/
 │   ├── unit/                        # node:test suite, see "Running tests"
 │   └── validation/
 │       ├── validate.mjs              # thin CLI wrapper around src/validator.mjs
-│       └── check-topic-package.mjs   # DC-003-I003 — thin CLI wrapper around the loader
+│       ├── check-topic-package.mjs   # DC-003-I003 — thin CLI wrapper around the loader
+│       └── generate-mock-carousel.mjs# DC-003-I004 — thin CLI wrapper around the generator
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -360,32 +372,173 @@ trace for the five expected/known failure modes, only for a genuinely
 unexpected error. Uses the same loader as production code; no independent
 validation logic.
 
+## Carousel Content Generator (`src/carousel-generator.mjs`)
+
+Turns a ready Topic Package into a Carousel Content Object — the structured
+copy for all six slides — without touching Templated, an LLM API, or the
+filesystem. Four isolated responsibilities, one orchestrator:
+
+```mermaid
+flowchart LR
+    TP[Topic Package] --> PB[Prompt Builder]
+    PB --> LLM[LLM Provider]
+    LLM -- raw text --> VAL[Carousel Content Validator]
+    VAL -- ok --> OUT[Carousel Content Object]
+    VAL -- fail --> RETRY{Retry?}
+    RETRY -- attempts left --> LLM
+    RETRY -- exhausted --> ERR[CarouselGenerationFailedError]
+
+    subgraph Validator [Carousel Content Validator]
+      direction TB
+      P[1 . parse JSON] --> S[2 . schema — I002 runtime]
+      S --> C[3 . content-shape — per slide_type]
+    end
+```
+
+Each box is its own module — `carousel-prompt-builder.mjs`,
+`carousel-mock-provider.mjs` (the only provider implementation today),
+`carousel-content-validator.mjs`, `retry.mjs` — and `carousel-generator.mjs`
+only sequences them. None of the others know the retry loop exists; the
+validator doesn't know what a "provider" is; the provider doesn't know how
+validation works.
+
+### Prompt Builder
+
+`buildCarouselPrompt(topicPackage)` is a pure function: the same Topic
+Package always produces the exact same prompt string. It never calls
+anything — no LLM, no network. The prompt includes topic, audience,
+objective, key message, supporting points, CTA, desired tone, fixed writing
+constraints, the exact six-slide sequence (field names read from
+`carousel-slide-spec.mjs` — the same source the shape checker reads from,
+so what's asked for and what's accepted can never drift apart), brand
+rules, and an explicit "return JSON only" instruction. Field content is
+whitespace-collapsed before embedding (so a multi-line field can't break
+the prompt's `## Section` structure) but otherwise passed through verbatim
+— quotes, punctuation, unicode all included as-is; this is plain text handed
+to an LLM, not a value being embedded in JSON we control. Throws
+`PromptBuilderError` if a field the prompt needs is blank — defense in
+depth, independent of whatever validated the Topic Package upstream.
+
+### Provider abstraction
+
+A provider is any object shaped `{ name: string, generateCarousel(prompt, context): Promise<string> }`
+— it returns raw text (mimicking a real completion API), never a pre-parsed
+object, so swapping in a real provider later changes nothing downstream;
+the validator's `JSON.parse` step is exactly where a real LLM's occasional
+malformed output would surface too. `context.topicPackage` is passed
+alongside the prompt so the mock provider can generate content grounded in
+the real topic — a real provider is free to ignore it, since everything it
+needs is already in the prompt text.
+
+### Mock provider (`src/carousel-mock-provider.mjs`)
+
+The only provider implemented in DC-003-I004 — deterministic, no network,
+no randomness. Every slide is populated from the Topic Package's own
+fields (`working_title`, `core_message`, `audience`, `supporting_points`,
+`cta`), so output is recognizably about the actual topic rather than
+generic filler. The statistic and quote slides are explicitly labeled as
+illustrative/mock in their own copy (`"Placeholder statistic generated by
+the mock provider — not a verified figure."`) rather than presenting an
+invented number or a fabricated testimonial as real. No `hashtags` field
+is generated: it's not part of any of the six slide types in
+`config/templates.json` / DC-003-T002 §2, and adding one would be
+inventing contract surface the rest of the pipeline doesn't expect.
+
+### Validation flow
+
+Three gates, run in order by `validateGeneratedCarousel()`, any of which
+can fail independently:
+
+1. **Parse** — is the provider's raw text valid JSON containing a `slides`
+   array at all?
+2. **Schema** — does the assembled object (provider's slides + pipeline
+   metadata) conform to `schemas/carousel-content.schema.json`, via the
+   unmodified I002 validator runtime? Catches wrong slide count, wrong
+   `slide_type` values, wrong top-level shape.
+3. **Content-shape** — does each slide's `content` actually have the fields
+   its `slide_type` needs, non-blank, correct array lengths, in the
+   canonical slide order? (`carousel-content-shape.mjs`, reading from the
+   same `carousel-slide-spec.mjs` the Prompt Builder uses.)
+
+Every stage returns a structured `{ ok: false, stage, message, details }`
+result rather than throwing — `retry.mjs` collects these per attempt.
+
+### Retry behavior
+
+`withRetry()` is a generic, carousel-agnostic primitive (reusable by later
+rendering-stage retries per DC-003-T001 §6): configurable `maxAttempts`
+(default 3), stops the instant an attempt succeeds — never wastes a call
+once a good result is in hand — and never silently gives up. If every
+attempt fails, `generateCarouselFromTopicPackage` throws
+`CarouselGenerationFailedError` carrying the full `attempts` array (every
+stage, every message, in order), never a collapsed generic message.
+Building the prompt happens once, *outside* the retry loop — if the Topic
+Package itself has no usable content, retrying with the same input would
+never help, so that fails immediately via `PromptBuilderError` instead.
+
+### Generating a carousel in code
+
+```js
+import { loadTopicPackage, generateCarouselFromTopicPackage } from "./src/index.mjs";
+
+const topic = loadTopicPackage("tests/fixtures/topic-packages/approved.valid.json");
+const carousel = await generateCarouselFromTopicPackage(topic);
+// carousel: { carousel_content_id, topic_id, generated_at, llm_model,
+//             prompt_version, schema_version, slides: [ 6 slides ] }
+// — deep-cloned and deep-frozen, same immutability approach as the Topic
+//   Package Loader (see "Immutability" above).
+
+// A different provider — same call shape, same validation, same retries:
+const carousel2 = await generateCarouselFromTopicPackage(topic, {
+  provider: myRealLlmProvider,
+  maxAttempts: 5,
+});
+```
+
+### CLI check
+
+```bash
+npm run generate:mock -- tests/fixtures/topic-packages/approved.valid.json
+```
+
+Loads the Topic Package (via the I003 loader — so an unapproved or invalid
+package is rejected before generation is even attempted), generates a
+carousel with the mock provider, and prints a readable summary: topic,
+generated title, slide count, generation version (`prompt_version` +
+`schema_version`), and provider name. Exits `0` on success; on failure,
+prints structured errors (no raw stack trace for expected failure modes)
+and exits non-zero. Does not render slides. Does not write any file — the
+carousel exists only in memory for the life of the process.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
 no test framework dependency was added, and none was needed in DC-003-I003
-either:
+or DC-003-I004 either:
 
 ```bash
 npm test       # unit tests: tests/unit/*.test.mjs
 npm run validate  # CLI summary: all 5 approved fixtures against their schemas
 npm run check:topic -- <path>  # CLI check of one Topic Package file
+npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
 ```
 
-`npm test` covers everything from DC-003-I002 (config/schema loading,
-fixture validation, integrity checks) plus, from DC-003-I003: loading a
-valid Topic Package from both absolute and relative paths, preparing one
-from an in-memory object, confirming the source object is never mutated and
-the returned object cannot be mutated, missing-file/malformed-JSON/
-directory-instead-of-file handling, schema-invalid rejection with multiple
-structured errors, every readiness-check failure mode (unapproved status,
-incompatible schema version, whitespace-only content, inconsistent
-timestamps, self-referencing/duplicate related topic IDs), and CLI exit
-codes for both success and failure. Tests that need a "broken" file use a
-`node:fs` temporary directory (`mkdtempSync` in the OS temp dir) or an
-in-memory `structuredClone()`/object literal — **no test ever writes to or
-modifies a file under `config/`, `schemas/`, or an existing approved
-fixture.**
+`npm test` covers everything from DC-003-I002 and DC-003-I003 (config/schema
+loading, fixture validation, integrity checks, Topic Package loading and
+readiness) plus, from DC-003-I004: deterministic prompts, every required
+prompt section present, whitespace/special-character handling, blank-field
+rejection; the mock provider producing valid, topic-grounded, deterministic
+output; parse/schema/content-shape validation failures each caught at the
+right stage with structured errors; retry succeeding on a later attempt,
+retry exhausting its limit and calling the provider exactly `maxAttempts`
+times (no more, no fewer); a full generation run producing a schema-valid,
+shape-valid, immutable Carousel Content Object; swapping in a structurally
+different stub provider with no orchestrator changes; and CLI exit codes
+for both success and failure. Tests that need a "broken" file or a failing
+provider use a `node:fs` temporary directory, an in-memory
+`structuredClone()`/object literal, or a small stub provider defined inline
+in the test file — **no test ever writes to or modifies a file under
+`config/`, `schemas/`, or an existing approved fixture.**
 
 ## Expected error behavior
 
@@ -401,11 +554,14 @@ fixture.**
 | A Topic Package file has malformed JSON | `TopicPackageParseError`, naming the path and the underlying JSON parser error |
 | A Topic Package fails schema validation | `TopicPackageValidationError`, with `.errors` (`{ path, keyword, message, params }[]`) — every failure reported, not just the first |
 | A Topic Package is schema-valid but not ready (unapproved, incompatible version, blank content, inconsistent timestamps, etc.) | `TopicPackageReadinessError`, with `.issues` (`{ check, message }[]`) — every issue reported, not just the first |
+| The Topic Package has no usable content to build a prompt from | `PromptBuilderError`, thrown immediately, no provider call, no retry |
+| A single generation attempt fails (parse / schema / content-shape / the provider itself throwing) | `{ ok: false, stage, message, details }` from `validateGeneratedCarousel` — never thrown directly, collected by the retry loop |
+| Every retry attempt fails | `CarouselGenerationFailedError`, with `.attempts` (every stage's result, in order) and `.maxAttempts` |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 added no new dependencies:**
+**DC-003-I003 and DC-003-I004 both added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -414,10 +570,12 @@ Still just two, both added in DC-003-I002, both maintained and widely used —
   unchecked. Required for Ajv's strict mode to accept the schemas as-is.
 
 No test framework was added — `node:test` and `node:assert/strict` (both
-built into Node.js 18+) cover every test in every task so far. The Topic
-Package CLI (`check-topic-package.mjs`) needed no CLI framework either —
-`process.argv[2]` and a `try`/`catch` on the loader's structured errors was
-enough.
+built into Node.js 18+) cover every test in every task so far. Neither CLI
+(`check-topic-package.mjs`, `generate-mock-carousel.mjs`) needed a CLI
+framework — `process.argv[2]` and a `try`/`catch` on structured errors was
+enough both times. The Carousel Content Generator needed no HTTP client or
+LLM SDK either — I004 explicitly forbids calling a real provider, and the
+mock provider is pure, synchronous logic wrapped in an `async` function.
 
 ## Implementation status
 
@@ -434,12 +592,18 @@ enough.
 | Topic Package loader | Done (DC-003-I003) — `src/topic-package-loader.mjs`, file + in-memory entry points |
 | Topic Package readiness checks | Done (DC-003-I003) — `src/topic-package-readiness.mjs` |
 | Topic Package CLI check | Done (DC-003-I003) — `npm run check:topic` |
-| Unit test suite | Done — 49 tests, `npm test` (20 from I002, 29 added in I003) |
-| LLM prompt | Not started |
+| Prompt Builder | Done (DC-003-I004) — `src/carousel-prompt-builder.mjs`, deterministic |
+| Provider abstraction + mock provider | Done (DC-003-I004) — `src/carousel-mock-provider.mjs`; no real LLM wired up |
+| Carousel Content validation (parse/schema/content-shape) | Done (DC-003-I004) — `src/carousel-content-validator.mjs` |
+| Retry strategy | Done (DC-003-I004) — `src/retry.mjs`, generic and reusable |
+| Carousel Content Generator orchestrator | Done (DC-003-I004) — `src/carousel-generator.mjs` |
+| Carousel generation CLI check | Done (DC-003-I004) — `npm run generate:mock` |
+| Unit test suite | Done — 100 tests, `npm test` (20 from I002, 29 from I003, 51 added in I004) |
+| Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Payload mapping | Not started |
 | Templated rendering calls | Not started |
 | n8n workflow | Not started |
-| Error handling / retries (pipeline-level) | Not started |
+| Error handling / retries (pipeline-level, beyond generation) | Not started |
 | Approval workflow | Not started (fields reserved on Finished Carousel Object only, per DC-003-T002 §7) |
 
 Nothing above "Unit test suite" should require restructuring this
