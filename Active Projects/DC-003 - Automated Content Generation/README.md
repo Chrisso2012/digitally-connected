@@ -6,9 +6,11 @@ established by DC-003-I001 (configuration, template registry, JSON schemas),
 the configuration-loading and validation runtime added in DC-003-I002, the
 Topic Package Loader added in DC-003-I003, the Carousel Content Generator
 added in DC-003-I004 (mock LLM provider only — I004 explicitly does not
-call a real one), and the Carousel Payload Mapper added in DC-003-I005.
-Templated rendering and n8n workflow logic do not exist yet — I005
-explicitly does not call Templated.
+call a real one), the Carousel Payload Mapper added in DC-003-I005, and the
+Templated Renderer added in DC-003-I006 — mock-transport-tested; the real
+HTTP transport exists but has not made a live call yet, pending explicit
+live verification (see "Live verification procedure" below). n8n workflow
+logic does not exist yet.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -64,7 +66,14 @@ DC-003 - Automated Content Generation/
 │   ├── carousel-generator-errors.mjs # DC-003-I004 — PromptBuilderError, CarouselGenerationFailedError
 │   ├── carousel-payload-mapping.mjs  # DC-003-I005 — Mapping Registry, single source of truth
 │   ├── carousel-payload-mapper.mjs   # DC-003-I005 — see "Carousel Payload Mapper"
-│   └── carousel-payload-errors.mjs   # DC-003-I005 — mapper-specific errors
+│   ├── carousel-payload-errors.mjs   # DC-003-I005 — mapper-specific errors
+│   ├── renderer-errors.mjs           # DC-003-I006 — RendererError hierarchy
+│   ├── render-result.mjs             # DC-003-I006 — immutable RenderResult domain object
+│   ├── renderer-response-validator.mjs# DC-003-I006 — validates raw transport responses
+│   ├── renderer-transport-mock.mjs   # DC-003-I006 — the ONLY transport tests use
+│   ├── renderer-transport-http.mjs   # DC-003-I006 — real Templated transport, untested live
+│   ├── renderer-config.mjs           # DC-003-I006 — env-var config (incl. the API key)
+│   └── renderer.mjs                  # DC-003-I006 — see "Templated Renderer"
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -75,7 +84,8 @@ DC-003 - Automated Content Generation/
 │       ├── validate.mjs              # thin CLI wrapper around src/validator.mjs
 │       ├── check-topic-package.mjs   # DC-003-I003 — thin CLI wrapper around the loader
 │       ├── generate-mock-carousel.mjs# DC-003-I004 — thin CLI wrapper around the generator
-│       └── map-payload.mjs           # DC-003-I005 — thin CLI wrapper around the mapper
+│       ├── map-payload.mjs           # DC-003-I005 — thin CLI wrapper around the mapper
+│       └── render-payload.mjs        # DC-003-I006 — thin CLI wrapper around the renderer
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -97,6 +107,20 @@ Four files, one concern each:
 | `config/templates.json` | The template registry — see below | No |
 | `config/constants.json` | Shared enums and fixed values (slide types, statuses, ID prefixes) used by both schemas and future code | No |
 | `config/versions.json` | Current schema/design-system/prompt version identifiers, per DC-003-T002 §6 | No |
+
+`config/env.example` gained three new variables in DC-003-I006, all
+non-secret runtime settings for the renderer (the credential itself,
+`TEMPLATED_API_KEY`, already existed from I001):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TEMPLATED_API_BASE_URL` | `https://api.templated.io/v1` | Templated's API base — configurable so a stale/incorrect default never requires a code change |
+| `TEMPLATED_REQUEST_TIMEOUT_MS` | `15000` | Per-request timeout for the HTTP transport — see "Timeout behaviour" |
+| `TEMPLATED_RENDER_MAX_ATTEMPTS` | `3` | Retry ceiling for the renderer — see "Retry behaviour" |
+
+`TEMPLATED_POLL_INTERVAL_MS` / `TEMPLATED_POLL_TIMEOUT_MS` (from I001)
+remain unused and reserved — DC-003-I006 explicitly does not poll; it
+returns whatever status Templated's render call responds with.
 
 ### Deviation from DC-003-T001, with reason
 
@@ -634,11 +658,177 @@ failure, prints the specific structured error (no raw stack trace for the
 five expected failure modes) and exits non-zero. Does not render. Does not
 write any file.
 
+## Templated Renderer (`src/renderer.mjs`)
+
+The first component in this repository that talks to an external service.
+Converts one Templated Payload Object into a rendered carousel asset —
+strictly translation-and-transport; no rendering happens locally, no
+n8n, no queueing, no polling.
+
+```mermaid
+flowchart LR
+    TP[Templated Payload] --> R[Renderer]
+    R -- builds a RenderRequest, calls --> T{{Transport}}
+    T -->|mock| MT[Mock Transport\nno network]
+    T -->|http| HT[HTTP Transport\nTemplated API]
+    MT --> RV[Response Validator]
+    HT --> RV
+    RV --> RR[Immutable RenderResult]
+    RV -. malformed/rejected/timeout .-> ERR[Structured RendererError]
+```
+
+### Renderer contract
+
+`renderTemplatedPayload(payload, options)` consumes only a validated
+Templated Payload Object and returns only an immutable `RenderResult`. It
+never exposes an HTTP response, a `fetch` object, an API key, or any other
+transport-specific structure — `renderer-response-validator.mjs` is the one
+place a raw transport response is inspected, and nothing from that
+inspection survives past it unnormalized.
+
+### Transport abstraction
+
+A transport is any object shaped `{ name, send(request, { timeoutMs }) }` —
+the renderer depends only on this shape, never on HTTP directly. There is
+**no implicit default transport**: every call must explicitly pass
+`options.transport`, so an automated test (or a careless script) can never
+accidentally reach a real endpoint by omission. Two implementations exist
+today:
+
+- **`createMockTransport()`** (`renderer-transport-mock.mjs`) — the *only*
+  transport automated tests use. Deterministic, no network, configurable
+  via `options.mode` to simulate every failure case the renderer needs to
+  handle (`timeout`, `transport-error`, `auth-error`, `malformed`,
+  `rejected`), plus `options.failuresBeforeSuccess` for retry-success tests.
+- **`createHttpTransport(config)`** (`renderer-transport-http.mjs`) — the
+  real Templated integration, using Node's built-in `fetch` (no new
+  dependency). Never exercised by automated tests. Its endpoint path,
+  request shape, and `Authorization: Bearer` header are based on
+  Templated's public API conventions, **not yet confirmed against a live
+  call** — see "Live verification procedure" below.
+
+A future transport (a different provider, a queue-backed one, anything)
+plugs in by implementing the same two-property shape — no renderer code
+changes.
+
+### Retry behaviour
+
+Retries are not renderer logic — `renderTemplatedPayload` reuses
+`src/retry.mjs`'s `withRetry()` (the exact I004 primitive, unmodified) for
+the retry loop itself. Configurable via `options.maxAttempts`, defaulting
+to `TEMPLATED_RENDER_MAX_ATTEMPTS` (default `3`) when driven from the CLI's
+config loader. Not every failure is retried:
+
+- **Retried**: `TimeoutError`, `TransportError`, `ValidationError`
+  (malformed response) — all plausibly transient.
+- **Not retried, fails on the first attempt**: `AuthenticationError` (bad
+  credentials won't become good credentials on attempt two) and
+  `RenderRejected` (Templated understood the request and rejected it — the
+  same payload will be rejected again). These bypass `withRetry` by
+  throwing directly out of the attempt callback, which `withRetry` doesn't
+  catch — no changes to `retry.mjs` were needed to get this behavior.
+
+Retry exhaustion raises `RetryLimitExceeded` carrying every attempt's
+result in order — never a collapsed generic message. No infinite retries:
+`maxAttempts` is always a specific, finite, configured number.
+
+### Timeout behaviour
+
+Timeout duration always originates from configuration
+(`TEMPLATED_REQUEST_TIMEOUT_MS`, default `15000`) or an explicit
+`options.timeoutMs` override — never a number hardcoded somewhere
+unreachable. The HTTP transport enforces it with `AbortController`; a
+timeout maps to `TimeoutError`, a dedicated type distinct from a generic
+`TransportError`.
+
+### Response validation
+
+Every response — mock or real — passes through
+`validateTransportResponse()` before it can become a `RenderResult`:
+structurally untrustworthy responses (not an object, missing/invalid `id`
+or `status`) fail fast as `ValidationError`; a well-formed response
+reporting a terminal `status: "failed"` is a distinct case,
+`RenderRejected`, since the response itself was trustworthy — Templated
+just declined the render.
+
+### RenderResult
+
+The provider-independent domain object every downstream consumer should
+depend on — `renderId`, `status`, `imageUrl`, `templateId`, `slideType`,
+`provider`, `requestedAt`, `completedAt`, `durationMs`. `status` reuses the
+exact same enum as `finished-carousel.schema.json`'s `SlideRender.status`
+(`pending` / `processing` / `completed` / `failed`) on purpose — a future
+milestone assembling a Finished Carousel Object from `RenderResult`s won't
+need to translate between two vocabularies. Since I006 doesn't poll,
+`pending`/`processing` are legitimate non-error outcomes here, not every
+`RenderResult` represents a finished image. Deep-cloned and deep-frozen —
+same immutability approach as every other output in this codebase.
+
+### Error hierarchy
+
+Unlike earlier DC-003 error modules (flat classes, each extending `Error`
+directly), this one is a genuine hierarchy — every renderer error extends
+`RendererError`:
+
+| Error | When | Retried? |
+|---|---|---|
+| `AuthenticationError` | credentials rejected | No |
+| `TransportError` | network-level failure | Yes |
+| `TimeoutError` | request exceeded the configured timeout | Yes |
+| `ValidationError` | transport response has an untrustworthy shape | Yes |
+| `RenderRejected` | Templated returned a well-formed `status: "failed"` | No |
+| `RetryLimitExceeded` | every retry attempt failed | — (terminal) |
+
+### Rendering in code
+
+```js
+import { renderTemplatedPayload, createMockTransport } from "./src/index.mjs";
+
+const result = await renderTemplatedPayload(payload, {
+  transport: createMockTransport(),
+  maxAttempts: 3,
+  timeoutMs: 15000,
+});
+// result: { renderId, status, imageUrl, templateId, slideType, provider,
+//           requestedAt, completedAt, durationMs } — immutable.
+```
+
+### CLI check
+
+```bash
+npm run render:mock -- tests/fixtures/templated-payload.example.json
+npm run render:live -- tests/fixtures/templated-payload.example.json  # requires TEMPLATED_API_KEY
+```
+
+`render:mock` (the default) always uses the mock transport — safe to run
+anytime, no credentials, no network. `render:live` uses the real HTTP
+transport and performs an actual, credentialed API call; it fails fast
+with a clear message if `TEMPLATED_API_KEY` isn't set, and is not run by
+any automated test. Prints render ID, status, image URL, template ID,
+slide type, provider, and duration; exits `0` on success, non-zero with a
+structured error otherwise. Does not write any file.
+
+### Live verification procedure
+
+Mandated by the DC-003-I006 brief: no live Templated call happens until
+explicitly approved. Once mock tests are green and this milestone is
+committed, the assistant pauses and asks for:
+
+1. Confirmation to perform a single live render.
+2. `TEMPLATED_API_KEY` (or confirmation it's already set in the shell
+   environment being used).
+3. Any correction to `TEMPLATED_API_BASE_URL` if Templated's real
+   endpoint/auth scheme differs from the assumption documented in
+   `renderer-transport-http.mjs`.
+
+Only after that confirmation does `npm run render:live -- <path>` get run,
+against exactly one sample payload, once.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
-no test framework dependency was added, and none was needed in DC-003-I003,
-DC-003-I004, or DC-003-I005 either:
+no test framework dependency was added, and none was needed in DC-003-I003
+through DC-003-I006 either:
 
 ```bash
 npm test       # unit tests: tests/unit/*.test.mjs
@@ -646,28 +836,32 @@ npm run validate  # CLI summary: all 5 approved fixtures against their schemas
 npm run check:topic -- <path>  # CLI check of one Topic Package file
 npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
 npm run map:payload -- <path>  # CLI map one Carousel Content file into six Templated Payloads
+npm run render:mock -- <path>  # CLI mock-render one Templated Payload file
 ```
 
-`npm test` covers everything from DC-003-I002 through DC-003-I004
+`npm test` covers everything from DC-003-I002 through DC-003-I005
 (config/schema loading, fixture validation, integrity checks, Topic Package
-loading and readiness, prompt building, mock generation, retry behavior)
-plus, from DC-003-I005: the Mapping Registry loading and validating cleanly
-against the real template registry, no duplicate layer targets within any
-slide type's mapping, valid content mapping to six correctly-ordered
-payloads with every required layer populated, template IDs resolved (never
-hardcoded) from `config/templates.json`, deterministic output given the
-same clock/ID-generator injection, immutable return, the `list_items` and
-`steps` fan-outs producing the exact expected indexed layers, and all five
-mapper error classes — unknown template, missing layer, duplicate mapping
-(both the carousel-level and, via a corrupted-registry check, the
-registry-level form), unsupported content shape, and final payload schema
-validation failure — each triggered through its own dedicated fixture, plus
-CLI exit codes for both success and every failure mode. Tests that need a
-"broken" file or a failing provider use a `node:fs` temporary directory, an
-in-memory `structuredClone()`/object literal, a small stub provider defined
-inline in the test file, or one of the dedicated fixtures under
+loading and readiness, prompt building, mock generation, retry behavior,
+Mapping Registry validation, payload mapping, all five mapper error
+classes) plus, from DC-003-I006: a successful render producing a
+well-formed immutable `RenderResult` that exposes only its documented
+fields; timeout handling; retry exhaustion calling the transport exactly
+`maxAttempts` times, no more and no fewer; retry succeeding after transient
+transport failures and stopping immediately once it does; a malformed
+response being treated as retryable; a well-formed rejected render
+(`RenderRejected`) and an authentication failure both failing on the
+*first* attempt, never retried; `timeoutMs` being passed through to the
+transport rather than hardcoded; `RenderResult` construction (success,
+immutability, missing-field/invalid-status guards); the mock transport's
+every configurable mode; and CLI exit codes for success and every failure
+mode — always via the mock transport, never live. Tests that need a
+"broken" file, a failing provider, or a failing transport use a `node:fs`
+temporary directory, an in-memory `structuredClone()`/object literal, a
+small stub defined inline in the test file, the mock transport's
+configurable failure modes, or one of the dedicated fixtures under
 `tests/fixtures/carousel-content/` — **no test ever writes to or modifies a
-file under `config/`, `schemas/`, or an existing approved fixture.**
+file under `config/`, `schemas/`, or an existing approved fixture, and no
+test ever sets `--live` or reaches the network.**
 
 ## Expected error behavior
 
@@ -691,11 +885,18 @@ file under `config/`, `schemas/`, or an existing approved fixture.**
 | The same layer would be assigned twice | `DuplicateLayerMappingError`, naming the slide_type and, when applicable, the layer |
 | An array/object-shaped content field doesn't match its fan-out contract | `UnsupportedContentError`, naming the slide_type, field, and reason |
 | The assembled Templated Payload fails schema validation | `TemplatedPayloadValidationError`, with `.errors` — every failure reported, not just the first |
+| No transport was given to the renderer | `RendererError`, thrown immediately |
+| Credentials are rejected | `AuthenticationError`, thrown immediately, never retried |
+| A request exceeds the configured timeout | `TimeoutError`, retried |
+| A network-level failure occurs | `TransportError`, retried |
+| A transport response has an untrustworthy shape | `ValidationError`, with `.details`, retried |
+| Templated returns a well-formed `status: "failed"` | `RenderRejected`, thrown immediately, never retried |
+| Every render retry attempt fails | `RetryLimitExceeded`, with `.attempts` (every attempt's error, in order) and `.maxAttempts` |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003, DC-003-I004, and DC-003-I005 all added no new dependencies:**
+**DC-003-I003 through DC-003-I006 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -705,13 +906,16 @@ Still just two, both added in DC-003-I002, both maintained and widely used —
 
 No test framework was added — `node:test` and `node:assert/strict` (both
 built into Node.js 18+) cover every test in every task so far. No CLI
-(`check-topic-package.mjs`, `generate-mock-carousel.mjs`, `map-payload.mjs`)
-needed a CLI framework — `process.argv[2]` and a `try`/`catch` on structured
-errors was enough every time. The Carousel Content Generator needed no HTTP
-client or LLM SDK — I004 explicitly forbids calling a real provider. The
-Carousel Payload Mapper needed no Templated SDK — I005 explicitly forbids
-calling Templated; `node:crypto`'s built-in `randomUUID()` was enough for
-payload IDs.
+(`check-topic-package.mjs`, `generate-mock-carousel.mjs`, `map-payload.mjs`,
+`render-payload.mjs`) needed a CLI framework — `process.argv[2]` and a
+`try`/`catch` on structured errors was enough every time. The Carousel
+Content Generator needed no HTTP client or LLM SDK — I004 explicitly
+forbids calling a real provider. The Carousel Payload Mapper needed no
+Templated SDK — I005 explicitly forbids calling Templated;
+`node:crypto`'s built-in `randomUUID()` was enough for payload IDs. The
+Templated Renderer's HTTP transport needed no HTTP client library either —
+Node's built-in global `fetch` (Node 18+) plus `AbortController` for
+timeouts was enough.
 
 ## Implementation status
 
@@ -737,11 +941,17 @@ payload IDs.
 | Carousel Payload Mapping Registry | Done (DC-003-I005) — `src/carousel-payload-mapping.mjs`, self-validating |
 | Carousel Payload Mapper | Done (DC-003-I005) — `src/carousel-payload-mapper.mjs`, all six templates supported |
 | Payload mapping CLI check | Done (DC-003-I005) — `npm run map:payload` |
-| Unit test suite | Done — 127 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 added in I005) |
+| Renderer service | Done (DC-003-I006) — `src/renderer.mjs` |
+| Transport abstraction + mock transport | Done (DC-003-I006) — `src/renderer-transport-mock.mjs`; the only transport tests use |
+| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; **not yet exercised against a live request** |
+| Retry / timeout / response validation / RenderResult | Done (DC-003-I006) |
+| Render CLI check | Done (DC-003-I006) — `npm run render:mock` / `npm run render:live` |
+| Unit test suite | Done — 165 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 38 added in I006) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
-| Templated rendering calls | Not started |
+| Live Templated rendering | **Pending explicit live verification** — see "Live verification procedure" |
+| Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | n8n workflow | Not started |
-| Error handling / retries (pipeline-level, beyond generation) | Not started |
+| Error handling / retries (pipeline-level, beyond generation and rendering) | Not started |
 | Approval workflow | Not started (fields reserved on Finished Carousel Object only, per DC-003-T002 §7) |
 
 Nothing above "Unit test suite" should require restructuring this

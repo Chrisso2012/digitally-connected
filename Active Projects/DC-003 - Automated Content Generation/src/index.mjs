@@ -51,3 +51,20 @@ export {
   UnsupportedContentError,
   TemplatedPayloadValidationError,
 } from "./carousel-payload-errors.mjs";
+
+// DC-003-I006 — Templated Renderer
+export { renderTemplatedPayload } from "./renderer.mjs";
+export { createMockTransport } from "./renderer-transport-mock.mjs";
+export { createHttpTransport } from "./renderer-transport-http.mjs";
+export { loadRendererConfig } from "./renderer-config.mjs";
+export { validateTransportResponse } from "./renderer-response-validator.mjs";
+export { createRenderResult, RENDER_STATUSES } from "./render-result.mjs";
+export {
+  RendererError,
+  AuthenticationError,
+  TransportError,
+  TimeoutError,
+  ValidationError,
+  RenderRejected,
+  RetryLimitExceeded,
+} from "./renderer-errors.mjs";
