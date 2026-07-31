@@ -4,11 +4,15 @@
 // renderer-transport-mock.mjs for what tests actually run against, and
 // README "Live verification procedure" for how this transport gets used.
 //
-// Endpoint path, request shape, and auth header below are based on
-// Templated's public API conventions and the shape already confirmed via
-// config/templates.json's layer format — they have NOT been exercised
-// against a live request as part of this milestone (see the I006
-// "Mock First" constraint). Confirm during live verification.
+// Endpoint (POST https://api.templated.io/v1/render), request body shape
+// ({ template, layers, format }), and Authorization: Bearer auth header
+// below are CONFIRMED against Templated's official docs
+// (https://templated.io/docs/authentication/,
+// https://templated.io/docs/renders/create/) during live verification.
+// Response shape was also confirmed there and turned out to differ from
+// this module's original assumption — see renderer-response-validator.mjs's
+// header comment for what changed and why. Not yet exercised against an
+// actual live request as of this comment; that is the one remaining step.
 
 import { AuthenticationError, TimeoutError, TransportError, ValidationError } from "./renderer-errors.mjs";
 

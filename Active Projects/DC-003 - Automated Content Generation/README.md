@@ -702,10 +702,21 @@ today:
   `rejected`), plus `options.failuresBeforeSuccess` for retry-success tests.
 - **`createHttpTransport(config)`** (`renderer-transport-http.mjs`) — the
   real Templated integration, using Node's built-in `fetch` (no new
-  dependency). Never exercised by automated tests. Its endpoint path,
-  request shape, and `Authorization: Bearer` header are based on
-  Templated's public API conventions, **not yet confirmed against a live
-  call** — see "Live verification procedure" below.
+  dependency). Never exercised by automated tests. Endpoint
+  (`POST https://api.templated.io/v1/render`), request body shape
+  (`{ template, layers, format }`), and `Authorization: Bearer` header are
+  **confirmed against Templated's official docs**
+  ([authentication](https://templated.io/docs/authentication/),
+  [create a render](https://templated.io/docs/renders/create/)). One thing
+  the docs confirmed was wrong: the response validator originally required
+  an explicit `status` field; Templated's real synchronous response
+  (`{ id, url, storage_url, width, height, format, templateId,
+  templateName, createdAt, externalId }`) has none — a 200 with a `url` *is*
+  the completion signal. `renderer-response-validator.mjs` now infers
+  `status` from the presence of a `url` when none is given explicitly,
+  fixed and tested before any live call was attempted. The one remaining
+  unconfirmed step is an actual live request — see "Live verification
+  procedure" below.
 
 A future transport (a different provider, a queue-backed one, anything)
 plugs in by implementing the same two-property shape — no renderer code
@@ -745,9 +756,13 @@ timeout maps to `TimeoutError`, a dedicated type distinct from a generic
 
 Every response — mock or real — passes through
 `validateTransportResponse()` before it can become a `RenderResult`:
-structurally untrustworthy responses (not an object, missing/invalid `id`
-or `status`) fail fast as `ValidationError`; a well-formed response
-reporting a terminal `status: "failed"` is a distinct case,
+structurally untrustworthy responses (not an object, missing/invalid `id`,
+an invalid explicit `status` when one is given) fail fast as
+`ValidationError`. `status` itself is optional on the wire — Templated's
+real response has no such field, so when it's absent, status is inferred:
+present `url` → `completed`, otherwise → `processing`. An explicit `status`
+(as the mock transport always sends) is honored as-is. A well-formed
+response that resolves to `status: "failed"` is a distinct case,
 `RenderRejected`, since the response itself was trustworthy — Templated
 just declined the render.
 
@@ -811,18 +826,21 @@ structured error otherwise. Does not write any file.
 ### Live verification procedure
 
 Mandated by the DC-003-I006 brief: no live Templated call happens until
-explicitly approved. Once mock tests are green and this milestone is
-committed, the assistant pauses and asks for:
+explicitly approved. Steps, in order:
 
-1. Confirmation to perform a single live render.
-2. `TEMPLATED_API_KEY` (or confirmation it's already set in the shell
-   environment being used).
-3. Any correction to `TEMPLATED_API_BASE_URL` if Templated's real
-   endpoint/auth scheme differs from the assumption documented in
-   `renderer-transport-http.mjs`.
-
-Only after that confirmation does `npm run render:live -- <path>` get run,
-against exactly one sample payload, once.
+1. **Architecture review** — confirm the renderer depends only on the
+   transport abstraction (dependency-injected, no implicit default).
+2. **Authorization** — explicit confirmation to perform exactly one live
+   render.
+3. **Verify the base URL and auth scheme** against Templated's official
+   docs before risking the one authorized call — this is what caught the
+   response-shape mismatch described above and got it fixed pre-emptively.
+4. **A locally configured `TEMPLATED_API_KEY`** — set in the shell
+   environment or a local (gitignored) `.env`, never pasted into chat.
+5. Run `npm run render:live -- <path>` exactly once, against one sample
+   payload.
+6. Record the response characteristics, re-run the full mock test suite to
+   confirm nothing regressed, and stop.
 
 ## Running tests
 
@@ -852,8 +870,10 @@ response being treated as retryable; a well-formed rejected render
 (`RenderRejected`) and an authentication failure both failing on the
 *first* attempt, never retried; `timeoutMs` being passed through to the
 transport rather than hardcoded; `RenderResult` construction (success,
-immutability, missing-field/invalid-status guards); the mock transport's
-every configurable mode; and CLI exit codes for success and every failure
+immutability, missing-field/invalid-status guards); status inference for
+Templated's real no-explicit-status response shape (confirmed during live
+verification, before any live call); the mock transport's every
+configurable mode; and CLI exit codes for success and every failure
 mode — always via the mock transport, never live. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
@@ -943,12 +963,12 @@ timeouts was enough.
 | Payload mapping CLI check | Done (DC-003-I005) — `npm run map:payload` |
 | Renderer service | Done (DC-003-I006) — `src/renderer.mjs` |
 | Transport abstraction + mock transport | Done (DC-003-I006) — `src/renderer-transport-mock.mjs`; the only transport tests use |
-| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; **not yet exercised against a live request** |
+| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; endpoint/auth/response shape confirmed against Templated's docs; **not yet exercised against a live request** |
 | Retry / timeout / response validation / RenderResult | Done (DC-003-I006) |
 | Render CLI check | Done (DC-003-I006) — `npm run render:mock` / `npm run render:live` |
-| Unit test suite | Done — 165 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 38 added in I006) |
+| Unit test suite | Done — 168 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 41 added in I006) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
-| Live Templated rendering | **Pending explicit live verification** — see "Live verification procedure" |
+| Live Templated rendering | **Blocked on a locally configured `TEMPLATED_API_KEY`** — none found in this environment; see "Live verification procedure" |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | n8n workflow | Not started |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started |
