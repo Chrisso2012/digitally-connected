@@ -707,16 +707,19 @@ today:
   (`{ template, layers, format }`), and `Authorization: Bearer` header are
   **confirmed against Templated's official docs**
   ([authentication](https://templated.io/docs/authentication/),
-  [create a render](https://templated.io/docs/renders/create/)). One thing
-  the docs confirmed was wrong: the response validator originally required
-  an explicit `status` field; Templated's real synchronous response
+  [create a render](https://templated.io/docs/renders/create/)). The
+  `POST /render` endpoint's own example response omits a `status` field
   (`{ id, url, storage_url, width, height, format, templateId,
-  templateName, createdAt, externalId }`) has none — a 200 with a `url` *is*
-  the completion signal. `renderer-response-validator.mjs` now infers
-  `status` from the presence of a `url` when none is given explicitly,
-  fixed and tested before any live call was attempted. The one remaining
-  unconfirmed step is an actual live request — see "Live verification
-  procedure" below.
+  templateName, createdAt, externalId }`), which an earlier pass read as
+  "Templated never sends status" — that turned out to be incomplete, not
+  correct: [the render object](https://templated.io/docs/renders/) docs
+  state the field exists and is always uppercase (`PENDING` / `COMPLETED` /
+  `FAILED`), and the one authorized live call's response confirmed it,
+  carrying `status: "COMPLETED"`. See "Provider status contract" below for
+  the corrective fix. `renderer-response-validator.mjs` still infers
+  `status` from the presence of a `url` for the (currently only
+  hypothetical) case where a response has neither — no observed Templated
+  response has actually lacked the field.
 
 A future transport (a different provider, a queue-backed one, anything)
 plugs in by implementing the same two-property shape — no renderer code
@@ -762,14 +765,15 @@ timeout maps to `TimeoutError`, a dedicated type distinct from a generic
 Every response — mock or real — passes through
 `validateTransportResponse()` before it can become a `RenderResult`:
 structurally untrustworthy responses (not an object, missing/invalid `id`,
-an invalid explicit `status` when one is given) fail fast as
+an invalid/undocumented explicit `status` when one is given) fail fast as
 `ValidationError`, and are **not retried** (see "Retry behaviour"). `status`
-itself is optional on the wire — Templated's real response has no such
-field, so when it's absent, status is inferred: present `url` →
-`completed`, otherwise → `processing`. An explicit `status` (as the mock
-transport always sends) is honored as-is. A well-formed response that
-resolves to `status: "failed"` is a distinct case, `RenderRejected`, since
-the response itself was trustworthy — Templated just declined the render.
+is optional on the wire; when it's absent, status is inferred: present
+`url` → `completed`, otherwise → `processing`. An explicit `status` (which
+every observed Templated response, mock or live, has sent) is validated
+against Templated's documented provider contract and normalized — see
+"Provider status contract" below. A well-formed response that normalizes to
+`status: "failed"` is a distinct case, `RenderRejected`, since the response
+itself was trustworthy — Templated just declined the render.
 
 Every `ValidationError` carries `.details` — an array of
 `{ field, expected, received, message }`. `received` is a safe type/reason
@@ -778,6 +782,43 @@ actual value**, for any field that could plausibly carry something
 sensitive. The one exception is `status`: a short, non-sensitive, closed
 enum string, safe to show verbatim. Nothing in this diagnostic path ever
 includes the raw response body, the API key, or an authorization header.
+
+### Provider status contract
+
+**Corrective pass, after the live-verification incident:** the one
+authorized live call connected and authenticated successfully but failed
+`ValidationError` — Templated's response carried `status: "COMPLETED"`, and
+the validator at the time only accepted lowercase (`pending` / `processing`
+/ `completed` / `failed`). Before touching any code, the fix was verified
+against Templated's official docs rather than assumed:
+[the render object](https://templated.io/docs/renders/) states, verbatim:
+*"The current status of the render: PENDING, COMPLETED or FAILED. Initially
+the status is PENDING."* — confirming the live response was correct and the
+validator was the bug. There is no documented `PROCESSING` value.
+
+`renderer-response-validator.mjs` now validates the raw response's `status`
+against exactly this documented uppercase contract (`PENDING` / `COMPLETED`
+/ `FAILED`, via `PROVIDER_STATUS_MAP`) and normalizes it onto this
+codebase's canonical lowercase vocabulary (`RENDER_STATUSES` —
+`pending`/`processing`/`completed`/`failed` — unchanged since I006, and
+reused by `finished-carousel.schema.json`'s `SlideRender.status`) before the
+normalized `{ id, status, imageUrl }` shape goes anywhere near
+`RenderResult`. This keeps the provider/wire representation and the
+internal domain vocabulary decoupled at a single, well-known boundary:
+every downstream consumer — `RenderResult`, the CLI, any future caller —
+depends only on the lowercase internal vocabulary and never needs to know
+Templated's casing. `processing` remains purely an internal inference value
+(a response with neither an explicit status nor a `url`) — Templated
+doesn't document it, and nothing on the wire is expected to send it. The
+mock transport (`renderer-transport-mock.mjs`) was updated to send the same
+documented uppercase values Templated does, so it continues to exercise
+this normalization boundary faithfully instead of masking it.
+
+Deliberately **not** broadened beyond the documented contract: an
+undocumented casing (lowercase) or an undocumented value (e.g.
+`PROCESSING`) is still rejected as `ValidationError`, not silently
+accepted — this was a validator bug matching an incomplete contract, not a
+signal to loosen validation.
 
 ### RenderResult
 
@@ -804,7 +845,7 @@ directly), this one is a genuine hierarchy — every renderer error extends
 | `TransportError` | network-level failure | Yes |
 | `TimeoutError` | request exceeded the configured timeout | Yes |
 | `ValidationError` | transport response has an untrustworthy shape | **No** (was Yes — see below) |
-| `RenderRejected` | Templated returned a well-formed `status: "failed"` | No |
+| `RenderRejected` | Templated returned a well-formed `status: "FAILED"` (normalized to `failed`) | No |
 | `RetryLimitExceeded` | every retry attempt failed | — (terminal) |
 
 ### Rendering in code
@@ -931,9 +972,15 @@ check that only `TimeoutError`/`TransportError` still retry while every
 other failure mode stops at one attempt; `timeoutMs` being passed through
 to the transport rather than hardcoded; `RenderResult` construction
 (success, immutability, missing-field/invalid-status guards); status
-inference for Templated's real no-explicit-status response shape; safe
-diagnostic detail (field/expected/received, never raw values) on every
-`ValidationError`; `resolveLiveMaxAttempts()` defaulting to `1` and staying
+inference for a response shape with no explicit status; Templated's
+documented uppercase provider status contract (`PENDING`/`COMPLETED`/
+`FAILED`) being validated and normalized onto the internal lowercase
+vocabulary, including a regression test reproducing the exact response
+shape that failed validation during the live-verification incident, and
+confirming lowercase/undocumented values (e.g. a bare `PROCESSING`) are
+still rejected, not silently accepted; safe diagnostic detail
+(field/expected/received, never raw values) on every `ValidationError`;
+`resolveLiveMaxAttempts()` defaulting to `1` and staying
 decoupled from `TEMPLATED_RENDER_MAX_ATTEMPTS` even when that's set to a
 higher value in the same environment; a bad `--live-max-attempts` value
 failing before any transport is constructed; the mock transport's every
@@ -974,7 +1021,7 @@ test ever sets `--live` or reaches the network.**
 | A request exceeds the configured timeout | `TimeoutError`, retried |
 | A network-level failure occurs | `TransportError`, retried |
 | A transport response has an untrustworthy shape | `ValidationError`, with `.details`, retried |
-| Templated returns a well-formed `status: "failed"` | `RenderRejected`, thrown immediately, never retried |
+| Templated returns a well-formed `status: "FAILED"` | `RenderRejected`, thrown immediately, never retried |
 | Every render retry attempt fails | `RetryLimitExceeded`, with `.attempts` (every attempt's error, in order) and `.maxAttempts` |
 
 ## Dependencies
@@ -1027,12 +1074,12 @@ timeouts was enough.
 | Payload mapping CLI check | Done (DC-003-I005) — `npm run map:payload` |
 | Renderer service | Done (DC-003-I006) — `src/renderer.mjs` |
 | Transport abstraction + mock transport | Done (DC-003-I006) — `src/renderer-transport-mock.mjs`; the only transport tests use |
-| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; endpoint/auth confirmed live (connectivity + auth succeeded on the one authorized attempt); **exact live response shape still not confirmed** — the attempt failed `ValidationError`, cause not yet diagnosed |
-| Retry / timeout / response validation / RenderResult | Done (DC-003-I006), hardened post-incident — see "Live-verification safety rule" |
+| HTTP transport | Built (DC-003-I006) — `src/renderer-transport-http.mjs`; endpoint/auth confirmed live (connectivity + auth succeeded on the one authorized attempt); response shape's `status` field cause diagnosed and fixed (see "Provider status contract") — **not yet re-verified against a fresh live call** |
+| Retry / timeout / response validation / RenderResult | Done (DC-003-I006), hardened post-incident — see "Live-verification safety rule" and "Provider status contract" |
 | Render CLI check | Done (DC-003-I006) — `npm run render:mock` / `npm run render:live` (now single-attempt by default) |
-| Unit test suite | Done — 182 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 55 from I006) |
+| Unit test suite | Done — 188 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006 including 6 added by the DC-003-I006 corrective pass's provider-status-contract tests) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
-| Live Templated rendering | **One authorized attempt made, failed validation; hardening pass complete.** Fresh explicit authorization required before another live attempt — see "Live verification procedure" |
+| Live Templated rendering | **One authorized attempt made, failed `ValidationError` on `status` casing; root cause diagnosed against Templated's official docs and fixed in a code-only corrective pass (no live calls made during the fix).** Fresh explicit authorization required before another live attempt — see "Live verification procedure" |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | n8n workflow | Not started |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started |

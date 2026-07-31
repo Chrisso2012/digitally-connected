@@ -8,7 +8,9 @@ const REQUEST = { templateId: "748d17c5-c58e-48eb-9f12-434252a6d17f", layers: {}
 test("default mode resolves with a well-formed completed response", async () => {
   const transport = createMockTransport();
   const response = await transport.send(REQUEST, { timeoutMs: 15000 });
-  assert.equal(response.status, "completed");
+  // Uppercase: matches Templated's documented provider contract, not this
+  // codebase's internal lowercase vocabulary — see module header comment.
+  assert.equal(response.status, "COMPLETED");
   assert.equal(typeof response.id, "string");
   assert.equal(typeof response.url, "string");
 });
@@ -38,7 +40,7 @@ test("malformed mode resolves with a shape that has no id or status", async () =
 test("rejected mode resolves with a well-formed failed response", async () => {
   const transport = createMockTransport({ mode: "rejected" });
   const response = await transport.send(REQUEST, {});
-  assert.equal(response.status, "failed");
+  assert.equal(response.status, "FAILED");
   assert.equal(typeof response.id, "string");
 });
 
@@ -47,7 +49,7 @@ test("failuresBeforeSuccess simulates N transient failures then succeeds", async
   await assert.rejects(() => transport.send(REQUEST, {}), TransportError);
   await assert.rejects(() => transport.send(REQUEST, {}), TransportError);
   const response = await transport.send(REQUEST, {});
-  assert.equal(response.status, "completed");
+  assert.equal(response.status, "COMPLETED");
   assert.equal(transport.callCount(), 3);
 });
 

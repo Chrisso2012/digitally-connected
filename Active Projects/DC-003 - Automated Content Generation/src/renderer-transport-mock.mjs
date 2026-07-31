@@ -2,6 +2,12 @@
 // no network dependency, fully deterministic, configurable to simulate
 // every failure mode the renderer needs to handle. Never used outside
 // tests/CLI local verification; the real endpoint is renderer-transport-http.mjs.
+//
+// Status casing deliberately matches Templated's documented provider
+// contract (https://templated.io/docs/renders/ — PENDING/COMPLETED/FAILED,
+// uppercase) rather than this codebase's internal lowercase vocabulary, so
+// this mock exercises renderer-response-validator.mjs's normalization
+// boundary the same way the real HTTP transport does.
 
 import { AuthenticationError, TimeoutError, TransportError } from "./renderer-errors.mjs";
 
@@ -44,14 +50,14 @@ export function createMockTransport(options = {}) {
       if (effectiveMode === "rejected") {
         return {
           id: options.renderId ?? "render_mock_0001",
-          status: "failed",
+          status: "FAILED",
           error: "template layer mismatch (simulated)",
         };
       }
 
       return {
         id: options.renderId ?? `render_mock_${String(calls).padStart(4, "0")}`,
-        status: "completed",
+        status: "COMPLETED",
         url: `https://mock-templated.local/renders/${options.renderId ?? "mock"}.png`,
       };
     },

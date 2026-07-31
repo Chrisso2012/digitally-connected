@@ -175,7 +175,7 @@ test("timeoutMs is passed through to the transport, never hardcoded inside the r
     name: "spy-transport",
     async send(request, options) {
       observedTimeout = options.timeoutMs;
-      return { id: "render_spy", status: "completed", url: "https://example.test/a.png" };
+      return { id: "render_spy", status: "COMPLETED", url: "https://example.test/a.png" };
     },
   };
   await renderTemplatedPayload(loadPayload(), { transport, timeoutMs: 4242 });
