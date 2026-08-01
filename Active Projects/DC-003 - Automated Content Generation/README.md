@@ -10,10 +10,11 @@ call a real one), the Carousel Payload Mapper added in DC-003-I005, the
 Templated Renderer added in DC-003-I006 (live-verified against the real
 Templated API — see "Live verification procedure" below), the Finished
 Carousel Builder added in DC-003-I007 — this pipeline's first stable public
-contract; see "Finished Carousel Builder" below — and the Execution Ledger
+contract; see "Finished Carousel Builder" below — the Execution Ledger
 added in DC-003-I008, the platform's operational audit layer; see
-"Operational layer" below. No orchestration and no n8n workflow logic
-exists yet.
+"Operational layer" below — and the Pipeline Orchestrator added in
+DC-003-I009, the single execution engine coordinating every stage above;
+see "Pipeline Orchestrator" below. No n8n workflow logic exists yet.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -84,7 +85,12 @@ DC-003 - Automated Content Generation/
 │   ├── execution-ledger-store.mjs    # DC-003-I008 — Ledger Store abstraction (shape + assertValidLedgerStore)
 │   ├── jsonl-ledger-store.mjs        # DC-003-I008 — the one Ledger Store implementation
 │   ├── execution-ledger.mjs          # DC-003-I008 — see "Operational layer"
-│   └── execution-ledger-errors.mjs   # DC-003-I008 — ledger/record/store-specific errors
+│   ├── execution-ledger-errors.mjs   # DC-003-I008 — ledger/record/store-specific errors
+│   ├── pipeline-context.mjs          # DC-003-I009 — see "Pipeline Orchestrator"
+│   ├── pipeline-stages.mjs           # DC-003-I009 — the five declarative stages
+│   ├── pipeline-definition.mjs       # DC-003-I009 — DEFAULT_PIPELINE, the declarative stage list
+│   ├── pipeline-orchestrator.mjs     # DC-003-I009 — the sequential execution engine
+│   └── pipeline-errors.mjs           # DC-003-I009 — PipelineConfigurationError, toSafeStageError
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -98,7 +104,8 @@ DC-003 - Automated Content Generation/
 │       ├── map-payload.mjs           # DC-003-I005 — thin CLI wrapper around the mapper
 │       ├── render-payload.mjs        # DC-003-I006 — thin CLI wrapper around the renderer
 │       ├── build-finished-carousel.mjs# DC-003-I007 — end-to-end offline capstone CLI
-│       └── ledger.mjs                # DC-003-I008 — init/append/read/reconstruct subcommands
+│       ├── ledger.mjs                # DC-003-I008 — init/append/read/reconstruct subcommands
+│       └── pipeline.mjs              # DC-003-I009 — run the full orchestrated pipeline
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -1411,6 +1418,260 @@ rolled-up execution summary is genuinely needed, that milestone should
 explicitly decide whether to revive, redesign, or finally retire this
 schema — DC-003-I008.1 does not pre-empt that call.
 
+## Pipeline Orchestrator (`src/pipeline-orchestrator.mjs`)
+
+DC-003-I009 introduces the platform's execution engine — the single
+component that coordinates every existing pipeline stage. It contains no
+business logic of its own: every domain decision (how to validate a Topic
+Package, how to map a slide onto a template, how to render, how to
+compose a Finished Carousel) still lives entirely inside the module that
+already implemented it (DC-003-I003 through DC-003-I008). This milestone
+only sequences those modules and records what happened.
+
+**Fundamental Principle:** only one component may coordinate multiple
+stages — the orchestrator. No stage ever calls another stage, and no stage
+ever writes to the Execution Ledger directly.
+
+```mermaid
+flowchart LR
+    subgraph Entry Points
+    CLI2[CLI] --- FN[Future n8n] --- FA[Future API] --- FS[Future Scheduler]
+    end
+    Entry Points --> PO{{Pipeline Orchestrator}}
+    PO --> DSP["Declarative Stage Pipeline\n(pipeline-definition.mjs)"]
+    DSP --> SI["Stage Interface\nexecute(context) -> StageResult"]
+    SI --> PC[(Pipeline Context)]
+    PC --> EC["Existing Components\n(I003–I008, unmodified)"]
+    EC --> FC3[FinishedCarousel]
+    EC --> ER2[Execution Records]
+    ER2 --> EL2[(Execution Ledger)]
+    PO --> PR[PipelineResult]
+```
+
+All future entry points (n8n, a REST API, a scheduler) are expected to call
+`createPipelineOrchestrator(...).run(...)`, never a renderer, mapper,
+builder, or ledger directly — this milestone's CLI (below) is the first
+of those entry points, not a special case.
+
+### Declarative pipeline (`src/pipeline-definition.mjs`)
+
+```js
+export const DEFAULT_PIPELINE = [
+  LoadTopicStage,
+  GenerateCarouselStage,
+  MapPayloadStage,
+  RenderStage,
+  BuildFinishedCarouselStage,
+];
+```
+
+The orchestrator loops over this array without knowing anything about what
+any individual stage does. Adding a future stage means extending this
+array — `createPipelineOrchestrator({ ledger, stages })` also accepts a
+custom stage list, which is exactly how this milestone's own tests exercise
+stage ordering, failure handling, and context propagation without needing
+a real upstream failure to happen. If a new stage needs an `event_type`
+`execution-record.schema.json` doesn't already list, that's a schema
+change (the same kind DC-003-I007 already made to add
+`execution_metadata`), not an orchestrator change.
+
+### Stage interface
+
+Every stage is a plain object, duck-typed like every other abstraction in
+this codebase (the transport abstraction, the Ledger Store abstraction):
+
+```
+{ name: string, execute(context, options): Promise<StageResult> }
+```
+
+`options` carries `clock`/`idGenerator` (see "Determinism" below) plus
+whatever else the orchestrator's own `run()` caller passed through —
+stages read only the specific options they need (e.g. `RenderStage` reads
+`context.configuration.transport`; `LoadTopicStage` reads
+`context.configuration.topicPackageSource`). The orchestrator never
+inspects which stage produced a `StageResult`, and no stage needs to know
+what any other stage does.
+
+### StageResult
+
+```
+{ success: boolean,
+  updatedContext: object | null,   // FIELDS to overlay, not a full context
+  executionRecords: object[],      // partial ExecutionRecord fields
+  warnings: string[],
+  error: { stage, code, message, retryable } | null }
+```
+
+`updatedContext` is a set of fields to overlay onto the current
+`PipelineContext`, not a full context object — a stage never needs to know
+the other fields already present on the context it received.
+`executionRecords` are **partial** `ExecutionRecord` field sets
+(`event_type`/`status` required; `stage`/`source`/`data`/`diagnostics`
+optional) — `execution_id`, `sequence`, `record_id`, and `occurred_at` are
+all orchestrator/ledger-owned, never a stage's concern (see "Execution
+Ledger relationship" below). `error`, when present, is always the safe
+shape `toSafeStageError()` (`src/pipeline-errors.mjs`) produces — **no raw
+provider error, response body, stack trace, or credential ever reaches
+this field.** Every DC-003 error class already constructs a safe message
+(see each module's own error file); this function only normalizes the
+shape, matching the same safe-diagnostics discipline DC-003-I006's
+`ValidationError.details` and DC-003-I008's diagnostics allowlist already
+established.
+
+### Pipeline Context (`src/pipeline-context.mjs`)
+
+Fields: `executionId`, `configuration`, `topicPackage`, `carouselContent`,
+`templatedPayloads`, `renderResults`, `finishedCarousel`, `metrics`,
+`warnings`. **Internal only** — never persisted, never returned from
+`run()` (see PipelineResult below), and never mutated in place:
+`withContext(context, patch)` always returns a **new**, separately frozen
+object; nothing about the context handed to a stage ever changes
+underneath it. **The Execution Ledger is deliberately not one of its
+fields** — the ledger is an independent operational component the
+orchestrator holds separately; a stage can never reach it through the
+context.
+
+One immutability wrinkle worth documenting: `configuration` can carry a
+live, non-cloneable value — a mock transport/provider object with function
+properties, for a stage to use (`context.configuration.transport`,
+`context.configuration.provider`). `deepFreezeClone()` (the helper every
+other domain object in this codebase uses) calls `structuredClone()`
+first, which throws `DataCloneError` on any function anywhere in the
+value. `pipeline-context.mjs` uses the plain `deepFreeze()` helper instead
+(now also exported from `immutable.mjs` for this reason) — freeze in
+place, no cloning. Freezing an object with function-valued properties is
+always valid in JS (the helper's own `typeof` check already skips
+recursing into a function itself); every other context field
+(`topicPackage`, `carouselContent`, etc.) is already independently
+deep-frozen by its own factory before it ever reaches `createPipelineContext()`,
+so freezing again here is idempotent, not a weaker guarantee.
+
+### Execution Ledger relationship
+
+Stages emit execution record *data*; **only the orchestrator ever calls
+`ledger.appendRecord()`.** The orchestrator assigns `execution_id` (shared
+across the whole run) and a monotonically increasing `sequence` number
+that stages never need to know about, then appends each record a stage
+returned — enriched with that stage's own measured `duration_ms` in
+`data` ("stage timing... feeds the Execution Ledger"). This preserves the
+separation the brief calls for: execution and operational recording stay
+decoupled, with the orchestrator as the only bridge between them.
+
+### PipelineResult
+
+```
+{ success: boolean,
+  executionId: string,
+  finishedCarousel: object | null,
+  warnings: string[],
+  error: { stage, code, message, retryable } | null,
+  duration: number }
+```
+
+The orchestrator's **one public return value** — `PipelineContext` is
+never returned. No provider-specific implementation detail appears here:
+`finishedCarousel` is already provider-independent (DC-003-I007), and
+`error` is always the same safe shape `StageResult.error` uses.
+
+### Lifecycle ownership
+
+The orchestrator — never a stage — owns the pipeline's overall lifecycle,
+appending exactly the bookend events DC-003-I008 already defined:
+
+**Success:**
+```
+execution.started -> [stage records...] -> execution.completed
+```
+
+**Failure:**
+```
+execution.started -> [stage's own records, if any] -> execution.failed
+```
+
+Only `render` has a documented `render.failed` event type in
+`execution-record.schema.json` (topic/content/payload/finished-carousel
+have no per-stage "failed" counterpart) — so `RenderStage` emits its own
+`render.failed` in addition to the orchestrator's `execution.failed`; every
+other stage's failure is captured purely by the top-level
+`execution.failed` record (with `diagnostics.field_path` naming which
+stage failed). This required zero schema changes — DC-003-I008's existing
+event vocabulary already fit this milestone's needs exactly.
+
+A stage that **throws** instead of returning a well-formed `StageResult`
+is still caught by the orchestrator (tested directly) — "no stage may
+terminate the entire pipeline directly" holds even for a misbehaving stage
+implementation, not just a well-behaved one reporting its own failure.
+
+### Sequential execution model
+
+Deliberately, intentionally sequential: stages run one at a time, in
+declared order, always fully awaited before the next begins (tested by
+proving a stage's own start/end log entries are never interleaved with
+another stage's). No concurrency, no parallel rendering, no asynchronous
+scheduling, no background workers — all explicitly out of scope for this
+milestone.
+
+### Determinism
+
+`clock` and `executionIdGenerator`/`recordIdGenerator` are all injectable,
+on both `createPipelineOrchestrator()`'s factory options and per-`run()`
+call options — exactly the pattern DC-003-I008 already established for
+`ExecutionRecord`/`ExecutionLedger`. `executionIdGenerator` defaults to
+DC-003-I007/I008's own `generateExecutionId()` (reused, not duplicated) so
+every `execution_id` this orchestrator produces already matches
+`execution-record.schema.json`'s pattern. No test in
+`pipeline-context.test.mjs`, `pipeline-stages.test.mjs`,
+`pipeline-orchestrator.test.mjs`, or `pipeline-cli.test.mjs` depends on the
+real clock, a random UUID, or network access.
+
+**One clock-convention wrinkle, documented rather than papered over:** most
+DC-003 modules' `now`/`clock` option returns an ISO string (`renderer.mjs`,
+`finished-carousel-builder.mjs`, `carousel-generator.mjs`,
+`carousel-payload-mapper.mjs`, `execution-record.mjs`'s `clock`) — this
+orchestrator's own `clock` option matches that convention, and every stage
+forwards it as `now: options.clock` when calling into those modules. The
+one exception is DC-003-I007's `createExecutionMetadata()`, whose `now`
+option expects a `Date` object; `pipeline-stages.mjs`'s
+`BuildFinishedCarouselStage` adapts between the two at that one call site
+(`() => new Date(clock())`) rather than this orchestrator trying to paper
+over the inconsistency generically.
+
+### CLI (`tests/validation/pipeline.mjs`, `npm run pipeline`)
+
+```bash
+npm run pipeline -- <topicPackagePath> <ledgerPath>
+```
+
+Creates a `JsonlLedgerStore` + `ExecutionLedger` at `<ledgerPath>`, builds
+an orchestrator over `DEFAULT_PIPELINE`, and runs it once against the
+given Topic Package file — no live provider interaction anywhere (every
+stage defaults to a mock provider/transport). Prints the safe
+`PipelineResult` (success, execution ID, duration, warnings, and either the
+Finished Carousel's `carousel_id`/`overall_status` or the failed stage's
+name/code/message), then a second block — the **execution summary** — via
+`ledger.reconstructExecution(result.executionId)`: record count, first/last
+event timestamps, final status, and every record in sequence order. Exits
+`0` on success, non-zero (still printing both blocks) on a failed run.
+
+### Rendering in code
+
+```js
+import { createJsonlLedgerStore, createExecutionLedger, createPipelineOrchestrator } from "./src/index.mjs";
+
+const ledger = createExecutionLedger({ store: createJsonlLedgerStore({ filePath: "./execution.jsonl" }) });
+const orchestrator = createPipelineOrchestrator({ ledger });
+
+const result = await orchestrator.run({
+  configuration: { topicPackageSource: { filePath: "./topic.json" } },
+});
+// result: { success, executionId, finishedCarousel, warnings, error, duration }
+
+if (result.success) {
+  const execution = ledger.reconstructExecution(result.executionId);
+  // execution: { executionId, recordCount, firstEventAt, lastEventAt, finalStatus, records[] }
+}
+```
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -1426,6 +1687,7 @@ npm run map:payload -- <path>  # CLI map one Carousel Content file into six Temp
 npm run render:mock -- <path>  # CLI mock-render one Templated Payload file
 npm run build:carousel -- <path>  # CLI build one Finished Carousel end-to-end, offline
 npm run ledger -- <subcommand> ...  # CLI: init/append/read/reconstruct an Execution Ledger
+npm run pipeline -- <topicPackagePath> <ledgerPath>  # CLI: run the full orchestrated pipeline
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -1490,7 +1752,25 @@ sequence-ordering independent of underlying storage order; `ExecutionNotFoundErr
 for an unknown execution; and deterministic `clock`/`idGenerator`
 propagation); and CLI exit codes for `init`/`append`/`read`/`reconstruct`
 success and failure — no network, no renderer, no `TEMPLATED_API_KEY`
-dependency at all. Tests that need a
+dependency at all. From DC-003-I009: `PipelineContext` (defaults,
+immutability including a regression test that a function-bearing
+`configuration` doesn't throw, and `withContext()` returning a new object
+that preserves untouched fields); every stage in isolation (success and
+every documented failure mode, including `RenderStage`'s
+`render.started`+`render.failed` pair and `BuildFinishedCarouselStage`'s
+`execution_id` wiring into the resulting `FinishedCarousel.execution_metadata`);
+the orchestrator end-to-end (a full successful run's `PipelineResult`
+shape, `execution.started`/`execution.completed` bookending every
+success, strictly increasing sequence numbers, `duration_ms` on every
+stage record, stage ordering proven strictly sequential via interleaving
+detection, custom stage-list registration, context propagation between
+stages, warning accumulation, a stage failure halting later stages and
+appending `execution.failed` instead of a nonexistent per-stage event
+type, a throwing stage still being caught safely, `PipelineConfigurationError`
+for a bad ledger or empty stage list, and byte-identical output across two
+separate runs given the same injected clock/ID generators); and CLI exit
+codes for success and failure, including that a failed run's ledger still
+records `execution.failed` correctly. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
 small stub defined inline in the test file, the mock transport's
@@ -1536,11 +1816,13 @@ test ever sets `--live` or reaches the network.**
 | A line in a `.jsonl` ledger file isn't valid JSON | `MalformedLedgerLineError`, naming the file and 1-based line number — never the line's own content |
 | `reconstructExecution()` is called for an `execution_id` with no records at all | `ExecutionNotFoundError` |
 | The ledger CLI's `init` subcommand targets a file that already exists | `LedgerFileExistsError` — never silently overwritten |
+| The orchestrator is given an invalid `ExecutionLedger` or an empty stage list | `PipelineConfigurationError`, thrown immediately at `createPipelineOrchestrator()` — a caller bug, not a failed run |
+| Any stage fails (a malformed input, a thrown error, an underlying module's own error) | Never a raw error — a safe `{ stage, code, message, retryable }` on `StageResult.error`/`PipelineResult.error`, and an `execution.failed` record with matching diagnostics |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I008 all added no new dependencies:**
+**DC-003-I003 through DC-003-I009 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -1565,7 +1847,10 @@ for `carousel_id`/`execution_id` generation. The Execution Ledger needed no
 database driver or event-store client — the JSONL Ledger Store is Node's
 built-in `node:fs` (`readFileSync`/`appendFileSync`/`existsSync`), the same
 kind of dependency-free file I/O `topic-package-loader.mjs` (DC-003-I003)
-already established.
+already established. The Pipeline Orchestrator needed nothing at all
+beyond what DC-003-I003 through DC-003-I008 already built — it has no
+dependencies of its own, only reusing every existing module's own public
+function.
 
 ## Implementation status
 
@@ -1606,12 +1891,18 @@ already established.
 | JSONL Ledger Store | Done (DC-003-I008) — `src/jsonl-ledger-store.mjs` |
 | Execution Ledger (append, read, reconstruct) | Done (DC-003-I008) — `src/execution-ledger.mjs`; see "Operational layer" |
 | Execution Ledger CLI check | Done (DC-003-I008) — `npm run ledger`, init/append/read/reconstruct subcommands, no network |
-| Unit test suite | Done — 266 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008) |
+| Pipeline Context | Done (DC-003-I009) — `src/pipeline-context.mjs`; internal only, never returned publicly |
+| Stage interface + five declarative stages | Done (DC-003-I009) — `src/pipeline-stages.mjs` (Load Topic, Generate Carousel, Map Payload, Render, Build Finished Carousel) |
+| Declarative pipeline | Done (DC-003-I009) — `src/pipeline-definition.mjs`, `DEFAULT_PIPELINE` |
+| Pipeline Orchestrator (sequential execution engine) | Done (DC-003-I009) — `src/pipeline-orchestrator.mjs`; see "Pipeline Orchestrator" |
+| Pipeline Orchestrator CLI check | Done (DC-003-I009) — `npm run pipeline`, no live provider interaction |
+| Unit test suite | Done — 306 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
-| Pipeline orchestration | Not started — DC-003-I009, expected to consume `FinishedCarousel` and call the Execution Ledger, coordinating generation/rendering/logging without itself being n8n |
-| n8n adapter | Not started — DC-003-I010 per the revised roadmap; n8n becomes one consumer of the orchestration layer, not the orchestration layer itself |
-| Error handling / retries (pipeline-level, beyond generation and rendering) | Not started |
+| Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
+| n8n adapter | Not started — DC-003-I010 per the revised roadmap; n8n becomes one consumer of the Pipeline Orchestrator, not the orchestration layer itself |
+| HTTP API / scheduler entry points | Not started — DC-003-I009 established the orchestrator as the required entry point for both, once they exist |
+| Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — DC-003-I009 explicitly makes no retry-policy changes |
 | Approval workflow | Not started — `approval` remains an all-default stub on every Finished Carousel Object DC-003-I007 builds, per DC-003-T002 §7 |
 
 Nothing above "Unit test suite" should require restructuring this

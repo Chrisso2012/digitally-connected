@@ -13,6 +13,7 @@
     "render:live": "node tests/validation/render-payload.mjs --live",
     "build:carousel": "node tests/validation/build-finished-carousel.mjs",
     "ledger": "node tests/validation/ledger.mjs",
+    "pipeline": "node tests/validation/pipeline.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

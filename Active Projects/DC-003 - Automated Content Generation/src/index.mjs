@@ -87,3 +87,16 @@ export {
   ExecutionNotFoundError,
   LedgerFileExistsError,
 } from "./execution-ledger-errors.mjs";
+
+// DC-003-I009 — Pipeline Orchestrator
+export { createPipelineContext, withContext } from "./pipeline-context.mjs";
+export {
+  LoadTopicStage,
+  GenerateCarouselStage,
+  MapPayloadStage,
+  RenderStage,
+  BuildFinishedCarouselStage,
+} from "./pipeline-stages.mjs";
+export { DEFAULT_PIPELINE } from "./pipeline-definition.mjs";
+export { createPipelineOrchestrator } from "./pipeline-orchestrator.mjs";
+export { PipelineConfigurationError, toSafeStageError } from "./pipeline-errors.mjs";
