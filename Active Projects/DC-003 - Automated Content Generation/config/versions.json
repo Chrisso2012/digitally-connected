@@ -1,6 +1,6 @@
 {
   "project_version": "0.1.0",
-  "foundation_status": "DC-003-I010 complete — foundation, config/schema loader, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer (live-verified), Finished Carousel Builder, the Execution Ledger (operational audit layer), the Pipeline Orchestrator (single execution engine), and the External Invocation Adapter (the platform's first external boundary). No n8n workflow implemented.",
+  "foundation_status": "DC-003-I011 complete — foundation, config/schema loader, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer (live-verified), Finished Carousel Builder, the Execution Ledger (operational audit layer), the Pipeline Orchestrator (single execution engine, hardened per I010.1), the External Invocation Adapter (the platform's first external boundary), and the n8n Adapter (thin translation layer for n8n workflows). No actual n8n workflow is installed or run.",
   "design_system_version": "dc-002-v1",
   "template_registry_version": "1.0",
   "schema_versions": {

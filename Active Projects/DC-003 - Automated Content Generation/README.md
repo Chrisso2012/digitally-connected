@@ -13,12 +13,15 @@ Carousel Builder added in DC-003-I007 — this pipeline's first stable public
 contract; see "Finished Carousel Builder" below — the Execution Ledger
 added in DC-003-I008, the platform's operational audit layer; see
 "Operational layer" below — the Pipeline Orchestrator added in
-DC-003-I009, the single execution engine coordinating every stage above;
-see "Pipeline Orchestrator" below — and the External Invocation Adapter
-added in DC-003-I010, the platform's first external boundary; see
-"External Invocation Adapter" below. No n8n workflow logic exists yet —
-DC-003-I010 is what a future n8n integration (or REST API, scheduler, or
-GUI) will call, not n8n itself.
+DC-003-I009, the single execution engine coordinating every stage above
+(hardened against an initial-lifecycle-write failure in DC-003-I010.1) —
+the External Invocation Adapter added in DC-003-I010, the platform's first
+external boundary; see "External Invocation Adapter" below — and the n8n
+Adapter added in DC-003-I011, a thin translation layer between an n8n
+workflow and the External Invocation Adapter; see "n8n Adapter" below. No
+actual n8n workflow is installed or run anywhere in this repository —
+DC-003-I011 is the integration layer a real n8n instance would call, not
+n8n itself.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -99,7 +102,10 @@ DC-003 - Automated Content Generation/
 │   ├── invocation-normalizer.mjs     # DC-003-I010 — InvocationRequest -> orchestrator.run() input
 │   ├── invocation-response.mjs       # DC-003-I010 — builds/validates the outbound InvocationResponse
 │   ├── invocation-adapter.mjs        # DC-003-I010 — see "External Invocation Adapter"
-│   └── invocation-errors.mjs         # DC-003-I010 — request/response validation errors, safe error mapper
+│   ├── invocation-errors.mjs         # DC-003-I010 — request/response validation errors, safe error mapper
+│   ├── n8n-workflow-mapper.mjs       # DC-003-I011 — workflow input -> InvocationRequest shape
+│   ├── n8n-response-mapper.mjs       # DC-003-I011 — InvocationResponse -> n8n output shape
+│   └── n8n-adapter.mjs               # DC-003-I011 — see "n8n Adapter"
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -115,7 +121,8 @@ DC-003 - Automated Content Generation/
 │       ├── build-finished-carousel.mjs# DC-003-I007 — end-to-end offline capstone CLI
 │       ├── ledger.mjs                # DC-003-I008 — init/append/read/reconstruct subcommands
 │       ├── pipeline.mjs              # DC-003-I009 — run the full orchestrated pipeline
-│       └── invoke.mjs                # DC-003-I010 — run one external InvocationRequest through the adapter
+│       ├── invoke.mjs                # DC-003-I010 — run one external InvocationRequest through the adapter
+│       └── n8n-invoke.mjs            # DC-003-I011 — run one n8n-style workflow input through the n8n Adapter
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -1929,6 +1936,149 @@ const response = await adapter.invoke({
 //             warnings, error, correlation_metadata } — immutable, schema-valid.
 ```
 
+## n8n Adapter (`src/n8n-adapter.mjs`)
+
+DC-003-I011 introduces the platform's first production integration: a
+thin translation layer between an n8n workflow and the External
+Invocation Adapter (DC-003-I010, unchanged). **It contains no platform
+business logic of its own** — every real decision (request validation,
+orchestration, rendering, ledger writes) stays inside the layers beneath
+it. It never talks to the Pipeline Orchestrator directly; every request
+flows through the Invocation Adapter, exactly as the brief requires.
+
+```mermaid
+flowchart LR
+    N8N2[n8n Workflow] --> N8NA{{n8n Adapter}}
+    N8NA --> IR2[InvocationRequest]
+    IR2 --> EIA2{{External Invocation Adapter}}
+    EIA2 --> PO3{{Pipeline Orchestrator}}
+    PO3 --> PR3[PipelineResult]
+    PR3 --> EIA2
+    EIA2 --> IRes2[InvocationResponse]
+    IRes2 --> N8NA
+    N8NA --> N8NO[n8n Output]
+```
+
+No new schemas, no new public contracts: this milestone's two mapping
+functions translate between contracts that already exist
+(`invocation-request.schema.json`/`invocation-response.schema.json` from
+DC-003-I010) and a plain, camelCase JS object shape n8n itself is
+comfortable with — deliberately not a formal schema-backed contract of its
+own, since the brief lists no new schema in scope.
+
+### Workflow input (`src/n8n-workflow-mapper.mjs`)
+
+```
+{ requestId: string,
+  topicPackageFilePath?: string,
+  topicPackageData?: object,
+  executionOptions?: object,
+  correlationMetadata?: object }
+```
+
+Flat and camelCase — n8n's own convention — so **no additional
+platform-specific information is required from n8n**: a workflow author
+never needs to know about `topic_package_reference`'s internal
+`file_path`/`data` split, snake_case field names, or any other detail of
+this platform's own schemas.
+
+`mapWorkflowInputToInvocationRequest()` is a pure, deterministic function
+that translates this shape onto an `InvocationRequest`-shaped object
+(snake_case, matching `invocation-request.schema.json`). **It does no
+validation of its own** — a missing `requestId`, a `topicPackageFilePath`
+*and* `topicPackageData` both present, or neither present, all map through
+unchanged (tested directly) — the DC-003-I011 brief's "must not duplicate
+platform logic" is honored literally: `invocationAdapter.invoke()`'s own
+schema validation (DC-003-I010, unchanged) is what actually rejects a
+malformed mapping, exactly as it already does for any other caller.
+
+### n8n Output (`src/n8n-response-mapper.mjs`)
+
+```
+{ success: boolean,
+  executionId: string | null,
+  requestId: string | null,
+  status: "completed" | "failed" | "rejected",
+  finishedCarousel: object | null,
+  warnings: string[],
+  error: { code, message, retryable } | null }
+```
+
+`mapInvocationResponseToN8nOutput()` is the mirror-image pure function.
+**`success` is deliberately not the same as `InvocationResponse.accepted`**:
+`accepted` only means the request was well-formed enough to attempt: a
+workflow branching on "did this actually work" needs
+`status === "completed"` — an accepted-but-failed pipeline run must never
+read as success to a downstream n8n node (tested directly, with a response
+that's `accepted: true` but `status: "failed"`). `finishedCarousel` and
+`error` are passed through unchanged (only the outer key is renamed to
+camelCase) — both are already safe, public shapes from lower layers
+(DC-003-I007's Finished Carousel Object, DC-003-I010's error mapping), so
+no further translation happens at this boundary.
+`correlation_metadata` is deliberately dropped — not part of the
+documented n8n output contract.
+
+### Adapter service
+
+```
+{ invoke(workflowInput, options): Promise<N8nOutput> }
+```
+
+One public entry point, responsible only for mapping input, invoking the
+Invocation Adapter, and mapping the response — nothing else.
+`createN8nAdapter({ invocationAdapter })` is bound to an already-built
+External Invocation Adapter (the caller wires up the ledger, orchestrator,
+and invocation adapter themselves — this adapter constructs none of
+them). `invoke()` never throws to the calling workflow: even a
+`workflowInput` so malformed it crashes property access itself (tested
+directly, with a getter that throws — `mapWorkflowInputToInvocationRequest()`
+is written defensively enough that this is not expected in practice, but
+the safety net exists anyway, matching the same "assume nothing" pattern
+every adapter boundary in this codebase already applies to itself) still
+resolves to a well-formed, safe n8n output object. Errors surfaced this
+way reuse `toSafeInvocationError()` from DC-003-I010, unchanged — no new
+error-mapping logic was written for this milestone.
+
+### CLI (`tests/validation/n8n-invoke.mjs`, `npm run n8n`)
+
+```bash
+npm run n8n -- <workflowInputJsonPath> <ledgerPath>
+```
+
+Builds a mock-only `JsonlLedgerStore` + `ExecutionLedger` + Pipeline
+Orchestrator + External Invocation Adapter (identical construction to
+`invoke.mjs`'s own CLI), wraps it in the n8n Adapter, and invokes it
+against one raw workflow-input JSON file — no live provider interaction
+anywhere. Demonstrates a successful invocation, invalid input (rejected
+by the Invocation Adapter's own validation, not this adapter), and safe
+output formatting. Exits `0` only when `success` is `true`.
+
+### Rendering in code
+
+```js
+import {
+  createJsonlLedgerStore,
+  createExecutionLedger,
+  createPipelineOrchestrator,
+  createExternalInvocationAdapter,
+  createN8nAdapter,
+} from "./src/index.mjs";
+
+const ledger = createExecutionLedger({ store: createJsonlLedgerStore({ filePath: "./execution.jsonl" }) });
+const orchestrator = createPipelineOrchestrator({ ledger });
+const invocationAdapter = createExternalInvocationAdapter({ orchestrator });
+const n8nAdapter = createN8nAdapter({ invocationAdapter });
+
+const output = await n8nAdapter.invoke({
+  requestId: "n8n-exec-04821",
+  topicPackageFilePath: "./topic.json",
+  correlationMetadata: { workflow_name: "dc-003-daily-carousel" },
+});
+// output: { success, executionId, requestId, status, finishedCarousel,
+//           warnings, error } — plain object, deterministic, no internal
+//           platform objects exposed.
+```
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -1946,6 +2096,7 @@ npm run build:carousel -- <path>  # CLI build one Finished Carousel end-to-end, 
 npm run ledger -- <subcommand> ...  # CLI: init/append/read/reconstruct an Execution Ledger
 npm run pipeline -- <topicPackagePath> <ledgerPath>  # CLI: run the full orchestrated pipeline
 npm run invoke -- <invocationRequestPath> <ledgerPath>  # CLI: run one request through the External Invocation Adapter
+npm run n8n -- <workflowInputPath> <ledgerPath>  # CLI: run one n8n-style workflow input through the n8n Adapter
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -2051,7 +2202,24 @@ correctly; `PipelineConfigurationError` for a missing orchestrator; and
 identical `execution_id`s across two separate runs given the same
 injected clock/ID generator); and CLI exit codes for acceptance,
 rejection, and a real pipeline failure — no network, no live provider
-interaction anywhere. Tests that need a
+interaction anywhere. From DC-003-I011: `mapWorkflowInputToInvocationRequest()`
+(every field explicit, defaults, determinism, and proof that it never
+throws for garbage input — `null`, `undefined`, or a primitive — and never
+validates on its own behalf, including that a missing `requestId` and a
+`topicPackageFilePath`+`topicPackageData` collision both pass through
+unrejected); `mapInvocationResponseToN8nOutput()` (field selection,
+determinism, and — the one non-trivial mapping decision — that
+`accepted: true, status: "failed"` still maps to `success: false`); the
+n8n Adapter end-to-end (a valid workflow input producing a real
+`FinishedCarousel`; only the seven documented output fields ever present;
+invalid input rejected via the Invocation Adapter's own validation, not a
+duplicate check in this adapter; a workflow input with a throwing getter
+still caught safely; `PipelineConfigurationError` for a missing Invocation
+Adapter; a real pipeline failure mapped correctly; `requestId`/`executionId`
+staying distinct end-to-end; and identical `executionId`s across two
+separate runs given the same injected clock/ID generator); and CLI exit
+codes for success, invalid input, and a real pipeline failure — no
+network, no live provider interaction anywhere. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
 small stub defined inline in the test file, the mock transport's
@@ -2102,11 +2270,13 @@ test ever sets `--live` or reaches the network.**
 | An InvocationRequest fails schema validation (missing `request_id`, a `topic_package_reference` with both/neither of `file_path`/`data`, an unknown field) | Never invokes the orchestrator — a rejected `InvocationResponse` (`accepted: false, status: "rejected"`), never a thrown exception |
 | Any failure occurs after an InvocationRequest is accepted (a pipeline failure, or a genuine adapter/orchestrator-level error) | Never a raw error — a safe `{ code, message, retryable }` on `InvocationResponse.error` (narrower than `PipelineResult.error` — `stage` is deliberately dropped) |
 | The adapter is given an invalid Pipeline Orchestrator | `PipelineConfigurationError`, thrown immediately at `createExternalInvocationAdapter()` — a caller bug, not a failed invocation |
+| n8n workflow input is invalid (missing/ambiguous topic package reference, missing `requestId`, etc.) | Never a duplicate check in the n8n Adapter — the same rejected n8n output (`success: false, status: "rejected"`) the Invocation Adapter's own validation already produces |
+| The n8n Adapter is given an invalid External Invocation Adapter | `PipelineConfigurationError`, thrown immediately at `createN8nAdapter()` — a caller bug, not a failed invocation |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I010 all added no new dependencies:**
+**DC-003-I003 through DC-003-I011 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -2136,7 +2306,9 @@ beyond what DC-003-I003 through DC-003-I008 already built — it has no
 dependencies of its own, only reusing every existing module's own public
 function. The External Invocation Adapter needed nothing new either — it
 depends only on the DC-003-I002 validator (for its own two schemas) and
-the DC-003-I009 orchestrator it's handed.
+the DC-003-I009 orchestrator it's handed. The n8n Adapter needed nothing
+at all — no n8n SDK, no HTTP client, not even a new error class: it's two
+pure mapping functions plus the External Invocation Adapter it's handed.
 
 ## Implementation status
 
@@ -2187,14 +2359,19 @@ the DC-003-I009 orchestrator it's handed.
 | External Invocation Adapter | Done (DC-003-I010) — `src/invocation-adapter.mjs`; see "External Invocation Adapter" |
 | Safe error mapper (external boundary) | Done (DC-003-I010) — `src/invocation-errors.mjs`'s `toSafeInvocationError()`, narrower than the orchestrator's own `toSafeStageError()` |
 | External Invocation Adapter CLI check | Done (DC-003-I010) — `npm run invoke`, no network, no live provider interaction |
-| Unit test suite | Done — 349 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010) |
+| Orchestrator lifecycle-write hardening | Done (DC-003-I010.1) — initial `execution.started` append failure returns a failed `PipelineResult` instead of throwing; see "Lifecycle-record write failures" |
+| n8n workflow input mapping | Done (DC-003-I011) — `src/n8n-workflow-mapper.mjs`; deterministic, does no validation of its own |
+| n8n Adapter | Done (DC-003-I011) — `src/n8n-adapter.mjs`; see "n8n Adapter" |
+| n8n output mapping | Done (DC-003-I011) — `src/n8n-response-mapper.mjs`; `success` derived from `status === "completed"`, not `accepted` |
+| n8n Adapter CLI check | Done (DC-003-I011) — `npm run n8n`, no network, no live provider interaction |
+| Unit test suite | Done — 389 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
-| n8n workflow | Not started — DC-003-I010 established the External Invocation Adapter as the contract a future n8n integration would call; n8n itself is not built |
-| REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the adapter as the required entry point for all of them, once they exist |
-| Authentication (on the adapter or any future entry point) | Not started — explicitly out of scope for I010 |
-| Asynchronous execution | Not started — DC-003-I010 is strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
+| Actual n8n workflow (installed, running, calling this adapter) | Not started — DC-003-I011 built the integration layer; no n8n instance exists in this repository |
+| REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
+| Authentication (on any adapter or future entry point) | Not started — explicitly out of scope for I010 and I011 |
+| Asynchronous execution | Not started — DC-003-I010/I011 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
 | Approval workflow | Not started — `approval` remains an all-default stub on every Finished Carousel Object DC-003-I007 builds, per DC-003-T002 §7 |
 

@@ -111,3 +111,8 @@ export {
   InvocationResponseValidationError,
   toSafeInvocationError,
 } from "./invocation-errors.mjs";
+
+// DC-003-I011 — n8n Adapter
+export { mapWorkflowInputToInvocationRequest } from "./n8n-workflow-mapper.mjs";
+export { mapInvocationResponseToN8nOutput } from "./n8n-response-mapper.mjs";
+export { createN8nAdapter } from "./n8n-adapter.mjs";
