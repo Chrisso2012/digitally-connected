@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/invocation-response.schema.json",
+  "title": "Invocation Response",
+  "description": "The External Invocation Adapter's outbound public contract, introduced in DC-003-I010. Never exposes internal exceptions, stack traces, provider responses, API keys, transport details, raw ValidationErrors, or internal module names — see README 'Error mapping'.",
+  "type": "object",
+  "required": ["accepted", "request_id", "execution_id", "status", "finished_carousel", "warnings", "error", "correlation_metadata"],
+  "additionalProperties": false,
+  "properties": {
+    "accepted": {
+      "type": "boolean",
+      "description": "Whether the request passed validation and was handed to the Pipeline Orchestrator — distinct from whether execution itself succeeded (see status)."
+    },
+    "request_id": {
+      "type": ["string", "null"],
+      "description": "Echoed from the request, unchanged. Null only when the inbound request was so malformed that no usable request_id could even be extracted."
+    },
+    "execution_id": {
+      "type": ["string", "null"],
+      "pattern": "^exec_[0-9]{8}_[A-Za-z0-9]+$",
+      "description": "Null when accepted is false — no execution ever started, so no execution_id was ever allocated. Never substituted for request_id, or vice versa."
+    },
+    "status": { "type": "string", "enum": ["completed", "failed", "rejected"] },
+    "finished_carousel": {
+      "type": ["object", "null"],
+      "description": "The pipeline's own Finished Carousel Object (DC-003-I007), passed through unchanged when status is completed — already this platform's public, provider-independent contract, so no further translation happens here."
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "error": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "correlation_metadata": { "type": ["object", "null"] }
+  }
+}

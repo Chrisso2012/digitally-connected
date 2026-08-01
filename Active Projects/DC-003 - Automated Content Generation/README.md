@@ -12,9 +12,13 @@ Templated API — see "Live verification procedure" below), the Finished
 Carousel Builder added in DC-003-I007 — this pipeline's first stable public
 contract; see "Finished Carousel Builder" below — the Execution Ledger
 added in DC-003-I008, the platform's operational audit layer; see
-"Operational layer" below — and the Pipeline Orchestrator added in
+"Operational layer" below — the Pipeline Orchestrator added in
 DC-003-I009, the single execution engine coordinating every stage above;
-see "Pipeline Orchestrator" below. No n8n workflow logic exists yet.
+see "Pipeline Orchestrator" below — and the External Invocation Adapter
+added in DC-003-I010, the platform's first external boundary; see
+"External Invocation Adapter" below. No n8n workflow logic exists yet —
+DC-003-I010 is what a future n8n integration (or REST API, scheduler, or
+GUI) will call, not n8n itself.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -90,7 +94,12 @@ DC-003 - Automated Content Generation/
 │   ├── pipeline-stages.mjs           # DC-003-I009 — the five declarative stages
 │   ├── pipeline-definition.mjs       # DC-003-I009 — DEFAULT_PIPELINE, the declarative stage list
 │   ├── pipeline-orchestrator.mjs     # DC-003-I009 — the sequential execution engine
-│   └── pipeline-errors.mjs           # DC-003-I009 — PipelineConfigurationError, toSafeStageError
+│   ├── pipeline-errors.mjs           # DC-003-I009 — PipelineConfigurationError, toSafeStageError
+│   ├── invocation-request.mjs        # DC-003-I010 — validates/prepares an inbound InvocationRequest
+│   ├── invocation-normalizer.mjs     # DC-003-I010 — InvocationRequest -> orchestrator.run() input
+│   ├── invocation-response.mjs       # DC-003-I010 — builds/validates the outbound InvocationResponse
+│   ├── invocation-adapter.mjs        # DC-003-I010 — see "External Invocation Adapter"
+│   └── invocation-errors.mjs         # DC-003-I010 — request/response validation errors, safe error mapper
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -105,7 +114,8 @@ DC-003 - Automated Content Generation/
 │       ├── render-payload.mjs        # DC-003-I006 — thin CLI wrapper around the renderer
 │       ├── build-finished-carousel.mjs# DC-003-I007 — end-to-end offline capstone CLI
 │       ├── ledger.mjs                # DC-003-I008 — init/append/read/reconstruct subcommands
-│       └── pipeline.mjs              # DC-003-I009 — run the full orchestrated pipeline
+│       ├── pipeline.mjs              # DC-003-I009 — run the full orchestrated pipeline
+│       └── invoke.mjs                # DC-003-I010 — run one external InvocationRequest through the adapter
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -172,15 +182,18 @@ carried forward as reviewable config, exactly as DC-003-T001 §7 intended.
 
 ## Schemas
 
-Six [JSON Schema](https://json-schema.org/) (2020-12) documents in
+Eight [JSON Schema](https://json-schema.org/) (2020-12) documents in
 `schemas/` — the five objects defined in DC-003-T002, plus
-`execution-record.schema.json`, DC-003-I008's own schema for the
-Execution Ledger's operational event model (not part of the original T002
-five). One of the original five, `execution-log.schema.json`, is now
-formally **deprecated** — see "`execution-log.schema.json` — deprecated"
-under "Operational layer" below for the DC-003-I008.1 reconciliation
-findings and why it's a separate schema rather than a repurposed one. Each
-schema is standards-compliant so a full validator (e.g. Ajv) can consume it
+`execution-record.schema.json` (DC-003-I008's own schema for the
+Execution Ledger's operational event model) and
+`invocation-request.schema.json`/`invocation-response.schema.json`
+(DC-003-I010's own schema pair for the External Invocation Adapter's
+public contract) — none of the three part of the original T002 five. One
+of the original five, `execution-log.schema.json`, is now formally
+**deprecated** — see "`execution-log.schema.json` — deprecated" under
+"Operational layer" below for the DC-003-I008.1 reconciliation findings
+and why it's a separate schema rather than a repurposed one. Each schema
+is standards-compliant so a full validator (e.g. Ajv) can consume it
 unchanged later. Two simplifications were made deliberately, to avoid the
 complexity DC-003-T002's constraints explicitly warned against:
 
@@ -236,7 +249,7 @@ are also exported for callers that only need one file. Behavior:
 
 ## Schema registry (`src/schema-registry.mjs`)
 
-Loads the six registered schemas and exposes them behind stable, camelCase
+Loads the eight registered schemas and exposes them behind stable, camelCase
 identifiers rather than filesystem paths:
 
 ```js
@@ -249,6 +262,8 @@ schemas.templatedPayload;
 schemas.finishedCarousel;
 schemas.executionLog;      // deprecated/dormant — see "Operational layer"
 schemas.executionRecord;   // the active operational record model
+schemas.invocationRequest;  // see "External Invocation Adapter"
+schemas.invocationResponse;
 ```
 
 Same fail-fast behavior as the config loader (`ConfigFileNotFoundError` /
@@ -1672,6 +1687,215 @@ if (result.success) {
 }
 ```
 
+## External Invocation Adapter (`src/invocation-adapter.mjs`)
+
+DC-003-I010 introduces the platform's first stable external boundary. It
+translates an inbound `InvocationRequest` into a Pipeline Orchestrator
+call, and the resulting `PipelineResult` back into a safe outbound
+`InvocationResponse`. **It translates. It does not orchestrate, generate
+content, render, or write to the Execution Ledger** — every one of those
+responsibilities stays inside the Pipeline Orchestrator (DC-003-I009) and
+the modules it coordinates.
+
+```mermaid
+flowchart LR
+    subgraph External Consumers
+    N8N[n8n] --- API2[Future REST API] --- CLI3[CLI] --- SCH[Future Scheduler]
+    end
+    External Consumers --> EIA{{External Invocation Adapter}}
+    EIA --> IR[InvocationRequest]
+    IR --> PO2{{Pipeline Orchestrator}}
+    PO2 --> PR2[PipelineResult]
+    PR2 --> EIA
+    EIA --> IRes[InvocationResponse]
+```
+
+All future entry points — n8n, a REST API, a scheduler, batch processing,
+a future GUI — are expected to call `createExternalInvocationAdapter(...).invoke(...)`,
+never the orchestrator directly. This milestone's CLI (below) is the first
+of those consumers, not a special case — exactly how DC-003-I009's CLI was
+the first orchestrator consumer, not a bypass of it.
+
+### InvocationRequest
+
+Has its own JSON Schema (`invocation-request.schema.json`), so its field
+names are snake_case, matching the schema directly:
+
+```
+{ request_id: string,
+  topic_package_reference: { file_path: string } | { data: object },
+  execution_options: object | null,
+  correlation_metadata: object | null }
+```
+
+- **`request_id`** is supplied by the caller — the adapter never generates
+  or overwrites it.
+- **`topic_package_reference`** must supply *exactly one* of `file_path` or
+  `data` (enforced by the schema's own `oneOf`, not adapter-side logic) —
+  the same two source shapes the Pipeline Orchestrator's own
+  `configuration.topicPackageSource` already accepts.
+- **`execution_options`** is validated (must be an object or `null`) but
+  deliberately minimal for DC-003-I010 — no field currently changes
+  execution behavior. Reserved for future growth, the same way
+  `finished-carousel.schema.json` sat with a schema-defined but unused
+  `approval` block from DC-003-I001 until a future milestone needs it.
+- **`correlation_metadata`** is opaque: any object, stored and echoed back
+  on the response completely unchanged, never interpreted or inspected by
+  the adapter.
+
+### Request validation
+
+`prepareInvocationRequest()` validates every inbound request against
+`invocation-request.schema.json` via the same DC-003-I002 validator every
+other schema-backed object uses. **Validation always completes — one way
+or the other — before any pipeline work begins**: a validation failure
+throws `InvocationRequestValidationError` immediately, inside `invoke()`'s
+own first `try`/`catch`, and the Pipeline Orchestrator's `run()` is never
+called (tested directly, with a stub orchestrator that would flag if it
+were). The failure is never re-thrown to the caller — `invoke()` always
+resolves to a structured, `rejected` `InvocationResponse` instead, and no
+internal exception (a stack trace, an Ajv internal, a raw error object)
+ever reaches it.
+
+### Request normalization (`src/invocation-normalizer.mjs`)
+
+A single, pure, validation-free function:
+`normalizeInvocationRequest(invocationRequest)` → `{ configuration: { topicPackageSource } }`
+— exactly the first argument `orchestrator.run()` expects. This is
+mechanical translation only (the same kind DC-003-I005's Payload Mapper
+and DC-003-I009's stages already do at their own boundaries), isolated
+into its own module specifically so **no normalization logic needs to
+live inside the orchestrator itself** — the orchestrator's `run()` was not
+touched by this milestone.
+
+### Adapter service
+
+```
+{ invoke(request, options): Promise<InvocationResponse> }
+```
+
+One public entry point. `createExternalInvocationAdapter({ orchestrator })`
+is bound to an already-built Pipeline Orchestrator (the caller wires up
+the Execution Ledger and orchestrator themselves — the adapter never
+constructs either, matching "it does not write to the Execution Ledger").
+`invoke()` never throws under normal operation: validation failures,
+pipeline failures, and even a genuinely unexpected orchestrator-level
+error (tested directly, via a stub orchestrator that throws) all resolve
+to a well-formed `InvocationResponse` — the same "the orchestrator is a
+safety net for a misbehaving stage" philosophy DC-003-I009 established,
+applied one layer up.
+
+### InvocationResponse
+
+```
+{ accepted: boolean,
+  request_id: string | null,
+  execution_id: string | null,
+  status: "completed" | "failed" | "rejected",
+  finished_carousel: object | null,
+  warnings: string[],
+  error: { code, message, retryable } | null,
+  correlation_metadata: object | null }
+```
+
+`accepted` and `status` are deliberately separate fields answering
+different questions: `accepted` is request-level ("was this well-formed
+enough to even attempt?"), `status` is execution-level ("how did it turn
+out?"). A rejected request is always `accepted: false, status: "rejected"`.
+An accepted request is always `accepted: true`, with `status` resolving to
+`"completed"` or `"failed"` once the (synchronous) pipeline run finishes.
+This separation is deliberate groundwork for a future asynchronous
+adapter — one that could return `accepted: true` immediately, before
+`status` has a terminal value — not an accidental extra field;
+DC-003-I010's own synchronous flow always resolves `status` before
+`invoke()` returns.
+
+`finished_carousel` is `PipelineResult.finishedCarousel`, passed through
+completely unchanged — it's already this platform's public,
+provider-independent contract (DC-003-I007), so no further translation
+happens at this boundary. No internal implementation detail leaks through
+anywhere else in this shape either.
+
+### Correlation model
+
+Two identifiers, always kept distinct, never substituted for one another:
+
+- **`request_id`** — external, caller-supplied, echoed back unchanged.
+- **`execution_id`** — internal, generated by the Pipeline Orchestrator
+  (DC-003-I009), `null` on the response only when `accepted` is `false`
+  (no execution ever started, so none was ever allocated).
+
+If a request is so malformed that even its own `request_id` can't be
+safely extracted (missing, blank, or the wrong type), the response's
+`request_id` is `null` rather than fabricating or echoing back an
+unusable raw value — tested directly, including the case where the caller
+sent a non-string `request_id`.
+
+### Error mapping (`src/invocation-errors.mjs`)
+
+`toSafeInvocationError()` normalizes any error — a genuine thrown
+exception, or an already-safe `{ stage, code, message, retryable }` object
+like `PipelineResult.error` — into exactly `{ code, message, retryable }`.
+This is a narrower allowlist than DC-003-I009's own
+`toSafeStageError()`: **`stage` is deliberately dropped** — an internal
+pipeline concept the external contract has no business exposing — leaving
+only what the DC-003-I010 brief explicitly allows: a safe error code, a
+safe message, and whether the failure is retryable. (`request_id`/
+`execution_id` are already present at the top level of every
+`InvocationResponse`, so they aren't duplicated inside `error` itself.)
+Forbidden and never present anywhere in this path: stack traces, raw
+provider responses, API keys, transport details, a raw `ValidationError`
+object, or an internal module name. Every DC-003 error class already
+constructs a safe message (see each module's own error file); this
+function only normalizes the shape, it never needs to re-sanitize content
+that's already clean.
+
+### Synchronous execution model
+
+Strictly synchronous — `invoke()` awaits the entire pipeline run before
+resolving. No polling, no callbacks, no asynchronous processing, exactly
+matching DC-003-I009's own sequential-only orchestrator underneath it. See
+"InvocationResponse" above for how the `accepted`/`status` field split
+already anticipates a future asynchronous adapter without this milestone
+needing to build one.
+
+### CLI (`tests/validation/invoke.mjs`, `npm run invoke`)
+
+```bash
+npm run invoke -- <invocationRequestJsonPath> <ledgerPath>
+```
+
+Builds a mock-only `JsonlLedgerStore` + `ExecutionLedger` + Pipeline
+Orchestrator (identical construction to `pipeline.mjs`'s own CLI), wraps
+it in an adapter, and invokes it against one raw `InvocationRequest` JSON
+file — no live provider interaction anywhere. Prints whether the request
+was accepted or rejected, `request_id`, `execution_id`, `status`,
+warnings, and either the resulting carousel's ID/status or the safe error
+code/message/retryable. Exits `0` only when `status` is `"completed"`.
+
+### Rendering in code
+
+```js
+import {
+  createJsonlLedgerStore,
+  createExecutionLedger,
+  createPipelineOrchestrator,
+  createExternalInvocationAdapter,
+} from "./src/index.mjs";
+
+const ledger = createExecutionLedger({ store: createJsonlLedgerStore({ filePath: "./execution.jsonl" }) });
+const orchestrator = createPipelineOrchestrator({ ledger });
+const adapter = createExternalInvocationAdapter({ orchestrator });
+
+const response = await adapter.invoke({
+  request_id: "n8n-exec-04821",
+  topic_package_reference: { file_path: "./topic.json" },
+  correlation_metadata: { workflow_name: "dc-003-daily-carousel" },
+});
+// response: { accepted, request_id, execution_id, status, finished_carousel,
+//             warnings, error, correlation_metadata } — immutable, schema-valid.
+```
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -1688,6 +1912,7 @@ npm run render:mock -- <path>  # CLI mock-render one Templated Payload file
 npm run build:carousel -- <path>  # CLI build one Finished Carousel end-to-end, offline
 npm run ledger -- <subcommand> ...  # CLI: init/append/read/reconstruct an Execution Ledger
 npm run pipeline -- <topicPackagePath> <ledgerPath>  # CLI: run the full orchestrated pipeline
+npm run invoke -- <invocationRequestPath> <ledgerPath>  # CLI: run one request through the External Invocation Adapter
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -1770,7 +1995,30 @@ type, a throwing stage still being caught safely, `PipelineConfigurationError`
 for a bad ledger or empty stage list, and byte-identical output across two
 separate runs given the same injected clock/ID generators); and CLI exit
 codes for success and failure, including that a failed run's ledger still
-records `execution.failed` correctly. Tests that need a
+records `execution.failed` correctly. From DC-003-I010: `prepareInvocationRequest()`
+(every field explicit, defaults, immutability, and
+`InvocationRequestValidationError` for a missing field, an unknown
+top-level field, and — proving the `oneOf` constraint — a
+`topic_package_reference` with both `file_path` and `data`, or neither);
+`normalizeInvocationRequest()`'s exact output shape;
+`createInvocationResponse()` (defaults, immutability, and
+`InvocationResponseValidationError` for an invalid `status`, a malformed
+`execution_id`, and an `error` object carrying a field outside its
+allowlist, e.g. a smuggled `stack`); the adapter end-to-end (a valid
+request producing a real `FinishedCarousel`; an invalid request rejected
+*without the orchestrator ever being called*, verified with a stub
+orchestrator that would flag it; `request_id` echoed as `null` rather than
+a fabricated or raw-but-invalid value; `request_id`/`execution_id` staying
+distinct on a successful response; `correlation_metadata` echoed unchanged
+on both accepted and rejected responses; a real pipeline failure — a
+missing Topic Package file — mapped to a safe error with no `stage` field
+and no internal detail; an orchestrator that throws still caught safely;
+warnings and a stage failure both carried through response mapping
+correctly; `PipelineConfigurationError` for a missing orchestrator; and
+identical `execution_id`s across two separate runs given the same
+injected clock/ID generator); and CLI exit codes for acceptance,
+rejection, and a real pipeline failure — no network, no live provider
+interaction anywhere. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
 small stub defined inline in the test file, the mock transport's
@@ -1818,16 +2066,19 @@ test ever sets `--live` or reaches the network.**
 | The ledger CLI's `init` subcommand targets a file that already exists | `LedgerFileExistsError` — never silently overwritten |
 | The orchestrator is given an invalid `ExecutionLedger` or an empty stage list | `PipelineConfigurationError`, thrown immediately at `createPipelineOrchestrator()` — a caller bug, not a failed run |
 | Any stage fails (a malformed input, a thrown error, an underlying module's own error) | Never a raw error — a safe `{ stage, code, message, retryable }` on `StageResult.error`/`PipelineResult.error`, and an `execution.failed` record with matching diagnostics |
+| An InvocationRequest fails schema validation (missing `request_id`, a `topic_package_reference` with both/neither of `file_path`/`data`, an unknown field) | Never invokes the orchestrator — a rejected `InvocationResponse` (`accepted: false, status: "rejected"`), never a thrown exception |
+| Any failure occurs after an InvocationRequest is accepted (a pipeline failure, or a genuine adapter/orchestrator-level error) | Never a raw error — a safe `{ code, message, retryable }` on `InvocationResponse.error` (narrower than `PipelineResult.error` — `stage` is deliberately dropped) |
+| The adapter is given an invalid Pipeline Orchestrator | `PipelineConfigurationError`, thrown immediately at `createExternalInvocationAdapter()` — a caller bug, not a failed invocation |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I009 all added no new dependencies:**
+**DC-003-I003 through DC-003-I010 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
 - **`ajv-formats`** — registers `format` keywords (`date-time`, `email`) that
-  the six schemas already declare; without it those formats are silently
+  the eight schemas already declare; without it those formats are silently
   unchecked. Required for Ajv's strict mode to accept the schemas as-is.
 
 No test framework was added — `node:test` and `node:assert/strict` (both
@@ -1850,7 +2101,9 @@ kind of dependency-free file I/O `topic-package-loader.mjs` (DC-003-I003)
 already established. The Pipeline Orchestrator needed nothing at all
 beyond what DC-003-I003 through DC-003-I008 already built — it has no
 dependencies of its own, only reusing every existing module's own public
-function.
+function. The External Invocation Adapter needed nothing new either — it
+depends only on the DC-003-I002 validator (for its own two schemas) and
+the DC-003-I009 orchestrator it's handed.
 
 ## Implementation status
 
@@ -1896,13 +2149,20 @@ function.
 | Declarative pipeline | Done (DC-003-I009) — `src/pipeline-definition.mjs`, `DEFAULT_PIPELINE` |
 | Pipeline Orchestrator (sequential execution engine) | Done (DC-003-I009) — `src/pipeline-orchestrator.mjs`; see "Pipeline Orchestrator" |
 | Pipeline Orchestrator CLI check | Done (DC-003-I009) — `npm run pipeline`, no live provider interaction |
-| Unit test suite | Done — 306 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009) |
+| InvocationRequest/InvocationResponse domain models + schemas | Done (DC-003-I010) — `src/invocation-request.mjs`, `src/invocation-response.mjs`; snake_case, match their own schemas directly |
+| Request normalizer | Done (DC-003-I010) — `src/invocation-normalizer.mjs`; isolated from the orchestrator, per the brief |
+| External Invocation Adapter | Done (DC-003-I010) — `src/invocation-adapter.mjs`; see "External Invocation Adapter" |
+| Safe error mapper (external boundary) | Done (DC-003-I010) — `src/invocation-errors.mjs`'s `toSafeInvocationError()`, narrower than the orchestrator's own `toSafeStageError()` |
+| External Invocation Adapter CLI check | Done (DC-003-I010) — `npm run invoke`, no network, no live provider interaction |
+| Unit test suite | Done — 349 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
-| n8n adapter | Not started — DC-003-I010 per the revised roadmap; n8n becomes one consumer of the Pipeline Orchestrator, not the orchestration layer itself |
-| HTTP API / scheduler entry points | Not started — DC-003-I009 established the orchestrator as the required entry point for both, once they exist |
-| Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — DC-003-I009 explicitly makes no retry-policy changes |
+| n8n workflow | Not started — DC-003-I010 established the External Invocation Adapter as the contract a future n8n integration would call; n8n itself is not built |
+| REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the adapter as the required entry point for all of them, once they exist |
+| Authentication (on the adapter or any future entry point) | Not started — explicitly out of scope for I010 |
+| Asynchronous execution | Not started — DC-003-I010 is strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
+| Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
 | Approval workflow | Not started — `approval` remains an all-default stub on every Finished Carousel Object DC-003-I007 builds, per DC-003-T002 §7 |
 
 Nothing above "Unit test suite" should require restructuring this

@@ -30,6 +30,8 @@ const REQUIRED_SCHEMA_VERSION_KEYS = [
   "finished_carousel",
   "execution_log",
   "execution_record",
+  "invocation_request",
+  "invocation_response",
 ];
 // Deliberately loose substring match — this is a safety net against obvious
 // mistakes (pasting a real key into config), not a secrets scanner.

@@ -23,6 +23,8 @@ const APPROVED_FIXTURES = [
   ["finishedCarousel", "finished-carousel.example.json"],
   ["executionLog", "execution-log.example.json"],
   ["executionRecord", "execution-record.example.json"],
+  ["invocationRequest", "invocation-request.example.json"],
+  ["invocationResponse", "invocation-response.example.json"],
 ];
 
 const validator = createValidator();

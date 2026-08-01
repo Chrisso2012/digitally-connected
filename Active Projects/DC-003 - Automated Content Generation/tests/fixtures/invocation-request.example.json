@@ -1,0 +1,11 @@
+{
+  "request_id": "n8n-exec-04821",
+  "topic_package_reference": {
+    "file_path": "tests/fixtures/topic-package.example.json"
+  },
+  "execution_options": null,
+  "correlation_metadata": {
+    "workflow_name": "dc-003-daily-carousel",
+    "triggered_by": "schedule"
+  }
+}

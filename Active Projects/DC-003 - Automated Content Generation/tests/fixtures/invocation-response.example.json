@@ -1,0 +1,93 @@
+{
+  "accepted": true,
+  "request_id": "n8n-exec-04821",
+  "execution_id": "exec_20260731_9f3a2e1c8b4d",
+  "status": "completed",
+  "finished_carousel": {
+    "carousel_id": "car_01J9X9C7",
+    "topic_id": "topic_01J9X8QZ3K",
+    "carousel_content_id": "cc_01J9X9A1",
+    "generated_at": "2026-07-31T02:11:04Z",
+    "overall_status": "completed",
+    "slides": [
+      {
+        "slide_number": 1, "slide_type": "cover",
+        "template_id": "748d17c5-c58e-48eb-9f12-434252a6d17f",
+        "render_id": "rnd_8f3a2e", "status": "completed",
+        "image_url": "https://cdn.templated.io/renders/8f3a2e.png",
+        "width": 1080, "height": 1350, "format": "png",
+        "render_started_at": "2026-07-31T02:11:06Z",
+        "render_completed_at": "2026-07-31T02:11:09Z",
+        "duration_ms": 3120, "error": null
+      },
+      {
+        "slide_number": 2, "slide_type": "content",
+        "template_id": "587e1163-b2e0-4cf5-9827-25922f5705bf",
+        "render_id": "rnd_1a2b3c", "status": "completed",
+        "image_url": "https://cdn.templated.io/renders/1a2b3c.png",
+        "width": 1080, "height": 1350, "format": "png",
+        "render_started_at": "2026-07-31T02:11:06Z",
+        "render_completed_at": "2026-07-31T02:11:10Z",
+        "duration_ms": 3480, "error": null
+      },
+      {
+        "slide_number": 3, "slide_type": "statistic",
+        "template_id": "1ce82c33-f1ec-41d6-bb76-e4010e07816b",
+        "render_id": "rnd_4d5e6f", "status": "completed",
+        "image_url": "https://cdn.templated.io/renders/4d5e6f.png",
+        "width": 1080, "height": 1350, "format": "png",
+        "render_started_at": "2026-07-31T02:11:06Z",
+        "render_completed_at": "2026-07-31T02:11:08Z",
+        "duration_ms": 2610, "error": null
+      },
+      {
+        "slide_number": 4, "slide_type": "quote",
+        "template_id": "5daf71d6-8aeb-4c8b-b542-27557057ed5a",
+        "render_id": "rnd_7g8h9i", "status": "completed",
+        "image_url": "https://cdn.templated.io/renders/7g8h9i.png",
+        "width": 1080, "height": 1350, "format": "png",
+        "render_started_at": "2026-07-31T02:11:06Z",
+        "render_completed_at": "2026-07-31T02:11:08Z",
+        "duration_ms": 2390, "error": null
+      },
+      {
+        "slide_number": 5, "slide_type": "infographic",
+        "template_id": "bb18c409-9c96-4430-98ed-5812519134b2",
+        "render_id": "rnd_2c9b41", "status": "completed",
+        "image_url": "https://cdn.templated.io/renders/2c9b41.png",
+        "width": 1080, "height": 1350, "format": "png",
+        "render_started_at": "2026-07-31T02:11:06Z",
+        "render_completed_at": "2026-07-31T02:11:12Z",
+        "duration_ms": 5920, "error": null
+      },
+      {
+        "slide_number": 6, "slide_type": "cta",
+        "template_id": "366ceefc-d9ea-4fbc-9ffc-eac8f978fa59",
+        "render_id": "rnd_3j4k5l", "status": "completed",
+        "image_url": "https://cdn.templated.io/renders/3j4k5l.png",
+        "width": 1080, "height": 1350, "format": "png",
+        "render_started_at": "2026-07-31T02:11:06Z",
+        "render_completed_at": "2026-07-31T02:11:09Z",
+        "duration_ms": 3050, "error": null
+      }
+    ],
+    "metadata": { "total_slides": 6, "completed_slides": 6, "failed_slides": 0, "total_duration_ms": 20570 },
+    "execution_metadata": {
+      "execution_id": "exec_20260731_9f3a2e1c8b4d",
+      "rendered_at": "2026-07-31T02:11:12Z",
+      "provider": "templated-http",
+      "render_duration_ms": 20570
+    },
+    "approval": {
+      "approved": false, "approved_by": null, "approved_at": null,
+      "rejected": false, "rejection_reason": null,
+      "published": false, "published_at": null
+    }
+  },
+  "warnings": [],
+  "error": null,
+  "correlation_metadata": {
+    "workflow_name": "dc-003-daily-carousel",
+    "triggered_by": "schedule"
+  }
+}

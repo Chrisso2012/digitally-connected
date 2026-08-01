@@ -1,6 +1,6 @@
 {
   "project_version": "0.1.0",
-  "foundation_status": "DC-003-I008 complete — foundation, config/schema loader, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer (live-verified), Finished Carousel Builder, and the Execution Ledger (operational audit layer). No orchestration or n8n workflow implemented.",
+  "foundation_status": "DC-003-I010 complete — foundation, config/schema loader, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer (live-verified), Finished Carousel Builder, the Execution Ledger (operational audit layer), the Pipeline Orchestrator (single execution engine), and the External Invocation Adapter (the platform's first external boundary). No n8n workflow implemented.",
   "design_system_version": "dc-002-v1",
   "template_registry_version": "1.0",
   "schema_versions": {
@@ -9,7 +9,9 @@
     "templated_payload": "1.0",
     "finished_carousel": "1.0",
     "execution_log": "1.0",
-    "execution_record": "1.0"
+    "execution_record": "1.0",
+    "invocation_request": "1.0",
+    "invocation_response": "1.0"
   },
   "prompt_version": "carousel-copy.v1"
 }

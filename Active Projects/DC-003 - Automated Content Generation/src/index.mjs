@@ -100,3 +100,14 @@ export {
 export { DEFAULT_PIPELINE } from "./pipeline-definition.mjs";
 export { createPipelineOrchestrator } from "./pipeline-orchestrator.mjs";
 export { PipelineConfigurationError, toSafeStageError } from "./pipeline-errors.mjs";
+
+// DC-003-I010 — External Invocation Adapter
+export { prepareInvocationRequest } from "./invocation-request.mjs";
+export { normalizeInvocationRequest } from "./invocation-normalizer.mjs";
+export { createInvocationResponse } from "./invocation-response.mjs";
+export { createExternalInvocationAdapter } from "./invocation-adapter.mjs";
+export {
+  InvocationRequestValidationError,
+  InvocationResponseValidationError,
+  toSafeInvocationError,
+} from "./invocation-errors.mjs";
