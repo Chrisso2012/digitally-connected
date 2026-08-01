@@ -18,10 +18,12 @@ DC-003-I009, the single execution engine coordinating every stage above
 the External Invocation Adapter added in DC-003-I010, the platform's first
 external boundary; see "External Invocation Adapter" below — and the n8n
 Adapter added in DC-003-I011, a thin translation layer between an n8n
-workflow and the External Invocation Adapter; see "n8n Adapter" below. No
-actual n8n workflow is installed or run anywhere in this repository —
-DC-003-I011 is the integration layer a real n8n instance would call, not
-n8n itself.
+workflow and the External Invocation Adapter; see "n8n Adapter" below —
+and the Production Workflow added in DC-003-I012, the first complete
+end-to-end demonstration composing every layer above into one runnable
+production execution; see "Production Workflow" below. No actual n8n
+workflow is installed or run anywhere in this repository — DC-003-I011 is
+the integration layer a real n8n instance would call, not n8n itself.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -105,7 +107,8 @@ DC-003 - Automated Content Generation/
 │   ├── invocation-errors.mjs         # DC-003-I010 — request/response validation errors, safe error mapper
 │   ├── n8n-workflow-mapper.mjs       # DC-003-I011 — workflow input -> InvocationRequest shape
 │   ├── n8n-response-mapper.mjs       # DC-003-I011 — InvocationResponse -> n8n output shape
-│   └── n8n-adapter.mjs               # DC-003-I011 — see "n8n Adapter"
+│   ├── n8n-adapter.mjs               # DC-003-I011 — see "n8n Adapter"
+│   └── production-workflow.mjs       # DC-003-I012 — see "Production Workflow"
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -122,7 +125,8 @@ DC-003 - Automated Content Generation/
 │       ├── ledger.mjs                # DC-003-I008 — init/append/read/reconstruct subcommands
 │       ├── pipeline.mjs              # DC-003-I009 — run the full orchestrated pipeline
 │       ├── invoke.mjs                # DC-003-I010 — run one external InvocationRequest through the adapter
-│       └── n8n-invoke.mjs            # DC-003-I011 — run one n8n-style workflow input through the n8n Adapter
+│       ├── n8n-invoke.mjs            # DC-003-I011 — run one n8n-style workflow input through the n8n Adapter
+│       └── production-workflow.mjs   # DC-003-I012 — full end-to-end production run + output persistence
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -2079,6 +2083,180 @@ const output = await n8nAdapter.invoke({
 //           platform objects exposed.
 ```
 
+## Production Workflow (`src/production-workflow.mjs`)
+
+DC-003-I012 is a **demonstration milestone, not a feature-expansion one**:
+it composes every layer built in DC-003-I001 through I011 into one
+runnable, end-to-end production execution, proving the architecture works
+as a cohesive system. **It introduces no new platform logic, no new
+orchestration, and no new abstractions** — per the Strategy Office's own
+framing, this is composition, not construction. No new error class was
+written for this milestone either: `PipelineConfigurationError` and
+`toSafeInvocationError()` (both unchanged, from earlier milestones) are
+reused as-is.
+
+```mermaid
+flowchart LR
+    WT[Workflow Trigger] --> N8NA2{{n8n Adapter}}
+    N8NA2 --> EIA3{{External Invocation Adapter}}
+    EIA3 --> PO4{{Pipeline Orchestrator}}
+    PO4 --> PP[Platform Pipeline]
+    PP --> FC4[Finished Carousel]
+    FC4 --> WO[Workflow Output]
+    WO --> WC[Workflow Complete]
+```
+
+### What "collecting the InvocationResponse" means here
+
+The workflow calls **only** the n8n Adapter — never the Invocation Adapter
+or Pipeline Orchestrator directly, matching the brief's own architecture
+diagram exactly. The object `n8nAdapter.invoke()` itself returns (the n8n
+Output shape from DC-003-I011: `{ success, executionId, requestId, status,
+finishedCarousel, warnings, error }`) is what this milestone treats as
+"the completed InvocationResponse" — the workflow deliberately does not
+bypass the n8n Adapter to reach the raw `InvocationResponse`'s own
+`accepted`/`correlation_metadata` fields, since "the n8n Adapter must not
+communicate directly with the Pipeline Orchestrator" extends to every
+caller above it, including this workflow.
+
+### Workflow lifecycle
+
+`createProductionWorkflow({ n8nAdapter })` is bound to an already-built
+n8n Adapter (the caller — typically a CLI — wires up the ledger,
+orchestrator, invocation adapter, and n8n adapter themselves; this module
+constructs none of them, matching every other adapter/orchestrator's
+dependency-injection pattern already established in this codebase).
+`run(workflowInput, options)`:
+
+1. Times its own single call to `n8nAdapter.invoke()` (the workflow's
+   *own* measurement of its *own* outermost operation — not platform
+   logic, the same pattern DC-003-I009 already uses for per-stage timing
+   and DC-003-I010 uses for `PipelineResult.duration`).
+2. Invokes the n8n Adapter exactly once.
+3. Assembles the workflow's own output and summary around the result.
+
+**Never throws** — even if `n8nAdapter.invoke()` itself throws
+unexpectedly (not expected in practice, since DC-003-I011's own adapter is
+already a safety net for this, but tested directly, matching the "assume
+nothing" discipline every layer in this platform already applies to
+itself), `run()` still resolves to a well-formed result.
+
+### Workflow inputs
+
+Identical to the n8n Adapter's own workflow input (DC-003-I011,
+unchanged) — this milestone introduces no new input shape:
+
+```
+{ requestId: string,
+  topicPackageFilePath?: string,
+  topicPackageData?: object,
+  executionOptions?: object,
+  correlationMetadata?: object }
+```
+
+**Input validation remains entirely within the platform** — the workflow
+does not re-check anything; a malformed input is rejected exactly as it
+already would be by the Invocation Adapter's own schema validation, one
+call away.
+
+### Workflow outputs
+
+`run()` returns:
+
+```
+{ invocationResponse: { success, executionId, requestId, status, finishedCarousel, warnings, error },
+  finishedCarousel: object | null,
+  executionId: string | null,
+  requestId: string | null,
+  summary: { status, executionId, requestId, durationMs, completedAt, warningCount, hasError } }
+```
+
+`finishedCarousel`/`executionId`/`requestId` are deliberately duplicated
+at the top level, alongside `invocationResponse` (where the exact same
+values already live nested) — the brief lists all of these as
+independent output items, and this small redundancy makes each one
+directly accessible to an operator or downstream consumer without needing
+to parse into `invocationResponse` first. **No internal platform object**
+(`PipelineContext`, a `StageResult`, a raw `ExecutionRecord`) ever appears
+in this output — only what the n8n Adapter's own already-public,
+already-safe contract already exposes.
+
+`persistWorkflowOutput(outputPath, workflowResult)` writes this result to
+disk as pretty-printed JSON — kept as a separate, explicit, side-effect-only
+function so `run()` itself stays pure and trivially testable without
+touching the filesystem (tested directly: `run()` performs no file I/O of
+its own).
+
+### Workflow summary
+
+```
+{ status: "completed" | "failed" | "rejected",
+  executionId: string | null,
+  requestId: string | null,
+  durationMs: number,
+  completedAt: string,
+  warningCount: number,
+  hasError: boolean }
+```
+
+Intended for workflow operators — a concise, glanceable execution report,
+never a substitute for the full `invocationResponse`/`finishedCarousel`
+detail alongside it.
+
+### Error handling
+
+Failures never throw to the caller — a rejected request, a failed
+pipeline run, or even a genuinely unexpected error from the n8n Adapter
+itself all resolve to a well-formed result with `summary.status` reflecting
+the outcome accurately. No provider details, credentials, or internal
+implementation detail leak through, because none did at any layer beneath
+this one — this workflow reuses, verbatim, whatever safe error shape the
+n8n Adapter already produced; it invents no new sanitization of its own
+(doing so would mean duplicating platform logic, exactly what this
+milestone is scoped not to do).
+
+### CLI (`tests/validation/production-workflow.mjs`, `npm run workflow`)
+
+```bash
+npm run workflow -- <workflowInputJsonPath> <ledgerPath> <outputJsonPath>
+```
+
+Composes the full stack (`JsonlLedgerStore` → `ExecutionLedger` →
+`PipelineOrchestrator` → `ExternalInvocationAdapter` → `n8nAdapter` →
+`ProductionWorkflow`) — identical construction to every earlier CLI in
+this codebase, just one layer higher — runs it once against a workflow
+input file, persists the full result to `<outputJsonPath>`, and prints the
+workflow summary. Mock-only, no production services, no network. Exits
+`0` only when `summary.status` is `"completed"`.
+
+### Rendering in code
+
+```js
+import {
+  createJsonlLedgerStore,
+  createExecutionLedger,
+  createPipelineOrchestrator,
+  createExternalInvocationAdapter,
+  createN8nAdapter,
+  createProductionWorkflow,
+  persistWorkflowOutput,
+} from "./src/index.mjs";
+
+const ledger = createExecutionLedger({ store: createJsonlLedgerStore({ filePath: "./execution.jsonl" }) });
+const orchestrator = createPipelineOrchestrator({ ledger });
+const invocationAdapter = createExternalInvocationAdapter({ orchestrator });
+const n8nAdapter = createN8nAdapter({ invocationAdapter });
+const workflow = createProductionWorkflow({ n8nAdapter });
+
+const result = await workflow.run({
+  requestId: "n8n-exec-04821",
+  topicPackageFilePath: "./topic.json",
+});
+persistWorkflowOutput("./workflow-output.json", result);
+// result.summary: { status, executionId, requestId, durationMs,
+//                    completedAt, warningCount, hasError }
+```
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -2097,6 +2275,7 @@ npm run ledger -- <subcommand> ...  # CLI: init/append/read/reconstruct an Execu
 npm run pipeline -- <topicPackagePath> <ledgerPath>  # CLI: run the full orchestrated pipeline
 npm run invoke -- <invocationRequestPath> <ledgerPath>  # CLI: run one request through the External Invocation Adapter
 npm run n8n -- <workflowInputPath> <ledgerPath>  # CLI: run one n8n-style workflow input through the n8n Adapter
+npm run workflow -- <workflowInputPath> <ledgerPath> <outputPath>  # CLI: run and persist one full production workflow
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -2219,7 +2398,19 @@ Adapter; a real pipeline failure mapped correctly; `requestId`/`executionId`
 staying distinct end-to-end; and identical `executionId`s across two
 separate runs given the same injected clock/ID generator); and CLI exit
 codes for success, invalid input, and a real pipeline failure — no
-network, no live provider interaction anywhere. Tests that need a
+network, no live provider interaction anywhere. From DC-003-I012: a
+complete successful run producing the documented result shape with a real,
+6-slide `FinishedCarousel`; the workflow summary containing exactly its
+seven documented fields, correct for both a successful and a failed run;
+a rejected (invalid input) and a real pipeline-failure invocation both
+reported safely; an n8n Adapter that throws unexpectedly still caught by
+the workflow (`requestId` still preserved on that fallback path);
+`PipelineConfigurationError` for a missing n8n Adapter; identical
+`executionId`/`completedAt` across two runs given the same injected
+clock/ID generator; `persistWorkflowOutput()` writing valid, complete JSON
+to disk; `run()` itself performing no file I/O of its own; and CLI exit
+codes for a complete run, a workflow failure, and rejected input — no
+network, no production services anywhere. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
 small stub defined inline in the test file, the mock transport's
@@ -2272,11 +2463,13 @@ test ever sets `--live` or reaches the network.**
 | The adapter is given an invalid Pipeline Orchestrator | `PipelineConfigurationError`, thrown immediately at `createExternalInvocationAdapter()` — a caller bug, not a failed invocation |
 | n8n workflow input is invalid (missing/ambiguous topic package reference, missing `requestId`, etc.) | Never a duplicate check in the n8n Adapter — the same rejected n8n output (`success: false, status: "rejected"`) the Invocation Adapter's own validation already produces |
 | The n8n Adapter is given an invalid External Invocation Adapter | `PipelineConfigurationError`, thrown immediately at `createN8nAdapter()` — a caller bug, not a failed invocation |
+| The Production Workflow is given an invalid n8n Adapter | `PipelineConfigurationError`, thrown immediately at `createProductionWorkflow()` — a caller bug, not a failed run |
+| The n8n Adapter throws unexpectedly during a workflow run | Never a raw error — caught by the workflow itself and mapped via the reused `toSafeInvocationError()`, same `{ code, message, retryable }` shape |
 
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I011 all added no new dependencies:**
+**DC-003-I003 through DC-003-I012 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -2309,6 +2502,10 @@ depends only on the DC-003-I002 validator (for its own two schemas) and
 the DC-003-I009 orchestrator it's handed. The n8n Adapter needed nothing
 at all — no n8n SDK, no HTTP client, not even a new error class: it's two
 pure mapping functions plus the External Invocation Adapter it's handed.
+The Production Workflow needed nothing either — `node:fs` `writeFileSync()`
+for output persistence (the same dependency-free file I/O every other CLI
+in this codebase already uses) and the n8n Adapter it's handed; no new
+error class, no new schema, no new abstraction.
 
 ## Implementation status
 
@@ -2364,14 +2561,18 @@ pure mapping functions plus the External Invocation Adapter it's handed.
 | n8n Adapter | Done (DC-003-I011) — `src/n8n-adapter.mjs`; see "n8n Adapter" |
 | n8n output mapping | Done (DC-003-I011) — `src/n8n-response-mapper.mjs`; `success` derived from `status === "completed"`, not `accepted` |
 | n8n Adapter CLI check | Done (DC-003-I011) — `npm run n8n`, no network, no live provider interaction |
-| Unit test suite | Done — 389 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011) |
+| Production Workflow (full end-to-end composition) | Done (DC-003-I012) — `src/production-workflow.mjs`; see "Production Workflow" |
+| Workflow output persistence | Done (DC-003-I012) — `persistWorkflowOutput()`, pretty-printed JSON to disk |
+| Workflow summary generation | Done (DC-003-I012) — status/executionId/requestId/duration/completedAt/warningCount/hasError |
+| Production Workflow CLI check | Done (DC-003-I012) — `npm run workflow`, no network, no production services |
+| Unit test suite | Done — 407 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
-| Actual n8n workflow (installed, running, calling this adapter) | Not started — DC-003-I011 built the integration layer; no n8n instance exists in this repository |
+| Actual n8n workflow (installed, running, calling this adapter) | Not started — DC-003-I011/I012 built and demonstrated the integration layer; no n8n instance exists in this repository |
 | REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
-| Authentication (on any adapter or future entry point) | Not started — explicitly out of scope for I010 and I011 |
-| Asynchronous execution | Not started — DC-003-I010/I011 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
+| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, and I012 |
+| Asynchronous execution | Not started — DC-003-I010/I011/I012 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
 | Approval workflow | Not started — `approval` remains an all-default stub on every Finished Carousel Object DC-003-I007 builds, per DC-003-T002 §7 |
 

@@ -116,3 +116,6 @@ export {
 export { mapWorkflowInputToInvocationRequest } from "./n8n-workflow-mapper.mjs";
 export { mapInvocationResponseToN8nOutput } from "./n8n-response-mapper.mjs";
 export { createN8nAdapter } from "./n8n-adapter.mjs";
+
+// DC-003-I012 — Production Workflow
+export { createProductionWorkflow, persistWorkflowOutput } from "./production-workflow.mjs";
