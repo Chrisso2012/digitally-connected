@@ -1617,6 +1617,39 @@ is still caught by the orchestrator (tested directly) — "no stage may
 terminate the entire pipeline directly" holds even for a misbehaving stage
 implementation, not just a well-behaved one reporting its own failure.
 
+### Lifecycle-record write failures (DC-003-I010.1)
+
+The `execution.started` append is the one lifecycle write with nothing
+earlier to catch it — every other append either happens inside the stage
+loop's own guarded path, or only after the pipeline is already known to
+have started successfully. **If that initial write itself fails (the
+Execution Ledger's store is unavailable), `run()` still returns a
+structured, failed `PipelineResult` — it never throws**, and no pipeline
+stage ever executes (tested directly, with a stage that would set a flag
+if it ran).
+
+The orchestrator **deliberately does not attempt a second append**
+(`execution.failed`) against a ledger that just failed to write — per the
+Ledger Failure Rule, that could repeat the same failure, obscure the
+original error, or recurse into more failed writes. There is no fallback
+store in this milestone; the failed `PipelineResult` is returned directly,
+preserving the `executionId` already allocated before the failure.
+
+The safe error on this path is built without ever reading `error.message`:
+a real store failure (e.g. `JsonlLedgerStore`'s `appendFileSync`) throws a
+raw Node `fs` error whose message embeds the file path — exactly the kind
+of internal storage detail the platform's safe-error discipline forbids
+everywhere else (see "Error mapping" and the diagnostics allowlist).
+`error.code`/`error.name` (short, safe, enum-like identifiers such as
+`"ENOENT"`) are surfaced; the message itself is always the fixed string
+`"Failed to record execution start in the Execution Ledger"`.
+
+This closes the one gap the External Invocation Adapter's own defensive
+`try`/`catch` around `orchestrator.run()` was already covering — the
+adapter's boundary is **retained, not removed**, as a second, independent
+layer of protection; layered protection doesn't get thinner just because
+the layer underneath was hardened.
+
 ### Sequential execution model
 
 Deliberately, intentionally sequential: stages run one at a time, in

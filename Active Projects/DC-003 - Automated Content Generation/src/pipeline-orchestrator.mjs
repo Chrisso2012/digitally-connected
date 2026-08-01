@@ -38,6 +38,15 @@
 // all injectable, exactly as DC-003-I008 already established for
 // ExecutionRecord/ExecutionLedger — no test in this milestone depends on
 // the real clock, a random UUID, or network access.
+//
+// Hardening (DC-003-I010.1): a failure while appending the initial
+// execution.started record — the one lifecycle write with no earlier
+// try/catch around it — now resolves to a failed PipelineResult instead of
+// throwing out of run(). No stage runs, no second (execution.failed)
+// append is attempted against the same failing ledger, and the safe error
+// never reads the raw error's .message (a real store failure's message can
+// embed a file path) — see the try/catch around the first append() call
+// below and README "Lifecycle-record write failures".
 
 import { generateExecutionId } from "./execution-metadata.mjs";
 import { createPipelineContext, withContext } from "./pipeline-context.mjs";
@@ -110,7 +119,40 @@ export function createPipelineOrchestrator({ ledger, stages = DEFAULT_PIPELINE }
       return ledger.appendRecord({ execution_id: executionId, sequence, ...partialFields }, { clock, idGenerator: recordIdGenerator });
     }
 
-    append({ event_type: "execution.started", status: "started", stage: null, source: "pipeline-orchestrator" });
+    // DC-003-I010.1 hardening: this initial lifecycle write is the one
+    // append() call in this function with no earlier guard around it — a
+    // failure here (the ledger/store is unavailable) must not escape as an
+    // uncaught exception, and no stage may ever run without a recorded
+    // execution.started.
+    try {
+      append({ event_type: "execution.started", status: "started", stage: null, source: "pipeline-orchestrator" });
+    } catch (error) {
+      // Per the Ledger Failure Rule: do NOT attempt a second append
+      // (execution.failed) against a ledger that just failed to write —
+      // that could repeat the same failure, obscure the original error, or
+      // recurse. No stage has run. Return the failed PipelineResult
+      // directly, preserving the already-allocated executionId.
+      //
+      // Deliberately not toSafeStageError(null, error) here: that would
+      // surface `error.message` as-is, and a real store failure (e.g.
+      // JsonlLedgerStore's appendFileSync) throws a raw Node fs error whose
+      // message embeds the file path — exactly what "no internal storage
+      // detail may leak" forbids. error.code/name are short, safe,
+      // enum-like identifiers (e.g. "ENOENT"); only those are surfaced.
+      return {
+        success: false,
+        executionId,
+        finishedCarousel: null,
+        warnings: [],
+        error: {
+          stage: null,
+          code: error?.code ?? error?.name ?? "UnknownError",
+          message: "Failed to record execution start in the Execution Ledger",
+          retryable: false,
+        },
+        duration: elapsedMs(runStartedAt, clock()),
+      };
+    }
 
     let context = createPipelineContext({ executionId, configuration: inputFields.configuration ?? null });
 

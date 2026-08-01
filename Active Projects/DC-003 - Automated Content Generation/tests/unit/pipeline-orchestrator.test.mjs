@@ -328,6 +328,121 @@ test("a real stage failure (missing topic package configuration) produces a fail
   assert.equal(result.error.code, "PipelineConfigurationError");
 });
 
+// --- Lifecycle write failure hardening (DC-003-I010.1) --------------------
+
+// A minimal Ledger Store stand-in whose appendRecord() throws on the very
+// first call, simulating an unavailable store (e.g. JsonlLedgerStore's
+// appendFileSync failing with a raw Node fs error) — reproduces the exact
+// pre-hardening escape path: the initial execution.started append, before
+// createPipelineContext() or any stage ever runs.
+function createFailingLedger(errorToThrow) {
+  let appendCallCount = 0;
+  return {
+    appendRecord() {
+      appendCallCount += 1;
+      throw errorToThrow ?? new Error("simulated ledger write failure");
+    },
+    readAll() {
+      return [];
+    },
+    getAppendCallCount: () => appendCallCount,
+  };
+}
+
+test("initial execution.started append failure returns a failed PipelineResult instead of throwing", async () => {
+  const failingLedger = createFailingLedger();
+  const orchestrator = createPipelineOrchestrator({ ledger: failingLedger, stages: [{ name: "stub", async execute() { return { success: true, updatedContext: {}, executionRecords: [], warnings: [], error: null }; } }] });
+
+  await assert.doesNotReject(async () => {
+    const result = await orchestrator.run({});
+    assert.equal(result.success, false);
+  });
+});
+
+test("no pipeline stage executes when the initial lifecycle write fails", async () => {
+  const failingLedger = createFailingLedger();
+  let stageRan = false;
+  const stageThatShouldNeverRun = {
+    name: "should-never-run",
+    async execute() {
+      stageRan = true;
+      return { success: true, updatedContext: {}, executionRecords: [], warnings: [], error: null };
+    },
+  };
+  const orchestrator = createPipelineOrchestrator({ ledger: failingLedger, stages: [stageThatShouldNeverRun] });
+  await orchestrator.run({});
+
+  assert.equal(stageRan, false);
+});
+
+test("the allocated executionId is preserved on the failed PipelineResult", async () => {
+  const failingLedger = createFailingLedger();
+  const orchestrator = createPipelineOrchestrator({ ledger: failingLedger, stages: [{ name: "stub", async execute() { return { success: true, updatedContext: {}, executionRecords: [], warnings: [], error: null }; } }] });
+  const { executionIdGenerator } = makeIdGenerators();
+
+  const result = await orchestrator.run({}, { clock: makeFixedClock(), executionIdGenerator });
+
+  assert.equal(result.executionId, "exec_20260801_fixedexecid01");
+});
+
+test("finishedCarousel is null and no second ledger append is attempted after the first append fails", async () => {
+  const failingLedger = createFailingLedger();
+  const orchestrator = createPipelineOrchestrator({ ledger: failingLedger, stages: [{ name: "stub", async execute() { return { success: true, updatedContext: {}, executionRecords: [], warnings: [], error: null }; } }] });
+
+  const result = await orchestrator.run({});
+
+  assert.equal(result.finishedCarousel, null);
+  assert.equal(failingLedger.getAppendCallCount(), 1, "execution.failed must never be appended to a ledger that just failed to write");
+});
+
+test("the error uses the existing safe PipelineResult.error shape, with only approved fields", async () => {
+  const failingLedger = createFailingLedger();
+  const orchestrator = createPipelineOrchestrator({ ledger: failingLedger, stages: [{ name: "stub", async execute() { return { success: true, updatedContext: {}, executionRecords: [], warnings: [], error: null }; } }] });
+
+  const result = await orchestrator.run({});
+
+  assert.deepEqual(Object.keys(result.error).sort(), ["code", "message", "retryable", "stage"]);
+  assert.equal(result.error.stage, null);
+  assert.equal(typeof result.error.code, "string");
+  assert.equal(typeof result.error.message, "string");
+  assert.equal(result.error.retryable, false);
+});
+
+test("no raw fs error detail (a file path) leaks through the safe error", async () => {
+  const rawFsError = new Error("ENOENT: no such file or directory, open 'C:\\secret\\path\\ledger.jsonl'");
+  rawFsError.code = "ENOENT";
+  const failingLedger = createFailingLedger(rawFsError);
+  const orchestrator = createPipelineOrchestrator({ ledger: failingLedger, stages: [{ name: "stub", async execute() { return { success: true, updatedContext: {}, executionRecords: [], warnings: [], error: null }; } }] });
+
+  const result = await orchestrator.run({});
+
+  assert.equal(result.error.code, "ENOENT");
+  assert.doesNotMatch(result.error.message, /secret/);
+  assert.doesNotMatch(result.error.message, /ledger\.jsonl/);
+  assert.doesNotMatch(JSON.stringify(result), /C:\\\\secret/);
+});
+
+test("a DuplicateSequenceError-style thrown error still maps safely via .code, not raw .message", async () => {
+  // Simulates the realistic case of a real ExecutionLedger reusing an
+  // executionId that already has records — DuplicateSequenceError itself
+  // is already a safe, structured error, but this path deliberately never
+  // reads .message from ANY error, safe or not, to keep exactly one
+  // code path here (see pipeline-orchestrator.mjs's own comment on why).
+  class FakeDuplicateSequenceError extends Error {
+    constructor() {
+      super('execution "exec_x": sequence 1 is not greater than the highest existing sequence (1)');
+      this.name = "DuplicateSequenceError";
+    }
+  }
+  const failingLedger = createFailingLedger(new FakeDuplicateSequenceError());
+  const orchestrator = createPipelineOrchestrator({ ledger: failingLedger, stages: [{ name: "stub", async execute() { return { success: true, updatedContext: {}, executionRecords: [], warnings: [], error: null }; } }] });
+
+  const result = await orchestrator.run({});
+
+  assert.equal(result.error.code, "DuplicateSequenceError");
+  assert.equal(result.error.message, "Failed to record execution start in the Execution Ledger");
+});
+
 // --- Configuration / preconditions -----------------------------------------
 
 test("createPipelineOrchestrator throws PipelineConfigurationError for a missing ledger", () => {
