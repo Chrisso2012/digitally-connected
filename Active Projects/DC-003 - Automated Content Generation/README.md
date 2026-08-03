@@ -25,13 +25,19 @@ production execution; see "Production Workflow" below — the n8n
 Workflow added in DC-003-I013, a real, manual-trigger, mock-only n8n
 workflow that invokes DC-003-I012's CLI unmodified against a real local
 n8n instance, exported to `workflows/`; see "n8n Workflow (DC-003-I013)"
-below — and the Carousel Approval Workflow added in DC-003-I014,
+below — the Carousel Approval Workflow added in DC-003-I014,
 implementing the `approval` block every Finished Carousel Object has
 carried as an all-default stub since DC-003-I007: pure domain logic for
 approving, rejecting, and publishing a Finished Carousel, with no
 persistence, no n8n integration, no API surface, no authentication, and
 no changes to the Execution Ledger; see "Carousel Approval Workflow"
-below.
+below — and the Finished Carousel Store added in DC-003-I015, this
+pipeline's first persistence layer: save/get/list/replace for validated
+Finished Carousel Objects against a local JSON storage directory, behind
+a storage-adapter abstraction the domain layer never bypasses — no
+database, no n8n integration, no API, no authentication, and (like
+DC-003-I014) no changes to the Execution Ledger; see "Finished Carousel
+Store" below.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -118,7 +124,11 @@ DC-003 - Automated Content Generation/
 │   ├── n8n-adapter.mjs               # DC-003-I011 — see "n8n Adapter"
 │   ├── production-workflow.mjs       # DC-003-I012 — see "Production Workflow"
 │   ├── carousel-approval.mjs         # DC-003-I014 — see "Carousel Approval Workflow"
-│   └── carousel-approval-errors.mjs  # DC-003-I014 — InvalidApprovalTransitionError, CarouselApprovalValidationError
+│   ├── carousel-approval-errors.mjs  # DC-003-I014 — InvalidApprovalTransitionError, CarouselApprovalValidationError
+│   ├── finished-carousel-store-adapter.mjs # DC-003-I015 — Storage Adapter shape + assertValidCarouselStoreAdapter
+│   ├── local-json-carousel-store-adapter.mjs # DC-003-I015 — the one Storage Adapter this milestone ships
+│   ├── finished-carousel-store.mjs   # DC-003-I015 — see "Finished Carousel Store"
+│   └── finished-carousel-store-errors.mjs # DC-003-I015 — structured persistence errors
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -137,7 +147,8 @@ DC-003 - Automated Content Generation/
 │       ├── invoke.mjs                # DC-003-I010 — run one external InvocationRequest through the adapter
 │       ├── n8n-invoke.mjs            # DC-003-I011 — run one n8n-style workflow input through the n8n Adapter
 │       ├── production-workflow.mjs   # DC-003-I012 — full end-to-end production run + output persistence
-│       └── approve-carousel.mjs      # DC-003-I014 — apply one approve/reject/publish decision
+│       ├── approve-carousel.mjs      # DC-003-I014 — apply one approve/reject/publish decision
+│       └── carousel-store.mjs        # DC-003-I015 — save/get/list/replace against local JSON storage
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -2484,6 +2495,182 @@ const published = publishCarousel({ finishedCarousel: approved });
 //                        published: true, published_at }
 ```
 
+## Finished Carousel Store
+
+DC-003-I015 is this pipeline's first persistence layer. Before this
+milestone, a generated (or approved) Finished Carousel only ever existed
+as whatever transient file a CLI happened to write to — `npm run
+build:carousel` doesn't write anything at all, `npm run workflow`/`npm run
+approve` only write where the caller explicitly points `--out`/an output
+path. I015 gives Finished Carousel Objects somewhere reliable to live
+between "generated" and "approved" and "published."
+
+### Architecture
+
+```mermaid
+flowchart LR
+    FC[Finished Carousel] --> Store[Finished Carousel Store]
+    Store --> Adapter[Storage Adapter]
+    Adapter --> Local[Local JSON Storage]
+```
+
+Two layers, mirroring DC-003-I008's Execution Ledger / Ledger Store split
+exactly:
+
+- **`src/finished-carousel-store.mjs`** — the domain layer. Owns every
+  business rule: schema validation on both write and read, duplicate
+  rejection, identifier-format safety, immutability, summary derivation.
+  **Never imports `node:fs`.** It only ever calls an injected Storage
+  Adapter.
+- **`src/finished-carousel-store-adapter.mjs`** — the adapter contract:
+  any object shaped `{ name, write(identifier, content), read(identifier),
+  list(), exists(identifier) }`, plus `assertValidCarouselStoreAdapter()`
+  so a malformed adapter fails immediately, not at the first `save()`.
+- **`src/local-json-carousel-store-adapter.mjs`** — the one adapter this
+  milestone ships: one JSON file per carousel, at
+  `<storageDir>/<carousel_id>.json`. A future adapter (SQLite, cloud
+  storage) plugs in by implementing the same shape — no change to
+  `finished-carousel-store.mjs`.
+
+The canonical identifier is `carousel_id`
+(`finished-carousel.schema.json`'s own `^car_[A-Za-z0-9]+$` field, already
+generated by `finished-carousel-builder.mjs` since DC-003-I007) — no
+second identifier was invented for this milestone, per the I015 brief's
+repository-evidence rule.
+
+### Store interface
+
+```
+save(finishedCarousel)               — persist a new, validated carousel
+get(identifier)                      — retrieve one, by carousel_id
+list()                               — safe summaries of every stored carousel
+replace({ identifier, finishedCarousel }) — update an existing stored carousel
+exists(identifier)                   — true/false, no read
+```
+
+**`save()`** validates the object against `finished-carousel.schema.json`,
+never mutates the caller's object, and throws `CarouselAlreadyExistsError`
+if a record already exists for that `carousel_id` — it never silently
+overwrites. Returns an immutable, deep-frozen copy of exactly what was
+stored.
+
+**`get()`** parses and validates the stored JSON before ever returning
+it — a corrupted or schema-invalid stored file is never silently
+accepted; it throws `CorruptedCarouselError` instead. Throws
+`CarouselNotFoundError` for an identifier with no stored record. Returns
+an immutable, deep-frozen object.
+
+**`list()`** returns safe summaries — `{ carousel_id, execution_id,
+topic_id, generated_at, overall_status, slide_count, approved, rejected,
+published }` — never full platform internals (`slides`,
+`execution_metadata`). Ordered deterministically by `carousel_id`
+ascending, since directory-listing order isn't guaranteed across
+platforms or filesystems. Validates every entry exactly as `get()` does —
+a single corrupted stored file fails the whole `list()` call, naming which
+identifier is corrupted, rather than silently skipping it.
+
+**`replace()`** is how a later DC-003-I014 approval/rejection/publication
+transition actually gets persisted — this store implements **no approval
+logic of its own**; it only ever persists whatever `approval` block the
+supplied object already carries. Legal only when: a record already exists
+for the target `identifier`; the supplied object's own `carousel_id`
+equals that `identifier` (otherwise `CarouselIdentifierMismatchError` —
+the defensive check against replacing the wrong record); the supplied
+object validates against the schema.
+
+**`exists()`** is a plain existence check — no read, no parse, no
+validation.
+
+### Atomicity
+
+```mermaid
+flowchart LR
+    W[write temporary file] --> V[validate completed write]
+    V --> R[rename into final location]
+```
+
+`local-json-carousel-store-adapter.mjs`'s `write()` writes to a temporary
+file in the same storage directory, reads it back to confirm the write
+round-tripped intact, then `renameSync`s it into its final location. A
+same-directory rename is atomic on both POSIX filesystems and Windows
+NTFS — the real path either doesn't exist yet, or exists complete; there
+is no window where a reader observes a partial file at the real path. A
+failed round-trip check deletes the temp file and never touches the real
+path, so a partial or truncated write can never replace a previously
+valid stored carousel.
+
+### Security
+
+- **Path traversal is blocked by construction, not denylist.** Every
+  identifier passed to `get()`/`exists()`/`replace()` is checked against
+  the schema's own `^car_[A-Za-z0-9]+$` pattern before the domain layer
+  ever calls into the adapter — no `/`, `\`, `.`, or whitespace can ever
+  pass, which is what actually rules out `../../etc/passwd`-style inputs
+  and absolute paths, not a list of "known-bad" substrings.
+  `save()`/`replace()` inputs are additionally schema-validated, which
+  independently enforces the same pattern on `carousel_id` itself.
+- **No host paths, no raw Node error messages, and no stack traces ever
+  reach an external-facing error message.** A raw adapter/filesystem
+  failure (permissions, disk full, an interrupted verification) is caught
+  and re-thrown as `CarouselPersistenceError`, naming only the carousel
+  identifier — the original error is attached as `.cause` for local
+  debugging only, never interpolated into `.message`.
+- **Corruption is never silently accepted.** Every stored file is parsed
+  and schema-validated on every read (`get()` and `list()` alike).
+
+### Error model (`src/finished-carousel-store-errors.mjs`)
+
+`InvalidCarouselStoreAdapterError`, `InvalidFinishedCarouselError` (schema
+validation failure on `save()`/`replace()` input), `InvalidCarouselIdentifierError`
+(malformed/path-traversal identifier), `CarouselAlreadyExistsError`,
+`CarouselNotFoundError`, `CarouselIdentifierMismatchError`,
+`CorruptedCarouselError` (a stored file fails to parse or fails schema
+validation), `CarouselPersistenceError` (a genuine adapter I/O failure).
+
+### CLI (`tests/validation/carousel-store.mjs`, `npm run store`)
+
+```bash
+npm run store -- save <finishedCarouselPath> <storeDirectory>
+npm run store -- get <identifier> <storeDirectory>
+npm run store -- list <storeDirectory>
+npm run store -- replace <finishedCarouselPath> <storeDirectory>
+```
+
+`storeDirectory` is always an explicit argument — this CLI, and
+`local-json-carousel-store-adapter.mjs` beneath it, never hardcode a
+machine-specific path or read one from an environment variable. `replace`
+takes a file path (like `save`) rather than a separate identifier
+argument; the CLI derives the target identifier from the loaded object's
+own `carousel_id`, so the two can never disagree through this CLI — the
+`CarouselIdentifierMismatchError` guard exists for programmatic callers of
+`finished-carousel-store.mjs` directly, where a caller could legitimately
+supply a target identifier from one source and an object from another.
+
+### Relationship to DC-003-I014
+
+I014 and I015 compose directly: approve/reject/publish a carousel with
+`npm run approve -- <path> <decision> --out=<path>`, then persist that
+transition with `npm run store -- replace <path> <storeDirectory>`. I015
+never calls into `carousel-approval.mjs`, and I014 never calls into this
+store — the two milestones only ever meet through the Finished Carousel
+Object itself, exactly as the I015 brief requires ("Do not implement
+approval logic inside the store").
+
+### Rendering in code
+
+```js
+import { createLocalJsonCarouselStoreAdapter, createFinishedCarouselStore } from "./src/index.mjs";
+
+const adapter = createLocalJsonCarouselStoreAdapter({ storageDir: "./output/finished-carousels" });
+const store = createFinishedCarouselStore({ adapter });
+
+const stored = store.save(finishedCarousel);
+const found = store.get(stored.carousel_id);
+const summaries = store.list();
+// summaries[0]: { carousel_id, execution_id, topic_id, generated_at,
+//                 overall_status, slide_count, approved, rejected, published }
+```
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -2795,15 +2982,20 @@ error class, no new schema, no new abstraction.
 | n8n Workflow (real n8n instance, manual trigger, Execute Command) | Done (DC-003-I013) — `workflows/dc003-i013-production-workflow.json`; see "n8n Workflow (DC-003-I013)"; verified mock-only execution, `summary.status: "completed"` |
 | Carousel Approval Workflow (approve/reject/publish state machine) | Done (DC-003-I014) — `src/carousel-approval.mjs`; see "Carousel Approval Workflow"; pure domain logic, no persistence, no n8n/API/auth, Execution Ledger untouched |
 | Approval CLI check | Done (DC-003-I014) — `npm run approve`, no network, no ledger writes |
-| Unit test suite | Done — 443 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
+| Finished Carousel Store (save/get/list/replace, local JSON) | Done (DC-003-I015) — `src/finished-carousel-store.mjs` + `src/local-json-carousel-store-adapter.mjs`; see "Finished Carousel Store"; domain layer never imports `node:fs`, atomic writes, path-traversal-safe, no approval logic, Execution Ledger untouched |
+| Storage Adapter abstraction | Done (DC-003-I015) — `src/finished-carousel-store-adapter.mjs`, `assertValidCarouselStoreAdapter()`; mirrors DC-003-I008's Ledger Store abstraction exactly |
+| Carousel Store CLI check | Done (DC-003-I015) — `npm run store`, no network, no ledger writes |
+| Unit test suite | Done — 496 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
-| Persistent storage / lookup of Finished Carousel Objects | Not started — explicitly out of scope for I014; each approval transition operates on a Finished Carousel Object the caller already has, with no store or lookup-by-ID |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |
 | n8n-driven approval step (Form Trigger, human-in-the-loop node) | Not started — DC-003-I014 built the domain logic an n8n approval step would call into, but no such n8n integration exists yet |
+| Database/cloud storage adapter for the Finished Carousel Store | Not started — explicitly out of scope for I015; the Storage Adapter abstraction supports one without changing `finished-carousel-store.mjs`, but none beyond the local JSON adapter has been built |
+| Concurrent multi-process locking on the Finished Carousel Store | Not started — explicitly out of scope for I015; atomic single-file writes are implemented, cross-process coordination is not |
+| Version history / retention policy for stored Finished Carousels | Not started — explicitly out of scope for I015; `replace()` overwrites in place, no prior version is retained |
 | REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
-| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, and I014 |
+| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, and I015 |
 | Asynchronous execution | Not started — DC-003-I010/I011/I012 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
 

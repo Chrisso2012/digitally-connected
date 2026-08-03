@@ -123,3 +123,18 @@ export { createProductionWorkflow, persistWorkflowOutput } from "./production-wo
 // DC-003-I014 — Carousel Approval Workflow
 export { approveCarousel, rejectCarousel, publishCarousel } from "./carousel-approval.mjs";
 export { InvalidApprovalTransitionError, CarouselApprovalValidationError } from "./carousel-approval-errors.mjs";
+
+// DC-003-I015 — Finished Carousel Store
+export { assertValidCarouselStoreAdapter } from "./finished-carousel-store-adapter.mjs";
+export { createLocalJsonCarouselStoreAdapter } from "./local-json-carousel-store-adapter.mjs";
+export { createFinishedCarouselStore } from "./finished-carousel-store.mjs";
+export {
+  InvalidCarouselStoreAdapterError,
+  InvalidFinishedCarouselError,
+  InvalidCarouselIdentifierError,
+  CarouselAlreadyExistsError,
+  CarouselNotFoundError,
+  CarouselIdentifierMismatchError,
+  CorruptedCarouselError,
+  CarouselPersistenceError,
+} from "./finished-carousel-store-errors.mjs";
