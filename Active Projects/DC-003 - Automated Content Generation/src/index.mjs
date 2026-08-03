@@ -119,3 +119,7 @@ export { createN8nAdapter } from "./n8n-adapter.mjs";
 
 // DC-003-I012 — Production Workflow
 export { createProductionWorkflow, persistWorkflowOutput } from "./production-workflow.mjs";
+
+// DC-003-I014 — Carousel Approval Workflow
+export { approveCarousel, rejectCarousel, publishCarousel } from "./carousel-approval.mjs";
+export { InvalidApprovalTransitionError, CarouselApprovalValidationError } from "./carousel-approval-errors.mjs";

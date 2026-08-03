@@ -2,7 +2,7 @@
   "name": "dc-003-content-factory",
   "version": "0.1.0",
   "private": true,
-  "description": "DC-003 Automated Content Generation — project foundation, config/schema loader, validation runtime, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer, Finished Carousel Builder, the Execution Ledger, the Pipeline Orchestrator, the External Invocation Adapter, the n8n Adapter, and the Production Workflow (a full end-to-end composition of every layer above). No actual n8n workflow is installed or run here — this is the integration layer a real n8n instance would call.",
+  "description": "DC-003 Automated Content Generation — project foundation, config/schema loader, validation runtime, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer, Finished Carousel Builder, the Execution Ledger, the Pipeline Orchestrator, the External Invocation Adapter, the n8n Adapter, the Production Workflow (a full end-to-end composition of every layer above), a real n8n workflow invoking it (DC-003-I013), and the Carousel Approval Workflow (DC-003-I014) — pure domain logic implementing approve/reject/publish on a Finished Carousel Object.",
   "type": "module",
   "scripts": {
     "validate": "node tests/validation/validate.mjs",
@@ -17,6 +17,7 @@
     "invoke": "node tests/validation/invoke.mjs",
     "n8n": "node tests/validation/n8n-invoke.mjs",
     "workflow": "node tests/validation/production-workflow.mjs",
+    "approve": "node tests/validation/approve-carousel.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

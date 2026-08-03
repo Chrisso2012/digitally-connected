@@ -21,10 +21,16 @@ Adapter added in DC-003-I011, a thin translation layer between an n8n
 workflow and the External Invocation Adapter; see "n8n Adapter" below —
 and the Production Workflow added in DC-003-I012, the first complete
 end-to-end demonstration composing every layer above into one runnable
-production execution; see "Production Workflow" below — and the n8n
+production execution; see "Production Workflow" below — the n8n
 Workflow added in DC-003-I013, a real, manual-trigger, mock-only n8n
 workflow that invokes DC-003-I012's CLI unmodified against a real local
 n8n instance, exported to `workflows/`; see "n8n Workflow (DC-003-I013)"
+below — and the Carousel Approval Workflow added in DC-003-I014,
+implementing the `approval` block every Finished Carousel Object has
+carried as an all-default stub since DC-003-I007: pure domain logic for
+approving, rejecting, and publishing a Finished Carousel, with no
+persistence, no n8n integration, no API surface, no authentication, and
+no changes to the Execution Ledger; see "Carousel Approval Workflow"
 below.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
@@ -110,7 +116,9 @@ DC-003 - Automated Content Generation/
 │   ├── n8n-workflow-mapper.mjs       # DC-003-I011 — workflow input -> InvocationRequest shape
 │   ├── n8n-response-mapper.mjs       # DC-003-I011 — InvocationResponse -> n8n output shape
 │   ├── n8n-adapter.mjs               # DC-003-I011 — see "n8n Adapter"
-│   └── production-workflow.mjs       # DC-003-I012 — see "Production Workflow"
+│   ├── production-workflow.mjs       # DC-003-I012 — see "Production Workflow"
+│   ├── carousel-approval.mjs         # DC-003-I014 — see "Carousel Approval Workflow"
+│   └── carousel-approval-errors.mjs  # DC-003-I014 — InvalidApprovalTransitionError, CarouselApprovalValidationError
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
@@ -128,7 +136,8 @@ DC-003 - Automated Content Generation/
 │       ├── pipeline.mjs              # DC-003-I009 — run the full orchestrated pipeline
 │       ├── invoke.mjs                # DC-003-I010 — run one external InvocationRequest through the adapter
 │       ├── n8n-invoke.mjs            # DC-003-I011 — run one n8n-style workflow input through the n8n Adapter
-│       └── production-workflow.mjs   # DC-003-I012 — full end-to-end production run + output persistence
+│       ├── production-workflow.mjs   # DC-003-I012 — full end-to-end production run + output persistence
+│       └── approve-carousel.mjs      # DC-003-I014 — apply one approve/reject/publish decision
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -2361,6 +2370,120 @@ there is nothing to redact. Re-importing this file into any n8n instance
 with the same `NODES_EXCLUDE` configuration and the same repo bind mount
 reproduces the workflow exactly.
 
+## Carousel Approval Workflow (`src/carousel-approval.mjs`)
+
+DC-003-I014 implements the `approval` block on the Finished Carousel
+Object that `finished-carousel.schema.json` has carried, and
+`finished-carousel-builder.mjs` has stubbed to all-defaults, since
+DC-003-I007:
+
+```json
+"approval": {
+  "description": "Reserved for future use — see DC-003-T002 §7."
+}
+```
+
+This milestone is **pure domain logic only**, per the approved I014
+brief — deliberately narrow:
+
+- **No persistent storage.** This module operates on a Finished Carousel
+  Object the caller already has in memory (or loads from a file, via the
+  CLI below) — exactly like every other stage in this pipeline. There is
+  no database, no carousel store, no lookup-by-ID. A caller that needs to
+  find a previously generated carousel to approve later must keep track of
+  it themselves; that's an explicit non-goal here, not an oversight.
+- **No n8n integration.** Nothing in `src/n8n-adapter.mjs` or the
+  DC-003-I013 workflow was touched. An n8n-driven approval step (a Form
+  Trigger, a human-in-the-loop node) is future integration work, once this
+  domain logic exists to call into.
+- **No REST/API surface, no authentication.** `approvedBy` is an opaque,
+  unverified string — this module trusts whatever identity string it's
+  given, matching the "no auth anywhere yet" status of every other module
+  in this codebase.
+- **No notifications.**
+- **The Execution Ledger (DC-003-I008) is deliberately untouched.**
+  Approval is intentionally a separate lifecycle from pipeline execution,
+  not an extension of it — no new ledger event types were added, no
+  existing ledger code was modified.
+
+### The three transitions
+
+```mermaid
+flowchart LR
+    G[Generated - all-default approval] -->|approveCarousel| A[Approved]
+    G -->|rejectCarousel| R[Rejected]
+    A -->|publishCarousel| P[Published]
+```
+
+- **`approveCarousel({ finishedCarousel, approvedBy })`** — sets
+  `approval.approved: true`, `approved_by`, `approved_at`. Illegal (throws
+  `InvalidApprovalTransitionError`) if the carousel is already approved or
+  already rejected, or if `approvedBy` is missing/blank.
+- **`rejectCarousel({ finishedCarousel, reason })`** — sets
+  `approval.rejected: true`, `rejection_reason`. Illegal if the carousel is
+  already rejected, already approved, or already published, or if `reason`
+  is missing/blank. There is no `rejected_by` field in
+  `finished-carousel.schema.json`, so this function accepts no
+  reviewer-identity argument — there is nowhere valid in the public
+  contract to put one.
+- **`publishCarousel({ finishedCarousel })`** — sets
+  `approval.published: true`, `published_at`. Illegal unless the carousel
+  is currently approved, or if it's rejected, or if it's already
+  published. Likewise no `published_by` field exists, so no identity
+  argument is accepted.
+
+**No "reset"/"un-approve"/"un-reject" transition exists.** This was an
+open question in the I014 brief and was deliberately left out of this
+milestone — a wrong decision is not silently overwritten; correcting one
+requires a new Finished Carousel Object from a fresh pipeline run, not a
+mutation of the rejected/approved one.
+
+### Immutability
+
+Every transition returns a **new**, independently deep-frozen Finished
+Carousel Object (`deepFreezeClone`, the same helper every other stage in
+this codebase uses) — the input object is never mutated, and the returned
+object rejects any attempted mutation at every level (top-level fields,
+the `approval` block, `slides`, and each individual slide). Every
+transition's output is re-validated against
+`finished-carousel.schema.json` before being returned; a transition that
+somehow produces a schema-invalid object throws
+`CarouselApprovalValidationError` rather than returning something
+malformed.
+
+### CLI (`tests/validation/approve-carousel.mjs`, `npm run approve`)
+
+```bash
+npm run approve -- <finishedCarouselJsonPath> approve --by=<name> [--out=<path>]
+npm run approve -- <finishedCarouselJsonPath> reject --reason=<text> [--out=<path>]
+npm run approve -- <finishedCarouselJsonPath> publish [--out=<path>]
+```
+
+Applies one decision to one Finished Carousel JSON file and prints the
+resulting `approval` block. Without `--out`, no file is written anywhere
+— matching every other demonstration CLI in this codebase that doesn't
+persist by default (`build-finished-carousel.mjs`, `render-payload.mjs`).
+When `--out` is given, the updated object is written there as
+pretty-printed JSON, purely as a convenience for chaining decisions (e.g.
+approve, then publish the result) — this is not a persistence layer; the
+caller chooses the path, and nothing about this module tracks or looks up
+files on its own.
+
+### Rendering in code
+
+```js
+import { approveCarousel, rejectCarousel, publishCarousel } from "./src/index.mjs";
+
+const approved = approveCarousel({
+  finishedCarousel,
+  approvedBy: "chris@digitallyconnected.net",
+});
+const published = publishCarousel({ finishedCarousel: approved });
+// published.approval: { approved: true, approved_by, approved_at,
+//                        rejected: false, rejection_reason: null,
+//                        published: true, published_at }
+```
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -2670,16 +2793,19 @@ error class, no new schema, no new abstraction.
 | Workflow summary generation | Done (DC-003-I012) — status/executionId/requestId/duration/completedAt/warningCount/hasError |
 | Production Workflow CLI check | Done (DC-003-I012) — `npm run workflow`, no network, no production services |
 | n8n Workflow (real n8n instance, manual trigger, Execute Command) | Done (DC-003-I013) — `workflows/dc003-i013-production-workflow.json`; see "n8n Workflow (DC-003-I013)"; verified mock-only execution, `summary.status: "completed"` |
-| Unit test suite | Done — 407 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
+| Carousel Approval Workflow (approve/reject/publish state machine) | Done (DC-003-I014) — `src/carousel-approval.mjs`; see "Carousel Approval Workflow"; pure domain logic, no persistence, no n8n/API/auth, Execution Ledger untouched |
+| Approval CLI check | Done (DC-003-I014) — `npm run approve`, no network, no ledger writes |
+| Unit test suite | Done — 443 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
-| Actual n8n workflow (installed, running, calling this adapter) | Not started — DC-003-I011/I012 built and demonstrated the integration layer; no n8n instance exists in this repository |
+| Persistent storage / lookup of Finished Carousel Objects | Not started — explicitly out of scope for I014; each approval transition operates on a Finished Carousel Object the caller already has, with no store or lookup-by-ID |
+| Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |
+| n8n-driven approval step (Form Trigger, human-in-the-loop node) | Not started — DC-003-I014 built the domain logic an n8n approval step would call into, but no such n8n integration exists yet |
 | REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
-| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, and I012 |
+| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, and I014 |
 | Asynchronous execution | Not started — DC-003-I010/I011/I012 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
-| Approval workflow | Not started — `approval` remains an all-default stub on every Finished Carousel Object DC-003-I007 builds, per DC-003-T002 §7 |
 
 Nothing above "Unit test suite" should require restructuring this
 foundation — it should only add to it.
