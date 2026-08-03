@@ -93,7 +93,9 @@ function summarize(carousel) {
  * options.validator — inject a pre-built validator (used by tests).
  * options.rootDir — passed through when no validator is injected.
  *
- * Returns { save, get, list, replace, exists }.
+ * Returns { name, save, get, list, replace, exists } — `name` is the
+ * underlying adapter's own name, exposed for building safe storage
+ * references (see DC-003-I016).
  */
 export function createFinishedCarouselStore({ adapter } = {}, options = {}) {
   assertValidCarouselStoreAdapter(adapter);
@@ -278,5 +280,9 @@ export function createFinishedCarouselStore({ adapter } = {}, options = {}) {
     return deepFreezeClone(finishedCarousel);
   }
 
-  return { save, get, list, replace, exists };
+  // Exposed so a caller (e.g. DC-003-I016's Content Request Service) can
+  // build a safe, non-path storage reference like
+  // `${store.name}:${carouselId}` without ever touching the adapter or a
+  // filesystem path directly.
+  return { name: adapter.name, save, get, list, replace, exists };
 }

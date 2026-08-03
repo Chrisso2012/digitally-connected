@@ -138,3 +138,20 @@ export {
   CorruptedCarouselError,
   CarouselPersistenceError,
 } from "./finished-carousel-store-errors.mjs";
+
+// DC-003-I016 — Content Request Command
+export { createContentRequest } from "./content-request.mjs";
+export { parseContentRequestCommand } from "./content-request-parser.mjs";
+export { resolveSource } from "./content-request-source-resolver.mjs";
+export { mapContentRequestToProductionWorkflowInput } from "./content-request-workflow-mapper.mjs";
+export { executeContentRequest } from "./content-request-service.mjs";
+export {
+  AmbiguousContentRequestError,
+  UnsupportedDesignCountError,
+  ContentRequestValidationError,
+  UnknownSourceReferenceError,
+  SourceResolutionError,
+  ContentRequestProductionFailedError,
+  ContentRequestPersistenceFailedError,
+  DuplicateStoredCarouselError,
+} from "./content-request-errors.mjs";

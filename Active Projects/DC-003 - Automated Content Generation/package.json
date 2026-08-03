@@ -2,7 +2,7 @@
   "name": "dc-003-content-factory",
   "version": "0.1.0",
   "private": true,
-  "description": "DC-003 Automated Content Generation — project foundation, config/schema loader, validation runtime, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer, Finished Carousel Builder, the Execution Ledger, the Pipeline Orchestrator, the External Invocation Adapter, the n8n Adapter, the Production Workflow (a full end-to-end composition of every layer above), a real n8n workflow invoking it (DC-003-I013), the Carousel Approval Workflow (DC-003-I014), and the Finished Carousel Store (DC-003-I015) — local JSON persistence for validated Finished Carousel Objects, independent of the domain and approval layers.",
+  "description": "DC-003 Automated Content Generation — project foundation, config/schema loader, validation runtime, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer, Finished Carousel Builder, the Execution Ledger, the Pipeline Orchestrator, the External Invocation Adapter, the n8n Adapter, the Production Workflow (a full end-to-end composition of every layer above), a real n8n workflow invoking it (DC-003-I013), the Carousel Approval Workflow (DC-003-I014), the Finished Carousel Store (DC-003-I015), and the Content Request Command (DC-003-I016) — the first user-facing command, composing all of the above into one narrow, deterministic \"create N designs from source\" request.",
   "type": "module",
   "scripts": {
     "validate": "node tests/validation/validate.mjs",
@@ -19,6 +19,7 @@
     "workflow": "node tests/validation/production-workflow.mjs",
     "approve": "node tests/validation/approve-carousel.mjs",
     "store": "node tests/validation/carousel-store.mjs",
+    "content:request": "node tests/validation/content-request.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

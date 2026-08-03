@@ -31,13 +31,21 @@ carried as an all-default stub since DC-003-I007: pure domain logic for
 approving, rejecting, and publishing a Finished Carousel, with no
 persistence, no n8n integration, no API surface, no authentication, and
 no changes to the Execution Ledger; see "Carousel Approval Workflow"
-below — and the Finished Carousel Store added in DC-003-I015, this
+below — the Finished Carousel Store added in DC-003-I015, this
 pipeline's first persistence layer: save/get/list/replace for validated
 Finished Carousel Objects against a local JSON storage directory, behind
 a storage-adapter abstraction the domain layer never bypasses — no
 database, no n8n integration, no API, no authentication, and (like
 DC-003-I014) no changes to the Execution Ledger; see "Finished Carousel
-Store" below.
+Store" below — and the Content Request Command added in DC-003-I016,
+the platform's first user-facing command: one narrow, deterministic
+request ("Create 6 designs based on article GS01") that composes the
+Source Resolver, the unmodified DC-003-I012 Production Workflow, and the
+unmodified DC-003-I015 Finished Carousel Store into a single reliable
+"content request in, stored six-slide carousel out" operation — no
+general-purpose language understanding, no new generation/orchestration/
+rendering/approval/persistence logic of its own; see "Content Request
+Command" below.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -128,11 +136,18 @@ DC-003 - Automated Content Generation/
 │   ├── finished-carousel-store-adapter.mjs # DC-003-I015 — Storage Adapter shape + assertValidCarouselStoreAdapter
 │   ├── local-json-carousel-store-adapter.mjs # DC-003-I015 — the one Storage Adapter this milestone ships
 │   ├── finished-carousel-store.mjs   # DC-003-I015 — see "Finished Carousel Store"
-│   └── finished-carousel-store-errors.mjs # DC-003-I015 — structured persistence errors
+│   ├── finished-carousel-store-errors.mjs # DC-003-I015 — structured persistence errors
+│   ├── content-request-parser.mjs    # DC-003-I016 — narrow command string -> structured request
+│   ├── content-request.mjs           # DC-003-I016 — immutable Content Request domain object
+│   ├── content-request-source-resolver.mjs # DC-003-I016 — sourceReference -> approved Topic Package
+│   ├── content-request-workflow-mapper.mjs  # DC-003-I016 — Content Request -> I012 workflow input
+│   ├── content-request-service.mjs   # DC-003-I016 — see "Content Request Command"
+│   └── content-request-errors.mjs    # DC-003-I016 — structured Content Request errors
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
-│   │   ├── topic-packages/           # DC-003-I003 — readiness/failure-mode fixtures, test-only
+│   │   ├── topic-packages/           # DC-003-I003 — readiness/failure-mode fixtures, test-only;
+│   │   │                             #   also holds DC-003-I016's approved GS01 stand-in fixture
 │   │   └── carousel-content/         # DC-003-I005 — mapper failure-mode fixtures, test-only
 │   ├── unit/                        # node:test suite, see "Running tests"
 │   └── validation/
@@ -148,7 +163,8 @@ DC-003 - Automated Content Generation/
 │       ├── n8n-invoke.mjs            # DC-003-I011 — run one n8n-style workflow input through the n8n Adapter
 │       ├── production-workflow.mjs   # DC-003-I012 — full end-to-end production run + output persistence
 │       ├── approve-carousel.mjs      # DC-003-I014 — apply one approve/reject/publish decision
-│       └── carousel-store.mjs        # DC-003-I015 — save/get/list/replace against local JSON storage
+│       ├── carousel-store.mjs        # DC-003-I015 — save/get/list/replace against local JSON storage
+│       └── content-request.mjs       # DC-003-I016 — see "Content Request Command"
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -217,13 +233,15 @@ carried forward as reviewable config, exactly as DC-003-T001 §7 intended.
 
 ## Schemas
 
-Eight [JSON Schema](https://json-schema.org/) (2020-12) documents in
+Nine [JSON Schema](https://json-schema.org/) (2020-12) documents in
 `schemas/` — the five objects defined in DC-003-T002, plus
 `execution-record.schema.json` (DC-003-I008's own schema for the
-Execution Ledger's operational event model) and
+Execution Ledger's operational event model),
 `invocation-request.schema.json`/`invocation-response.schema.json`
 (DC-003-I010's own schema pair for the External Invocation Adapter's
-public contract) — none of the three part of the original T002 five. One
+public contract), and `content-request.schema.json` (DC-003-I016's own
+schema for the Content Request Command's domain object) — none of the
+four part of the original T002 five. One
 of the original five, `execution-log.schema.json`, is now formally
 **deprecated** — see "`execution-log.schema.json` — deprecated" under
 "Operational layer" below for the DC-003-I008.1 reconciliation findings
@@ -2671,6 +2689,217 @@ const summaries = store.list();
 //                 overall_status, slide_count, approved, rejected, published }
 ```
 
+## Content Request Command
+
+DC-003-I016 is the platform's first user-facing command — everything
+before it was a `src/` module or a demonstration CLI aimed at a
+developer, not a request shaped the way an actual operator would type
+one. I016 introduces no new generation, orchestration, rendering,
+approval, or persistence logic: it composes DC-003-I003's
+`loadTopicPackage()`, DC-003-I012's unmodified Production Workflow, and
+DC-003-I015's unmodified Finished Carousel Store into one narrow,
+deterministic command.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    UR[User Content Request] --> P[Content Request Parser]
+    P --> SR[Source Resolver]
+    SR --> PW[I012 Production Workflow]
+    PW --> FC[Finished Carousel]
+    FC --> ST[I015 Finished Carousel Store]
+    ST --> RES[Content Request Result]
+```
+
+### Supported command syntax
+
+I016 supports exactly one deterministic request shape — deliberately not
+general-purpose natural-language understanding:
+
+```
+Create 6 designs based on article GS01
+```
+
+Conceptually: `{ action: "create", designCount: 6, sourceType: "article",
+sourceReference: "GS01" }`. `parseContentRequestCommand()`
+(`src/content-request-parser.mjs`) is case-insensitive on the command's
+own words but captures the source reference verbatim (`"GS01"`, not
+`"gs01"`). Any other phrasing — reordered words, a different verb, a
+missing design count, a source type other than `article` — is rejected
+as `AmbiguousContentRequestError` rather than guessed at. `executeContentRequest()`
+also accepts an already-structured request object directly (the same
+shape the parser produces), bypassing the parser entirely — useful for a
+future caller that already has structured input (a form, an API) rather
+than a raw string.
+
+### The six-design constraint
+
+`design_count = 6` is the only value `content-request.schema.json`'s own
+enum allows, and `executeContentRequest()` checks it explicitly before
+that schema is ever consulted, throwing the more specific
+`UnsupportedDesignCountError` — matching this platform's fixed six-slide
+carousel contract (`config/constants.json`'s `slide_count`) end to end.
+An unsupported count is rejected outright; nothing is truncated,
+duplicated, or reshaped to fit.
+
+### Source resolution
+
+**Repository-evidence finding, checked before writing this module:**
+Topic Packages have no ID-based lookup or registry anywhere in this
+codebase — `loadTopicPackage()` (DC-003-I003, unchanged) only ever loads
+by an explicit file path. `topic-package.schema.json`'s own
+`backlog_reference_id` field (present since DC-003-I001, always `null` in
+every fixture until this milestone) is the one field already designed
+for linking a Topic Package back to an external source. No second
+article registry or identifier format was invented.
+
+`resolveSource()` (`src/content-request-source-resolver.mjs`) scans an
+explicit, injectable `topicPackagesDir` (never hardcoded, matching
+DC-003-I015's storage-directory convention) for Topic Package JSON files,
+loads each via `loadTopicPackage()` unchanged, and matches on
+`backlog_reference_id === sourceReference`. A file that fails to load,
+fails schema validation, or fails readiness (e.g. `status: "draft"`) is
+skipped as a non-match, not treated as a resolver error — a real source
+directory legitimately mixes ready and not-ready Topic Packages. Zero
+matches throws `UnknownSourceReferenceError`; more than one match throws
+`SourceResolutionError` (ambiguous — refuses to guess which was meant).
+
+**Current limitation, reported per the I016 brief's own instruction:**
+`GS01` does not exist anywhere in this repository as a real source.
+`tests/fixtures/topic-packages/backlog-gs01.approved.json` is an
+approved fixture Topic Package standing in for it (`source: "backlog"`,
+`backlog_reference_id: "GS01"`), used both by this milestone's own tests
+and as the CLI's default `topicPackagesDir`. **A real article/source
+registry — where `GS01` and similar references would actually come from
+— is an unresolved operational dependency, not something this milestone
+builds.** Pass an explicit third CLI argument to resolve against a real
+directory once one exists.
+
+### The service (`src/content-request-service.mjs`)
+
+`executeContentRequest(request, dependencies)`:
+
+1. Validate the request (parse if a string; six-design check;
+   schema-backstop validation) — **throws immediately** on failure
+   (`AmbiguousContentRequestError`, `UnsupportedDesignCountError`,
+   `ContentRequestValidationError`). These are caller/input problems,
+   rejected before anything downstream ever runs.
+2. Resolve the source.
+3. Map the request onto DC-003-I012's own workflow input shape
+   (`{ requestId, topicPackageData }` — the Content Request's own
+   `request_id` becomes the workflow's `requestId`, so one identifier
+   flows through the whole execution end to end).
+4. Invoke the Production Workflow.
+5. Confirm a completed, successful result.
+6. Persist the Finished Carousel via the Finished Carousel Store — only
+   after a confirmed successful completion; never for a partial or failed
+   one.
+7. Return a safe Content Request Result.
+
+**From step 2 onward, this function never throws** — matching DC-003-I012's
+own Production Workflow "never throws" contract exactly. An unknown
+source, a production failure, a persistence failure, or a duplicate
+carousel all resolve to a Content Request Result with `success: false`
+and a safe `error`, never an uncaught exception.
+
+`dependencies.productionWorkflow` and `dependencies.carouselStore` are
+both required, already-constructed objects (the return values of
+DC-003-I012's `createProductionWorkflow()` and DC-003-I015's
+`createFinishedCarouselStore()`) — this service never builds the
+ledger/orchestrator/adapter stack beneath the former, or the
+adapter beneath the latter, itself; the caller wires up the real thing,
+exactly like every CLI in this repository already does for its own
+layer. `dependencies.now`/`dependencies.idGenerator` are both injectable,
+for deterministic tests — request identity (see below) never depends on
+real wall-clock time or randomness in a test.
+
+### Request identity
+
+The Content Request's own `request_id` (`req_<random>`, generated
+independently by `createContentRequest()`) is never the same value as
+`executionId`, `carouselId`, or `sourceReference` — three entirely
+separate identifier namespaces, generated by three entirely separate
+mechanisms. (It *does* deliberately become the Production Workflow's own
+`requestId` — that's the same identifier flowing through one execution,
+not the "reuse" the brief prohibits.)
+
+### Content Request Result
+
+```
+{ success: boolean,
+  requestId: string,
+  sourceReference: string,
+  executionId: string | null,
+  carouselId: string | null,
+  status: "completed" | "failed" | "rejected",
+  stored: boolean,
+  storeReference: string | null,
+  warnings: string[],
+  error: { code, message } | null }
+```
+
+`success` is `true` only when production completed **and** the result
+was actually stored — a caller checking one field gets the honest,
+complete picture. `storeReference` is never a filesystem path — it's
+`${carouselStore.name}:${carouselId}` (e.g.
+`"local-json-carousel-store:car_abc123"`), built from the Storage
+Adapter's own name (DC-003-I015 was extended, backward-compatibly, to
+expose it) rather than any host path. Nothing internal ever appears here:
+no `PipelineContext`, no raw provider response, no credential, no stack
+trace, no host filesystem path — every `error` is a plain `{ code,
+message }`, sourced from error shapes that were already safe at the
+layer that produced them (DC-003-I010's `toSafeInvocationError()`,
+DC-003-I015's own already-path-free error messages).
+
+### Persistence behaviour
+
+On a successful, completed production execution, `save()` (DC-003-I015,
+unchanged) is called exactly once. If a record already exists for that
+`carousel_id` — genuinely rare in practice, since DC-003-I007's builder
+assigns a fresh random `carousel_id` on every real run, but defended
+against anyway — `save()`'s own `CarouselAlreadyExistsError` is mapped to
+`DuplicateStoredCarouselError`; the request reports `stored: false` and
+`success: false`, but `executionId`/`carouselId`/`status` still reflect
+that production genuinely completed. **A failed or rejected production
+execution never reaches `save()` at all** — nothing is ever persisted for
+a partial or failed carousel.
+
+### CLI (`tests/validation/content-request.mjs`, `npm run content:request`)
+
+```bash
+npm run content:request -- "Create 6 designs based on article GS01" <storeDirectory> [topicPackagesDir]
+```
+
+`storeDirectory` is required, exactly like `npm run store`.
+`topicPackagesDir` is optional, defaulting to
+`tests/fixtures/topic-packages/` — the approved-fixture stand-in
+described above. The CLI builds the same
+ledger→orchestrator→invocation-adapter→n8n-adapter→production-workflow
+stack every other production-path CLI in this repository already builds,
+using an in-memory Ledger Store scoped to that one invocation (the
+Execution Ledger's durable audit trail is a separate DC-003-I008 concern
+this narrow command doesn't expose or manage). No live Templated call —
+mock rendering only, the same default every other CLI in this codebase
+uses.
+
+### Current limitations
+
+- No general-purpose natural-language understanding — one command shape
+  only.
+- No multiple request types, batch requests, or scheduling.
+- No publishing or approval UI — DC-003-I014's approve/reject/publish
+  functions exist and are reachable separately, but this command doesn't
+  call them.
+- No REST API, no authentication, no n8n workflow changes, no article
+  authoring/ingestion tooling.
+- No real LLM-provider integration or live Templated rendering — mock
+  only, matching every prior milestone's own default.
+- No duplicate-overwrite or versioning — a genuine duplicate is rejected,
+  never silently replaced.
+- **No real article/source registry** — `GS01` is a fixture stand-in; see
+  "Source resolution" above.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -2883,12 +3112,12 @@ test ever sets `--live` or reaches the network.**
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I012 all added no new dependencies:**
+**DC-003-I003 through DC-003-I016 all added no new dependencies:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
 - **`ajv-formats`** — registers `format` keywords (`date-time`, `email`) that
-  the eight schemas already declare; without it those formats are silently
+  the nine schemas already declare; without it those formats are silently
   unchecked. Required for Ajv's strict mode to accept the schemas as-is.
 
 No test framework was added — `node:test` and `node:assert/strict` (both
@@ -2985,7 +3214,10 @@ error class, no new schema, no new abstraction.
 | Finished Carousel Store (save/get/list/replace, local JSON) | Done (DC-003-I015) — `src/finished-carousel-store.mjs` + `src/local-json-carousel-store-adapter.mjs`; see "Finished Carousel Store"; domain layer never imports `node:fs`, atomic writes, path-traversal-safe, no approval logic, Execution Ledger untouched |
 | Storage Adapter abstraction | Done (DC-003-I015) — `src/finished-carousel-store-adapter.mjs`, `assertValidCarouselStoreAdapter()`; mirrors DC-003-I008's Ledger Store abstraction exactly |
 | Carousel Store CLI check | Done (DC-003-I015) — `npm run store`, no network, no ledger writes |
-| Unit test suite | Done — 496 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
+| Content Request parser, domain object, source resolver, workflow mapper | Done (DC-003-I016) — `src/content-request-parser.mjs`, `src/content-request.mjs`, `src/content-request-source-resolver.mjs`, `src/content-request-workflow-mapper.mjs`; see "Content Request Command" |
+| Content Request Service (compose I012 + I015 into one command) | Done (DC-003-I016) — `src/content-request-service.mjs`; never throws from source resolution onward, matching I012's own contract; no persistence on a failed/partial execution |
+| Content Request CLI check | Done (DC-003-I016) — `npm run content:request`, no network, no live rendering |
+| Unit test suite | Done — 563 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
@@ -2994,8 +3226,12 @@ error class, no new schema, no new abstraction.
 | Database/cloud storage adapter for the Finished Carousel Store | Not started — explicitly out of scope for I015; the Storage Adapter abstraction supports one without changing `finished-carousel-store.mjs`, but none beyond the local JSON adapter has been built |
 | Concurrent multi-process locking on the Finished Carousel Store | Not started — explicitly out of scope for I015; atomic single-file writes are implemented, cross-process coordination is not |
 | Version history / retention policy for stored Finished Carousels | Not started — explicitly out of scope for I015; `replace()` overwrites in place, no prior version is retained |
+| General-purpose natural-language understanding for content requests | Not started — explicitly out of scope for I016; one deterministic command shape only |
+| Multiple Content Request types / batch requests / scheduling | Not started — explicitly out of scope for I016 |
+| Publishing or approval UI reachable via the Content Request command | Not started — explicitly out of scope for I016; DC-003-I014's approve/reject/publish functions exist but this command doesn't call them |
+| Real article/source registry | Not started — operational dependency flagged by DC-003-I016; `GS01` resolves only against an approved fixture Topic Package (`tests/fixtures/topic-packages/backlog-gs01.approved.json`), not a real source |
 | REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
-| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, and I015 |
+| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, I015, and I016 |
 | Asynchronous execution | Not started — DC-003-I010/I011/I012 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
 

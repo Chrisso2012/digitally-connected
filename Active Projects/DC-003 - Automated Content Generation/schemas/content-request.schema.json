@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/content-request.schema.json",
+  "title": "Content Request",
+  "description": "DC-003-I016 — the first user-facing command's immutable domain object. One validated, deterministic request to produce a carousel from an existing, repository-owned source. Not part of DC-003-T002's original five objects — defined for DC-003-I016.",
+  "type": "object",
+  "required": ["request_id", "action", "design_count", "source_type", "source_reference", "requested_at"],
+  "additionalProperties": false,
+  "properties": {
+    "request_id": { "type": "string", "pattern": "^req_[A-Za-z0-9]+$" },
+    "action": { "type": "string", "enum": ["create"] },
+    "design_count": { "type": "integer", "enum": [6] },
+    "source_type": { "type": "string", "enum": ["article"] },
+    "source_reference": { "type": "string", "minLength": 1 },
+    "requested_at": { "type": "string", "format": "date-time" },
+    "raw_command": { "type": ["string", "null"] }
+  }
+}

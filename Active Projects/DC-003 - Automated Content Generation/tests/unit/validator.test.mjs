@@ -18,6 +18,7 @@ const APPROVED_FIXTURES = {
   executionRecord: "execution-record.example.json",
   invocationRequest: "invocation-request.example.json",
   invocationResponse: "invocation-response.example.json",
+  contentRequest: "content-request.example.json",
 };
 
 const validator = createValidator();

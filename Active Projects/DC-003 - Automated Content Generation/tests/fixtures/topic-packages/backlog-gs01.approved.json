@@ -1,0 +1,30 @@
+{
+  "topic_id": "topic_01J9GS01AB",
+  "working_title": "Why your Google Search ranking dropped this quarter",
+  "audience": "Owner-operators running 10-50 staff service businesses",
+  "primary_goal": "Book a discovery call",
+  "funnel_stage": "consideration",
+  "core_message": "A ranking drop is almost always fixable once you know which signal actually moved.",
+  "supporting_points": [
+    "Most ranking drops trace back to one of three signals, not a mystery algorithm change",
+    "A quick technical audit finds the real cause in under a day",
+    "Fixing the right signal recovers rank faster than publishing new content"
+  ],
+  "cta": "Book your ranking audit",
+  "keywords": ["seo ranking drop", "google search console"],
+  "brand_voice": "confident-direct",
+  "status": "approved",
+  "created_date": "2026-08-01T09:00:00Z",
+  "updated_date": "2026-08-01T09:00:00Z",
+  "version": 1,
+  "schema_version": "1.0",
+  "source": "backlog",
+  "backlog_reference_id": "GS01",
+  "content_pillar": "seo fundamentals",
+  "tags": ["evergreen", "seo"],
+  "priority": null,
+  "related_topic_ids": [],
+  "locale": "en",
+  "owner": "chris@digitallyconnected.net",
+  "notes": "DC-003-I016 approved fixture — stands in for a real article-backed Topic Package. GS01 does not exist as a real source in the repository as of I016; see README 'Content Request Command — current limitations'."
+}
