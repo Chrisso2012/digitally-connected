@@ -1,99 +1,119 @@
-// DC-003-I020 — Production Run Service: the one controlled entry point
-// that can select LIVE Anthropic generation and LIVE Templated rendering
-// for a complete, real production run. Composes existing capability only —
-// this module implements no generation, mapping, rendering, carousel
-// construction, or persistence logic of its own:
+// DC-003-I020.1 — Production Run Service: the one entry point that can
+// compose LIVE Anthropic generation and LIVE Templated rendering into one
+// persisted Finished Carousel, routed through the platform's EXISTING
+// production architecture — not a parallel, hand-rolled composition.
 //
-//   Content Asset (I018)
-//         -> Carousel Content Generator (I004, live provider injected — I019)
-//         -> Templated Payload Mapper (I005, unchanged)
-//         -> Renderer (I006, live transport injected)
-//         -> Finished Carousel Builder (I007, unchanged)
-//         -> Finished Carousel Store (I015, unchanged)
-//         -> Production Run Result (I020)
+// DC-003-I020's first implementation (`d159dc4`) directly sequenced I004
+// (generateCarouselFromTopicPackage), I005 (mapCarouselToTemplatedPayload),
+// I006 (renderTemplatedPayload), and I007 (createFinishedCarousel) itself —
+// bypassing the Execution Ledger, Pipeline Orchestrator, External
+// Invocation Adapter, n8n Adapter, Production Workflow, and I016 Content
+// Request Service entirely. An architecture review found this produced no
+// audit trail for a live run and duplicated sequencing those existing
+// layers already own. See README "Live Production Run — Architectural
+// Correction (DC-003-I020.1)" for the full incompatibility analysis. That
+// direct-sequencing path has been removed entirely, not retained.
 //
-// Deliberately bypasses the Ledger/Pipeline Orchestrator/Invocation
-// Adapter/n8n Adapter stack (I008-I012): normalizeInvocationRequest()
-// (I010) hardcodes its returned configuration to
-// `{ topicPackageSource }` only — there is no existing mechanism to carry
-// a live provider or live transport object through
-// invocation-request.schema.json's validated, JSON-only shape without a
-// genuine schema/normalizer change, which is out of scope for this
-// milestone ("must not redesign the pipeline"). This module instead
-// composes the same per-stage functions pipeline-stages.mjs already calls
-// (generateCarouselFromTopicPackage, mapCarouselToTemplatedPayload,
-// renderTemplatedPayload, createFinishedCarousel) directly and
-// sequentially — the exact pattern DC-003-I019's own
-// generate-live-carousel.mjs already established for live generation; this
-// module extends that same pattern through live rendering and persistence.
-// See README "Live Production Run (DC-003-I020)" -> "Why this bypasses the
-// orchestrator" for the full account.
+// The corrected composition:
 //
-// Two failure tiers, matching content-request-service.mjs's own
-// established split:
-//   1. Missing/malformed `dependencies` (no provider/renderTransport/
-//      carouselStore) throws PipelineConfigurationError immediately —
-//      caller misconfiguration, not a runtime production failure.
-//   2. Everything from asset resolution onward is caught internally and
-//      folded into the returned Production Run Result instead of thrown —
-//      this service never throws once dependencies are well-formed.
+//   Execution Ledger (I008, unmodified)
+//         -> Pipeline Orchestrator (I009, unmodified) — running a LIVE
+//            stage list: LoadTopicStage, a live-bound Generate stage,
+//            MapPayloadStage, a live-bound Render stage,
+//            BuildFinishedCarouselStage (see pipeline-stages-live.mjs;
+//            the first, third, and fifth are pipeline-stages.mjs's own
+//            unmodified exports)
+//         -> External Invocation Adapter (I010, unmodified)
+//         -> n8n Adapter (I011, unmodified)
+//         -> Production Workflow (I012, unmodified)
+//         -> I016 Content Request Service (executeContentRequest(),
+//            unmodified) — resolves the Content Asset, builds and
+//            validates the Content Request, invokes the Production
+//            Workflow above, and persists through I015 — exactly what the
+//            mock path already does; only the Production Workflow
+//            instance handed to it differs (built with live-bound stages
+//            instead of DEFAULT_PIPELINE).
 //
-// Live-call budget (enforced by the CALLER, not this module): this service
-// makes exactly one generateCarousel() call and up to six renderTemplatedPayload()
-// calls, in slide order, stopping immediately on the first render failure —
-// never more. Per-invocation retry ceilings (dependencies.llmMaxAttempts /
-// dependencies.renderMaxAttempts) are the caller's responsibility to cap at
-// 1 for a live run (see tests/validation/production-run-live.mjs, which
-// reuses the existing resolveLlmLiveMaxAttempts()/resolveLiveMaxAttempts()
-// safety primitives from I019/I006 unmodified) — this module applies
-// whatever ceiling it is given, exactly like generateCarouselFromTopicPackage
-// and renderTemplatedPayload already do for every other caller.
+// The live provider/transport are bound via closure at stage-construction
+// time (pipeline-stages-live.mjs) — never through context.configuration,
+// never through the InvocationRequest. invocation-request.schema.json,
+// invocation-normalizer.mjs, n8n-workflow-mapper.mjs, n8n-adapter.mjs,
+// invocation-adapter.mjs, production-workflow.mjs, and
+// content-request-service.mjs are all untouched by this correction.
+//
+// Known, deliberate trade-off of routing through the existing
+// architecture: I010's toSafeInvocationError() narrows a failed stage's
+// error down to { code, message, retryable } — it does not forward a
+// stage name or an LlmClientError's own `.diagnostic` (DC-003-I019.1)
+// through to the Content Request Result's `error` field, and this
+// service does not work around that by changing toSafeInvocationError()
+// or content-request-service.mjs itself (both are reused unchanged, per
+// the approved I020.1 scope). A live Anthropic HTTP 400's safe diagnostic
+// therefore is NOT visible on this service's own result — only
+// `error.code`/`error.message`/`error.retryable` are. See the delivery
+// report for this trade-off; recovering the diagnostic would require a
+// separately-scoped, explicitly-approved change to I010's own allowlist.
+//
+// I016's own Content Request Result shape doesn't carry
+// carouselContentId/renderedSlideCount (it was never designed to, and
+// isn't changed here) — this service observes both via the
+// onGenerated/onSlideRendered hooks pipeline-stages-live.mjs exposes,
+// entirely outside content-request-service.mjs's own return value, so
+// I016's contract needed no change to support this milestone's richer
+// Production Run Result.
 
-import { randomUUID } from "node:crypto";
-import { createContentAssetRepository } from "./content-asset-repository.mjs";
-import { generateCarouselFromTopicPackage } from "./carousel-generator.mjs";
-import { mapCarouselToTemplatedPayload } from "./carousel-payload-mapper.mjs";
-import { renderTemplatedPayload } from "./renderer.mjs";
-import { createFinishedCarousel } from "./finished-carousel-builder.mjs";
-import { createExecutionMetadata, generateExecutionId } from "./execution-metadata.mjs";
+import { createExecutionLedger } from "./execution-ledger.mjs";
+import { createPipelineOrchestrator } from "./pipeline-orchestrator.mjs";
+import { createExternalInvocationAdapter } from "./invocation-adapter.mjs";
+import { createN8nAdapter } from "./n8n-adapter.mjs";
+import { createProductionWorkflow } from "./production-workflow.mjs";
+import { executeContentRequest } from "./content-request-service.mjs";
+import { LoadTopicStage, MapPayloadStage, BuildFinishedCarouselStage } from "./pipeline-stages.mjs";
+import { createLiveGenerateCarouselStage, createLiveRenderStage } from "./pipeline-stages-live.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
-import { toSafeInvocationError } from "./invocation-errors.mjs";
 import { PipelineConfigurationError } from "./pipeline-errors.mjs";
-
-function generateProductionRequestId() {
-  return "prod_" + randomUUID().replace(/-/g, "").slice(0, 16);
-}
 
 function elapsedMs(startedAt, completedAt) {
   return Date.parse(completedAt) - Date.parse(startedAt);
 }
 
-// Extends toSafeInvocationError()'s { code, message, retryable } with two
-// fields specific to this service's own richer reporting requirement:
-// `stage` (which step failed) and `slideType` (which slide, render
-// failures only). `diagnostic` passes through LlmClientError.diagnostic
-// (DC-003-I019.1's own safe, secret-free shape — status/errorType/
-// requestId/sanitised message) verbatim when the thrown error carries one;
-// never the raw response body, headers, API key, prompt, or tool content —
-// same guarantee I019.1 already established, just surfaced one level
-// higher.
-function safeProductionError(stage, error, slideType = null) {
-  const base = toSafeInvocationError(error);
+// A minimal, ephemeral Ledger Store scoped to this one run — the same
+// reasoning content-request.mjs's own CLI already established for I016:
+// the Execution Ledger's durable audit trail is a separate I008 concern
+// this service does not expose or manage on its own. Matches the Ledger
+// Store shape execution-ledger-store.mjs requires: { name, append,
+// readAll }.
+function createInMemoryLedgerStore() {
+  const records = [];
   return {
-    stage,
-    code: base.code,
-    message: base.message,
-    retryable: base.retryable,
-    slideType,
-    diagnostic: error?.diagnostic
-      ? {
-          status: error.diagnostic.status ?? null,
-          errorType: error.diagnostic.errorType ?? null,
-          requestId: error.diagnostic.requestId ?? null,
-          message: error.diagnostic.message ?? null,
-        }
-      : null,
+    name: "in-memory-production-run-store",
+    append(record) {
+      records.push(record);
+    },
+    readAll() {
+      return [...records];
+    },
   };
+}
+
+function buildLiveStages({ provider, renderTransport, maxAttempts, observed }) {
+  return [
+    LoadTopicStage,
+    createLiveGenerateCarouselStage(provider, {
+      maxAttempts,
+      onGenerated: (carouselContent) => {
+        observed.carouselContentId = carouselContent.carousel_content_id;
+      },
+    }),
+    MapPayloadStage,
+    createLiveRenderStage(renderTransport, {
+      maxAttempts,
+      onSlideRendered: () => {
+        observed.renderedSlideCount += 1;
+      },
+    }),
+    BuildFinishedCarouselStage,
+  ];
 }
 
 function buildResult({
@@ -131,51 +151,42 @@ function buildResult({
 }
 
 /**
- * Executes one complete production run for one Content Asset — the only
- * entry point in this codebase that can compose live generation and live
- * rendering into one persisted Finished Carousel.
+ * Executes one complete production run for one Content Asset, routed
+ * through the platform's existing production architecture (I008-I012,
+ * I016) with a live-bound generate/render stage pair.
  *
- * fields.assetId — required, resolved through the I018 Content Asset
- *   Repository.
- * fields.contentAssetsDir — required, passed through to
- *   createContentAssetRepository() unchanged — no default lives here (the
- *   caller, e.g. the CLI, owns that default, matching every other
- *   storage-directory-taking module in this codebase).
+ * fields.assetId — required, forwarded as source_reference to I016's
+ *   Content Request Service (source_type fixed to "article", design_count
+ *   fixed to 6 — the only production contract I016 itself supports).
+ * fields.contentAssetsDir — forwarded to executeContentRequest() unchanged.
  *
- * dependencies.provider — required, { name, generateCarousel(prompt, context) }
- *   (the mock provider, or createAnthropicProvider() for a live run — this
- *   service never constructs either; the caller decides, exactly like
- *   generateCarouselFromTopicPackage() itself already requires).
- * dependencies.renderTransport — required, { name, send(request, options) }
- *   (the mock transport, or createHttpTransport() for a live run).
- * dependencies.carouselStore — required, the return value of
- *   createFinishedCarouselStore() (an object with save() and name).
- * dependencies.llmMaxAttempts — forwarded to generateCarouselFromTopicPackage()
- *   unchanged; defaults to 3 (that function's own default) when omitted.
- * dependencies.renderMaxAttempts — forwarded to every renderTemplatedPayload()
- *   call unchanged; defaults to 3 (that function's own default) when
- *   omitted.
- * dependencies.now / requestIdGenerator / executionIdGenerator /
- *   carouselIdOverride — deterministic overrides, used by tests.
+ * dependencies.provider — required, { name, generateCarousel(prompt, context) }.
+ *   The live Anthropic provider, or the mock provider for a mock run —
+ *   bound into the live stage list via pipeline-stages-live.mjs.
+ * dependencies.renderTransport — required, { name, send(request, options) }.
+ *   The live Templated transport, or the mock transport for a mock run.
+ * dependencies.carouselStore — required, createFinishedCarouselStore()'s
+ *   return value, forwarded to executeContentRequest() unchanged.
+ * dependencies.maxAttempts — the attempt ceiling bound into BOTH live
+ *   stages; defaults to 3 (matching generateCarouselFromTopicPackage's/
+ *   renderTemplatedPayload's own defaults) when omitted — the caller
+ *   (the CLI) is responsible for passing 1 for a live run; there is no
+ *   options-propagation path through I016/I012/I011/I010 this service
+ *   could rely on instead (see the module header).
+ * dependencies.ledgerStore — inject a Ledger Store (used by tests to
+ *   assert on the recorded lifecycle); defaults to a fresh in-memory store
+ *   per run.
+ * dependencies.now / idGenerator / validator — forwarded to
+ *   executeContentRequest() unchanged, for deterministic tests.
  *
  * Throws PipelineConfigurationError immediately if `dependencies` itself
- * is malformed — the same fail-fast-on-misconfiguration pattern every
- * adapter/orchestrator in this codebase already uses.
+ * is malformed (missing provider/renderTransport/carouselStore) — the
+ * same fail-fast-on-misconfiguration pattern every adapter/orchestrator in
+ * this codebase already uses.
  *
- * Never throws once dependencies are well-formed: every failure from asset
- * resolution onward resolves to a Production Run Result with
- * `success: false` and a safe `error`.
- *
- * On an Anthropic (generation) failure: returns before any Templated
- * request is made — `renderedSlideCount` stays 0, no Finished Carousel is
- * built or persisted.
- *
- * On a Templated (render) failure: stops immediately after the failing
- * slide — no later slide is requested, `renderedSlideCount` reflects only
- * the slides that actually completed, `error.slideType` names which slide
- * type failed, no Finished Carousel is built or persisted. A partial
- * render that may already exist on Templated's own side is never
- * represented as a completed or stored carousel here.
+ * Never throws once dependencies are well-formed: executeContentRequest()
+ * (I016) already never throws once ITS OWN dependencies and request shape
+ * are valid — this service adds no new throwing path on top of it.
  */
 export async function executeProductionRun(fields = {}, dependencies = {}) {
   if (!dependencies.provider || typeof dependencies.provider.generateCarousel !== "function") {
@@ -190,131 +201,49 @@ export async function executeProductionRun(fields = {}, dependencies = {}) {
 
   const now = dependencies.now ?? (() => new Date().toISOString());
   const startedAt = now();
-  const requestId = (dependencies.requestIdGenerator ?? generateProductionRequestId)();
-  const sourceReference = fields.assetId ?? null;
 
-  function finish(partial) {
-    return buildResult({ requestId, sourceReference, duration: elapsedMs(startedAt, now()), ...partial });
-  }
+  const observed = { carouselContentId: null, renderedSlideCount: 0 };
+  const stages = buildLiveStages({
+    provider: dependencies.provider,
+    renderTransport: dependencies.renderTransport,
+    maxAttempts: dependencies.maxAttempts,
+    observed,
+  });
 
-  // 1. Resolve the Content Asset (I018) — unmodified.
-  let topicPackage;
-  try {
-    const repository = createContentAssetRepository({ assetsDir: fields.contentAssetsDir });
-    const asset = repository.get(fields.assetId);
-    topicPackage = asset.topic_package;
-  } catch (cause) {
-    return finish({ success: false, status: "rejected", error: safeProductionError("asset-resolution", cause) });
-  }
+  const ledger = createExecutionLedger({ store: dependencies.ledgerStore ?? createInMemoryLedgerStore() });
+  const orchestrator = createPipelineOrchestrator({ ledger, stages });
+  const invocationAdapter = createExternalInvocationAdapter({ orchestrator });
+  const n8nAdapter = createN8nAdapter({ invocationAdapter });
+  const productionWorkflow = createProductionWorkflow({ n8nAdapter });
 
-  // 2-4. Generate + validate Carousel Content (I004, live provider — I019).
-  // Zero Templated requests are made if this fails — every return path
-  // below this point returns before mapCarouselToTemplatedPayload() (and
-  // therefore before any render call) ever runs.
-  let carouselContent;
-  try {
-    carouselContent = await generateCarouselFromTopicPackage(topicPackage, {
-      provider: dependencies.provider,
-      maxAttempts: dependencies.llmMaxAttempts,
-    });
-  } catch (cause) {
-    return finish({ success: false, status: "failed", error: safeProductionError("generation", cause) });
-  }
-
-  // 5. Produce six Templated Payloads (I005) — unchanged, pure mapping.
-  let templatedPayloads;
-  try {
-    templatedPayloads = mapCarouselToTemplatedPayload(carouselContent);
-  } catch (cause) {
-    return finish({
-      success: false,
-      carouselContentId: carouselContent.carousel_content_id,
-      status: "failed",
-      error: safeProductionError("mapping", cause),
-    });
-  }
-
-  // 6. Render each payload in slide order (I006, live transport). Stops
-  // immediately on the first failure — no later slide is requested, and no
-  // Finished Carousel is ever built from a partial set.
-  const renderResults = [];
-  for (const payload of templatedPayloads) {
-    try {
-      const renderResult = await renderTemplatedPayload(payload, {
-        transport: dependencies.renderTransport,
-        maxAttempts: dependencies.renderMaxAttempts,
-      });
-      renderResults.push(renderResult);
-    } catch (cause) {
-      return finish({
-        success: false,
-        carouselContentId: carouselContent.carousel_content_id,
-        status: "failed",
-        slideCount: templatedPayloads.length,
-        renderedSlideCount: renderResults.length,
-        error: safeProductionError("rendering", cause, payload.slide_type),
-      });
+  const contentRequestResult = await executeContentRequest(
+    { action: "create", designCount: 6, sourceType: "article", sourceReference: fields.assetId, rawCommand: null },
+    {
+      productionWorkflow,
+      carouselStore: dependencies.carouselStore,
+      contentAssetsDir: fields.contentAssetsDir,
+      now: dependencies.now,
+      idGenerator: dependencies.idGenerator,
+      validator: dependencies.validator,
     }
-  }
-
-  // 7. Build one Finished Carousel (I007) — unchanged.
-  const totalDurationMs = renderResults.reduce((sum, r) => sum + r.durationMs, 0);
-  const executionId = (dependencies.executionIdGenerator ?? generateExecutionId)();
-  const executionMetadata = createExecutionMetadata(
-    { executionId, provider: renderResults[0].provider, renderDurationMs: totalDurationMs },
-    { now: () => new Date(now()) }
   );
 
-  let finishedCarousel;
-  try {
-    finishedCarousel = createFinishedCarousel(
-      {
-        carouselContent,
-        slideRenders: templatedPayloads.map((templatedPayload, index) => ({ templatedPayload, renderResult: renderResults[index] })),
-        executionMetadata,
-      },
-      { now, carouselId: dependencies.carouselIdOverride }
-    );
-  } catch (cause) {
-    return finish({
-      success: false,
-      carouselContentId: carouselContent.carousel_content_id,
-      status: "failed",
-      slideCount: templatedPayloads.length,
-      renderedSlideCount: renderResults.length,
-      error: safeProductionError("finished-carousel", cause),
-    });
-  }
+  const completedAt = now();
 
-  // 8. Persist through I015 — unchanged. Only ever reached after a fully
-  // rendered, successfully built Finished Carousel.
-  let stored = false;
-  let storeReference = null;
-  let persistenceError = null;
-  try {
-    dependencies.carouselStore.save(finishedCarousel);
-    stored = true;
-    storeReference = `${dependencies.carouselStore.name ?? "carousel-store"}:${finishedCarousel.carousel_id}`;
-  } catch (cause) {
-    // CarouselAlreadyExistsError (a genuine, if rare, carousel_id
-    // collision) and any storage-layer failure are both reported the same
-    // safe way here — I015's own domain layer is what decides whether an
-    // overwrite/versioning story is ever needed, not this service (see
-    // "Idempotency and Duplicate Runs" in the I020 brief).
-    persistenceError = safeProductionError("persistence", cause);
-  }
-
-  // 9. Safe Production Run Result.
-  return finish({
-    success: stored === true && finishedCarousel.overall_status === "completed",
-    executionId,
-    carouselContentId: carouselContent.carousel_content_id,
-    carouselId: finishedCarousel.carousel_id,
-    status: stored ? finishedCarousel.overall_status : "failed",
-    slideCount: templatedPayloads.length,
-    renderedSlideCount: renderResults.length,
-    stored,
-    storeReference,
-    error: persistenceError,
+  return buildResult({
+    success: contentRequestResult.success,
+    requestId: contentRequestResult.requestId,
+    sourceReference: contentRequestResult.sourceReference,
+    executionId: contentRequestResult.executionId,
+    carouselContentId: observed.carouselContentId,
+    carouselId: contentRequestResult.carouselId,
+    status: contentRequestResult.status,
+    slideCount: observed.carouselContentId ? 6 : 0,
+    renderedSlideCount: observed.renderedSlideCount,
+    stored: contentRequestResult.stored,
+    storeReference: contentRequestResult.storeReference,
+    warnings: contentRequestResult.warnings,
+    error: contentRequestResult.error,
+    duration: elapsedMs(startedAt, completedAt),
   });
 }

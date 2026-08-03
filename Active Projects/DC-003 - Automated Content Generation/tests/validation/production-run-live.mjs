@@ -1,9 +1,15 @@
-// DC-003-I020 — CLI for the Production Run Service: the one entry point in
-// this repository that can select LIVE Anthropic generation AND LIVE
-// Templated rendering for one complete, real production run, persisted
-// through I015. Mock by default (both generation and rendering) — safe to
-// run anytime, no credentials needed, no network call of any kind without
-// --live.
+// DC-003-I020 (corrected in DC-003-I020.1) — CLI for the Production Run
+// Service: the one entry point in this repository that can select LIVE
+// Anthropic generation AND LIVE Templated rendering for one complete, real
+// production run, routed through the platform's existing production
+// architecture (Execution Ledger -> Pipeline Orchestrator -> External
+// Invocation Adapter -> n8n Adapter -> Production Workflow -> I016 Content
+// Request Service -> I015 persistence) — see
+// src/production-run-service.mjs's own header comment for the full
+// composition, and README "Live Production Run — Architectural Correction
+// (DC-003-I020.1)" for why. Mock by default (both generation and
+// rendering) — safe to run anytime, no credentials needed, no network call
+// of any kind without --live.
 //
 // Usage:
 //   node tests/validation/production-run-live.mjs <assetId> <storeDirectory> [--live] [contentAssetsDir]
@@ -20,21 +26,30 @@
 // Live-call budget: exactly 1 Anthropic request, plus up to 6 Templated
 // requests (one per slide, stopping immediately on the first render
 // failure) — 7 requests maximum, per run. No retry is permitted: --live
-// always resolves to exactly 1 attempt per external request, via the SAME
+// always resolves to exactly 1 attempt for BOTH providers, via the SAME
 // resolveLlmLiveMaxAttempts()/resolveLiveMaxAttempts() safety primitives
 // DC-003-I019/I006 already established for their own --live CLIs —
 // completely independent of LLM_MAX_ATTEMPTS/TEMPLATED_RENDER_MAX_ATTEMPTS.
-// Unlike those two CLIs, this one has no --live-max-attempts override at
-// all — the DC-003-I020 brief disallows any retry during the initial
+// Both resolve to 1, and this CLI passes a single shared maxAttempts into
+// production-run-service.mjs (bound into both live stages via closure —
+// see pipeline-stages-live.mjs). There is no --live-max-attempts override
+// at all — the DC-003-I020 brief disallows any retry during the initial
 // production run, with no override escape hatch, so none is offered here.
 //
-// Failure behaviour (enforced by production-run-service.mjs, not this
-// CLI): an Anthropic failure stops before any Templated request is made; a
-// Templated failure stops immediately after the failing slide, with no
-// later slide requested; neither ever builds or persists a Finished
-// Carousel from a partial result. See src/production-run-service.mjs's
-// header comment for the full composition and README "Live Production Run
-// (DC-003-I020)" for the architecture.
+// Failure behaviour (enforced by production-run-service.mjs, via the
+// reused, unmodified I016 Content Request Service): an Anthropic failure
+// stops before any Templated request is made; a Templated failure stops
+// immediately after the failing slide, with no later slide requested;
+// neither ever builds or persists a Finished Carousel from a partial
+// result.
+//
+// Known trade-off of routing through the existing architecture (see
+// production-run-service.mjs's header comment for the full explanation):
+// a failure's safe diagnostic here is only ever { code, message } — I016's
+// own error-shaping (content-request-service.mjs, reused unchanged) never
+// carries an LlmClientError's richer .diagnostic (DC-003-I019.1) or a
+// stage name through to its own Content Request Result, and this CLI does
+// not work around that.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,8 +88,7 @@ try {
 
   let provider;
   let renderTransport;
-  let llmMaxAttempts;
-  let renderMaxAttempts;
+  let maxAttempts;
 
   if (isLive) {
     const llmConfig = loadLlmProviderConfig();
@@ -91,25 +105,30 @@ try {
       process.exit(1);
     }
 
-    llmMaxAttempts = resolveLlmLiveMaxAttempts(); // always 1 — no override flag on this CLI
-    renderMaxAttempts = resolveRenderLiveMaxAttempts(); // always 1 — no override flag on this CLI
+    // Both existing safety primitives resolve to 1 with no override
+    // argument — a single shared ceiling is passed through, since the
+    // I020 brief requires the same "1 attempt, no retry" rule for both
+    // providers.
+    const llmMaxAttempts = resolveLlmLiveMaxAttempts();
+    const renderMaxAttempts = resolveRenderLiveMaxAttempts();
+    maxAttempts = Math.min(llmMaxAttempts, renderMaxAttempts);
 
     console.log(`Running LIVE production run — Anthropic (${llmConfig.baseUrl}, model: ${llmConfig.model}) + Templated (${rendererConfig.baseUrl}).`);
     console.log(`  live-call budget: 1 Anthropic request maximum, 6 Templated requests maximum (stops on first render failure)`);
-    console.log(`  maxAttempts: Anthropic=${llmMaxAttempts}, Templated=${renderMaxAttempts} (safe one-shot defaults, no retry, no override)`);
+    console.log(`  maxAttempts: ${maxAttempts} for both providers (safe one-shot default, no retry, no override)`);
 
     provider = createAnthropicProvider({ transport: createLlmHttpTransport(llmConfig), model: llmConfig.model, timeoutMs: llmConfig.requestTimeoutMs });
     renderTransport = createRendererHttpTransport(rendererConfig);
   } else {
     provider = createMockProvider();
     renderTransport = createMockTransport();
-    // llmMaxAttempts/renderMaxAttempts left undefined — the service's own
-    // (and generateCarouselFromTopicPackage's/renderTemplatedPayload's own)
+    // maxAttempts left undefined — production-run-service.mjs's own (and
+    // generateCarouselFromTopicPackage's/renderTemplatedPayload's own)
     // normal defaults apply, exactly as every other mock CLI in this
     // repository already relies on.
   }
 
-  const result = await executeProductionRun({ assetId, contentAssetsDir }, { provider, renderTransport, carouselStore, llmMaxAttempts, renderMaxAttempts });
+  const result = await executeProductionRun({ assetId, contentAssetsDir }, { provider, renderTransport, carouselStore, maxAttempts });
 
   console.log(result.success ? "Production Run complete" : "Production Run did not complete successfully");
   console.log(`  request ID:          ${result.requestId}`);
@@ -128,18 +147,11 @@ try {
     for (const warning of result.warnings) console.log(`    - ${warning}`);
   }
   if (result.error) {
-    console.log(`  error stage:         ${result.error.stage}`);
+    // I016's own safe error shape (content-request-service.mjs, reused
+    // unchanged): { code, message } only — see this file's header comment
+    // for why a richer diagnostic isn't available here.
     console.log(`  error code:          ${result.error.code}`);
     console.log(`  error:               ${result.error.message}`);
-    if (result.error.slideType) console.log(`  failed slide type:   ${result.error.slideType}`);
-    if (result.error.diagnostic) {
-      // DC-003-I019.1's safe diagnostic, surfaced one level higher —
-      // status/errorType/requestId/sanitised message only.
-      console.log(`  diagnostic status:    ${result.error.diagnostic.status ?? "unknown"}`);
-      console.log(`  diagnostic errorType: ${result.error.diagnostic.errorType ?? "(none reported)"}`);
-      console.log(`  diagnostic requestId: ${result.error.diagnostic.requestId ?? "(none reported)"}`);
-      console.log(`  diagnostic message:   ${result.error.diagnostic.message ?? "(none reported)"}`);
-    }
   }
 
   process.exit(result.success ? 0 : 1);

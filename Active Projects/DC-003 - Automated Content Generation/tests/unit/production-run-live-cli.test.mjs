@@ -1,4 +1,6 @@
-// Unit tests for tests/validation/production-run-live.mjs (DC-003-I020).
+// Unit tests for tests/validation/production-run-live.mjs (DC-003-I020,
+// corrected in DC-003-I020.1 to route through the existing production
+// architecture — see production-run-service.mjs's own header comment).
 //
 // Deliberately never exercises a real --live run to completion: doing so
 // would require real LLM_API_KEY/TEMPLATED_API_KEY credentials and would
@@ -127,7 +129,11 @@ test("an unknown content asset exits non-zero with a safe error, not a stack tra
     withTempDir((storeDir) => {
       const result = runCli(["DOES_NOT_EXIST", storeDir, assetsDir]);
       assert.notEqual(result.status, 0);
-      assert.match(result.stdout, /error code:\s*UnknownContentAssetError/);
+      // I016's Content Asset Resolver (unmodified) surfaces its own
+      // UnknownSourceReferenceError, not I018's UnknownContentAssetError —
+      // this service routes through I016 now, so I016's own error
+      // vocabulary is what's reported.
+      assert.match(result.stdout, /error code:\s*UnknownSourceReferenceError/);
       assert.doesNotMatch(result.stderr, /at file:\/\//);
       assert.equal(existsSync(storeDir) && readdirSync(storeDir).length > 0, false);
     })
@@ -174,5 +180,32 @@ test("neither credential name's presence is leaked into stdout when both are mis
       writeAsset(assetsDir, "PRCLI06");
       const result = runCli(["PRCLI06", storeDir, assetsDir, "--live"]);
       assert.doesNotMatch(result.stdout, /sk-/);
+    })
+  ));
+
+// --- DC-003-I020.1: existing I016 Content Request Command compatibility -
+// content-request.mjs and content-request-service.mjs were not modified by
+// this correction — this spawns the real, unmodified I016 CLI directly to
+// confirm it still behaves exactly as it did before I020.1 (its own 74
+// unit tests, also unmodified, provide the same guarantee at finer grain;
+// this is one direct, end-to-end confirmation tied specifically to this
+// task).
+
+test("the existing I016 Content Request CLI (content-request.mjs) still works unmodified after the I020.1 correction", () =>
+  withTempDir((assetsDir) =>
+    withTempDir((storeDir) => {
+      writeAsset(assetsDir, "PRCLI07");
+      const contentRequestCliPath = path.join(PROJECT_ROOT, "tests", "validation", "content-request.mjs");
+      const result = spawnSync(
+        process.execPath,
+        [contentRequestCliPath, "Create 6 designs based on article PRCLI07", storeDir, assetsDir, "--json"],
+        { encoding: "utf-8", env: { ...process.env, LLM_API_KEY: "", TEMPLATED_API_KEY: "" } }
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.success, true);
+      assert.equal(parsed.sourceReference, "PRCLI07");
+      assert.equal(parsed.stored, true);
+      assert.match(parsed.carouselId, /^car_[A-Za-z0-9]+$/);
     })
   ));

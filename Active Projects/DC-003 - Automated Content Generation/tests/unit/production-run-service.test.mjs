@@ -1,9 +1,11 @@
-// Unit tests for production-run-service.mjs (DC-003-I020). Every test uses
-// the mock provider/mock transport, or small local fakes wrapping them —
-// no network, no real credentials, matching this codebase's own "automated
-// tests use mock transports only" rule. A real provider/transport is only
-// ever constructed by tests/validation/production-run-live.mjs's own
-// --live path, never here.
+// Unit tests for production-run-service.mjs (DC-003-I020.1). Every test
+// uses the mock provider/mock transport, or small local fakes wrapping
+// them — no network, no real credentials. Unlike the original DC-003-I020
+// implementation, this service now routes every run through the real
+// Execution Ledger, Pipeline Orchestrator, External Invocation Adapter,
+// n8n Adapter, Production Workflow, and I016 Content Request Service — so
+// these tests assert on the LEDGER's own recorded lifecycle, not just the
+// service's own return value, to prove that routing actually happens.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -16,7 +18,7 @@ import { createMockTransport } from "../../src/renderer-transport-mock.mjs";
 import { createLocalJsonCarouselStoreAdapter } from "../../src/local-json-carousel-store-adapter.mjs";
 import { createFinishedCarouselStore } from "../../src/finished-carousel-store.mjs";
 import { TransportError } from "../../src/renderer-errors.mjs";
-import { LlmAuthenticationError, LlmClientError } from "../../src/llm-provider-errors.mjs";
+import { LlmAuthenticationError } from "../../src/llm-provider-errors.mjs";
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
 
 function withTempDir(fn) {
@@ -71,6 +73,22 @@ function createStore(storageDir) {
   return createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir }) });
 }
 
+// A minimal Ledger Store double — { name, append, readAll } — that tests
+// can inspect afterward to prove the real Execution Ledger/Pipeline
+// Orchestrator actually ran, not just that a result object came back.
+function createSpyLedgerStore() {
+  const records = [];
+  return {
+    name: "spy-ledger-store",
+    append(record) {
+      records.push(record);
+    },
+    readAll() {
+      return [...records];
+    },
+  };
+}
+
 // A transport that succeeds like createMockTransport(), but throws on one
 // specific call number — for "stops immediately after the failing slide"
 // tests. Delegates every non-failing call to a real createMockTransport()
@@ -91,31 +109,26 @@ function createFailAtNthCallTransport(failAtCall) {
   };
 }
 
-function createFakeStore({ throwOnSave } = {}) {
-  const saved = [];
-  return {
-    name: "fake-carousel-store",
-    saved: () => saved,
-    save(finishedCarousel) {
-      if (throwOnSave) throw throwOnSave;
-      saved.push(finishedCarousel);
-      return finishedCarousel;
-    },
-  };
-}
-
 // --- Dependency preconditions -----------------------------------------
 
 test("executeProductionRun requires dependencies.provider", async () => {
   await assert.rejects(
-    () => executeProductionRun({ assetId: "X", contentAssetsDir: "." }, { renderTransport: createMockTransport(), carouselStore: createFakeStore() }),
+    () =>
+      executeProductionRun(
+        { assetId: "X", contentAssetsDir: "." },
+        { renderTransport: createMockTransport(), carouselStore: createSpyLedgerStore() }
+      ),
     PipelineConfigurationError
   );
 });
 
 test("executeProductionRun requires dependencies.renderTransport", async () => {
   await assert.rejects(
-    () => executeProductionRun({ assetId: "X", contentAssetsDir: "." }, { provider: createMockProvider(), carouselStore: createFakeStore() }),
+    () =>
+      executeProductionRun(
+        { assetId: "X", contentAssetsDir: "." },
+        { provider: createMockProvider(), carouselStore: createSpyLedgerStore() }
+      ),
     PipelineConfigurationError
   );
 });
@@ -127,24 +140,82 @@ test("executeProductionRun requires dependencies.carouselStore", async () => {
   );
 });
 
-// --- Successful six-render completion, Finished Carousel construction,
-// persistence through I015, safe result mapping --------------------------
+// --- Execution flows through the real Pipeline Orchestrator + ledger ----
 
-test("a full successful run generates, renders all 6 slides in order, builds and persists one Finished Carousel", () =>
+test("a successful run writes a full lifecycle to the Execution Ledger, in stage order", () =>
   withTempDir((dir) => {
     writeAsset(dir, "PR01");
+    return withTempDir(async (storeDir) => {
+      const ledgerStore = createSpyLedgerStore();
+      const result = await executeProductionRun(
+        { assetId: "PR01", contentAssetsDir: dir },
+        { provider: createMockProvider(), renderTransport: createMockTransport(), carouselStore: createStore(storeDir), ledgerStore }
+      );
+
+      assert.equal(result.success, true);
+      const records = ledgerStore.readAll();
+      assert.ok(records.length > 0, "the real Execution Ledger must have recorded something — proves the Pipeline Orchestrator actually ran");
+
+      const eventTypes = records.map((r) => r.event_type);
+      assert.deepEqual(eventTypes, [
+        "execution.started",
+        "topic.loaded",
+        "content.generated",
+        "payload.mapped",
+        "render.started",
+        "render.completed",
+        "finished_carousel.created",
+        "execution.completed",
+      ]);
+
+      // Every record belongs to the one executionId the result reports,
+      // and sequence numbers are strictly increasing — the orchestrator's
+      // own invariant, not something this service enforces itself.
+      for (const record of records) {
+        assert.equal(record.execution_id, result.executionId);
+      }
+      const sequences = records.map((r) => r.sequence);
+      assert.deepEqual(sequences, [...sequences].sort((a, b) => a - b));
+      assert.equal(new Set(sequences).size, sequences.length, "sequence numbers must be unique");
+    });
+  }));
+
+test("stage ordering is preserved: slides are generated/rendered in cover, content, statistic, quote, infographic, cta order", () =>
+  withTempDir((dir) => {
+    writeAsset(dir, "PR02");
+    return withTempDir(async (storeDir) => {
+      const renderTransport = createMockTransport();
+      const carouselStore = createStore(storeDir);
+      const result = await executeProductionRun(
+        { assetId: "PR02", contentAssetsDir: dir },
+        { provider: createMockProvider(), renderTransport, carouselStore }
+      );
+      const stored = carouselStore.get(result.carouselId);
+      assert.deepEqual(
+        stored.slides.map((s) => s.slide_type),
+        ["cover", "content", "statistic", "quote", "infographic", "cta"]
+      );
+    });
+  }));
+
+// --- Successful six-render completion, persistence through I015, safe
+// result mapping ----------------------------------------------------------
+
+test("a full successful run persists exactly one Finished Carousel and returns a safe, fully-populated result", () =>
+  withTempDir((dir) => {
+    writeAsset(dir, "PR03");
     return withTempDir(async (storeDir) => {
       const renderTransport = createMockTransport();
       const carouselStore = createStore(storeDir);
 
       const result = await executeProductionRun(
-        { assetId: "PR01", contentAssetsDir: dir },
+        { assetId: "PR03", contentAssetsDir: dir },
         { provider: createMockProvider(), renderTransport, carouselStore }
       );
 
       assert.equal(result.success, true);
-      assert.equal(result.sourceReference, "PR01");
-      assert.match(result.requestId, /^prod_[A-Za-z0-9]+$/);
+      assert.equal(result.sourceReference, "PR03");
+      assert.match(result.requestId, /^req_[A-Za-z0-9]+$/, "requestId now comes from I016's own Content Request, not a separately invented ID");
       assert.match(result.executionId, /^exec_\d{8}_[A-Za-z0-9]+$/);
       assert.match(result.carouselContentId, /^cc_[A-Za-z0-9]+$/);
       assert.match(result.carouselId, /^car_[A-Za-z0-9]+$/);
@@ -158,44 +229,17 @@ test("a full successful run generates, renders all 6 slides in order, builds and
       assert.ok(result.duration >= 0);
       assert.equal(renderTransport.callCount(), 6, "exactly 6 Templated requests for a full run");
 
-      // Persisted through I015 for real — get() re-validates against the schema.
       const stored = carouselStore.get(result.carouselId);
       assert.equal(stored.overall_status, "completed");
       assert.equal(stored.slides.length, 6);
-      assert.deepEqual(
-        stored.slides.map((s) => s.slide_type),
-        ["cover", "content", "statistic", "quote", "infographic", "cta"]
-      );
-    });
-  }));
-
-// --- One Anthropic request maximum, six Templated requests maximum ------
-
-test("exactly one generateCarousel() call is made per run (no internal retry beyond the provided maxAttempts)", () =>
-  withTempDir((dir) => {
-    writeAsset(dir, "PR02");
-    return withTempDir(async (storeDir) => {
-      let calls = 0;
-      const provider = {
-        name: "counting-provider",
-        async generateCarousel(prompt, context) {
-          calls += 1;
-          return createMockProvider().generateCarousel(prompt, context);
-        },
-      };
-      await executeProductionRun(
-        { assetId: "PR02", contentAssetsDir: dir },
-        { provider, renderTransport: createMockTransport(), carouselStore: createStore(storeDir), llmMaxAttempts: 1 }
-      );
-      assert.equal(calls, 1);
     });
   }));
 
 // --- Anthropic failure causes zero renders -------------------------------
 
-test("an Anthropic generation failure returns before any Templated request is made", () =>
+test("an Anthropic generation failure returns before any Templated request is made, and persists nothing", () =>
   withTempDir((dir) => {
-    writeAsset(dir, "PR03");
+    writeAsset(dir, "PR04");
     return withTempDir(async (storeDir) => {
       const failingProvider = {
         name: "always-fails-auth",
@@ -204,23 +248,21 @@ test("an Anthropic generation failure returns before any Templated request is ma
         },
       };
       const renderTransport = createMockTransport();
-      const carouselStore = createFakeStore();
+      const carouselStore = createStore(storeDir);
 
       const result = await executeProductionRun(
-        { assetId: "PR03", contentAssetsDir: dir },
-        { provider: failingProvider, renderTransport, carouselStore, llmMaxAttempts: 1 }
+        { assetId: "PR04", contentAssetsDir: dir },
+        { provider: failingProvider, renderTransport, carouselStore, maxAttempts: 1 }
       );
 
       assert.equal(result.success, false);
-      assert.equal(result.status, "failed");
       assert.equal(result.slideCount, 0);
       assert.equal(result.renderedSlideCount, 0);
       assert.equal(result.stored, false);
       assert.equal(result.storeReference, null);
-      assert.equal(result.error.stage, "generation");
       assert.equal(result.error.code, "LlmAuthenticationError");
       assert.equal(renderTransport.callCount(), 0, "zero Templated requests when generation fails");
-      assert.equal(carouselStore.saved().length, 0, "no carousel persisted when generation fails");
+      assert.equal(carouselStore.list().length, 0, "no carousel persisted when generation fails");
     });
   }));
 
@@ -228,47 +270,23 @@ test("an Anthropic generation failure returns before any Templated request is ma
 
 test("a render failure on slide 3 stops before slides 4-6 are ever requested, and persists nothing", () =>
   withTempDir((dir) => {
-    writeAsset(dir, "PR04");
+    writeAsset(dir, "PR05");
     return withTempDir(async (storeDir) => {
       const renderTransport = createFailAtNthCallTransport(3);
-      const carouselStore = createFakeStore();
+      const carouselStore = createStore(storeDir);
 
       const result = await executeProductionRun(
-        { assetId: "PR04", contentAssetsDir: dir },
-        { provider: createMockProvider(), renderTransport, carouselStore, renderMaxAttempts: 1 }
+        { assetId: "PR05", contentAssetsDir: dir },
+        { provider: createMockProvider(), renderTransport, carouselStore, maxAttempts: 1 }
       );
 
       assert.equal(result.success, false);
-      assert.equal(result.status, "failed");
-      assert.equal(result.slideCount, 6);
+      assert.equal(result.slideCount, 6, "6 is the total the carousel was supposed to have, even though rendering stopped early");
       assert.equal(result.renderedSlideCount, 2, "only the first 2 slides completed before the 3rd failed");
       assert.equal(result.stored, false);
       assert.equal(result.storeReference, null);
-      assert.equal(result.error.stage, "rendering");
-      // Slide order is cover, content, statistic, quote, infographic, cta —
-      // the 3rd is "statistic".
-      assert.equal(result.error.slideType, "statistic");
       assert.equal(renderTransport.callCount(), 3, "no request for slides 4, 5, or 6 after the 3rd fails");
-      assert.equal(carouselStore.saved().length, 0, "no carousel persisted after a partial render failure");
-    });
-  }));
-
-// --- No persistence after partial failure (Finished Carousel build side) -
-
-test("a persistence failure is reported safely without throwing, and does not report success", () =>
-  withTempDir((dir) => {
-    writeAsset(dir, "PR05");
-    return withTempDir(async () => {
-      const carouselStore = createFakeStore({ throwOnSave: new Error("simulated storage adapter failure") });
-      const result = await executeProductionRun(
-        { assetId: "PR05", contentAssetsDir: dir },
-        { provider: createMockProvider(), renderTransport: createMockTransport(), carouselStore }
-      );
-      assert.equal(result.success, false);
-      assert.equal(result.stored, false);
-      assert.equal(result.storeReference, null);
-      assert.equal(result.error.stage, "persistence");
-      assert.equal(carouselStore.saved().length, 0);
+      assert.equal(carouselStore.list().length, 0, "no carousel persisted after a partial render failure");
     });
   }));
 
@@ -289,70 +307,75 @@ test("an unknown asset ID is reported safely as a rejected run, no provider or t
 
       assert.equal(result.success, false);
       assert.equal(result.status, "rejected");
-      assert.equal(result.error.stage, "asset-resolution");
-      assert.equal(result.error.code, "UnknownContentAssetError");
+      // I016's Content Asset Resolver (unmodified) surfaces its own
+      // UnknownSourceReferenceError — see production-run-live-cli.test.mjs
+      // for the equivalent CLI-level assertion and its own note.
+      assert.equal(result.error.code, "UnknownSourceReferenceError");
       assert.equal(providerCalled, false);
       assert.equal(transportCalled, false);
     })
   ));
 
-// --- Secret-safe diagnostics ---------------------------------------------
+// --- Safe result mapping (no throw, no stack trace) ----------------------
 
-test("an LlmClientError's safe diagnostic passes through to the result, never the raw response body or API key", () =>
+test("a generic (non-Llm, no .retryable field) provider failure produces a safe { code, message } error, never a stack trace in the result", () =>
   withTempDir((dir) => {
     writeAsset(dir, "PR06");
     return withTempDir(async (storeDir) => {
-      const diagnostic = { status: 400, errorType: "invalid_request_error", requestId: "req_test_diag", message: "simulated safe message" };
-      const provider = {
-        name: "throws-client-error",
-        async generateCarousel() {
-          throw new LlmClientError("Anthropic rejected the request (HTTP 400)", diagnostic);
-        },
-      };
-
+      // A plain Error carries no `.retryable` field, so carousel-generator.mjs's
+      // own retry loop (unmodified) treats it as retryable-by-default —
+      // with maxAttempts: 1 it still exhausts after one attempt and wraps
+      // as CarouselGenerationFailedError, exactly as it already does for
+      // the mock provider path; this is existing, correct I004 behaviour,
+      // not something this service changes.
+      const provider = { name: "plain-error", async generateCarousel() { throw new Error("plain failure"); } };
       const result = await executeProductionRun(
         { assetId: "PR06", contentAssetsDir: dir },
-        { provider, renderTransport: createMockTransport(), carouselStore: createStore(storeDir), llmMaxAttempts: 1 }
+        { provider, renderTransport: createMockTransport(), carouselStore: createStore(storeDir), maxAttempts: 1 }
       );
-
-      assert.equal(result.error.stage, "generation");
-      assert.deepEqual(result.error.diagnostic, diagnostic);
-      assert.doesNotMatch(JSON.stringify(result), /sk-[A-Za-z0-9_-]{10,}/);
-    });
-  }));
-
-test("a generic (non-LlmClientError) failure has diagnostic: null, never a stack trace in the result", () =>
-  withTempDir((dir) => {
-    writeAsset(dir, "PR07");
-    return withTempDir(async (storeDir) => {
-      const provider = { name: "plain-error", async generateCarousel() { throw new Error("plain failure, no diagnostic field"); } };
-      const result = await executeProductionRun(
-        { assetId: "PR07", contentAssetsDir: dir },
-        { provider, renderTransport: createMockTransport(), carouselStore: createStore(storeDir), llmMaxAttempts: 1 }
-      );
-      assert.equal(result.error.diagnostic, null);
+      assert.equal(result.error.code, "CarouselGenerationFailedError");
       assert.doesNotMatch(JSON.stringify(result), /at file:\/\//);
     });
   }));
 
 // --- Determinism / injectable overrides ----------------------------------
 
-test("requestId/executionId/now are all injectable for deterministic tests", () =>
+test("now/idGenerator are injectable for deterministic tests, forwarded through to I016", () =>
   withTempDir((dir) => {
-    writeAsset(dir, "PR08");
+    writeAsset(dir, "PR07");
     return withTempDir(async (storeDir) => {
       const result = await executeProductionRun(
-        { assetId: "PR08", contentAssetsDir: dir },
+        { assetId: "PR07", contentAssetsDir: dir },
         {
           provider: createMockProvider(),
           renderTransport: createMockTransport(),
           carouselStore: createStore(storeDir),
-          requestIdGenerator: () => "prod_deterministic0001",
-          executionIdGenerator: () => "exec_20260101_deadbeefcafe",
+          idGenerator: () => "req_deterministic00001",
           now: () => "2026-01-01T00:00:00.000Z",
         }
       );
-      assert.equal(result.requestId, "prod_deterministic0001");
-      assert.equal(result.executionId, "exec_20260101_deadbeefcafe");
+      assert.equal(result.requestId, "req_deterministic00001");
+    });
+  }));
+
+// --- One Anthropic request maximum, six Templated requests maximum ------
+
+test("exactly one generateCarousel() call is made per run", () =>
+  withTempDir((dir) => {
+    writeAsset(dir, "PR08");
+    return withTempDir(async (storeDir) => {
+      let calls = 0;
+      const provider = {
+        name: "counting-provider",
+        async generateCarousel(prompt, context) {
+          calls += 1;
+          return createMockProvider().generateCarousel(prompt, context);
+        },
+      };
+      await executeProductionRun(
+        { assetId: "PR08", contentAssetsDir: dir },
+        { provider, renderTransport: createMockTransport(), carouselStore: createStore(storeDir), maxAttempts: 1 }
+      );
+      assert.equal(calls, 1);
     });
   }));
