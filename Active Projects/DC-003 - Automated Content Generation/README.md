@@ -3497,10 +3497,10 @@ which does) — an extra layer of friction given I019's stricter Live
 Verification Gate below; the flag must be typed explicitly on every
 invocation.
 
-### Live Verification Gate — not yet exercised
+### Live Verification Gate — first attempt made, failed with HTTP 400
 
-**No live Anthropic call has been made as of this milestone's delivery.**
-Per the approved brief, none may occur until:
+Per the approved brief, a live Anthropic call could occur only once all of
+the following passed:
 
 1. All automated tests pass (confirmed — see "Testing" below).
 2. Fixture validation passes (confirmed — `npm run validate`).
@@ -3510,12 +3510,71 @@ Per the approved brief, none may occur until:
 4. The exact model, endpoint, and maximum request count are reported.
 5. Strategy Office and CEO provide fresh approval.
 
-The first verification, when authorized, will be capped at exactly one
-provider request — `npm run generate:live -- GS01 --live` with no
+All five passed, and the first verification was made — capped at exactly
+one provider request — `npm run generate:live -- GS01 --live`, no
 `--live-max-attempts` override, against `LLM_MODEL` (default
 `claude-sonnet-5`) at `LLM_API_BASE_URL` (default
-`https://api.anthropic.com/v1`) — no retries, per the brief's own
-instruction, unless separately authorized.
+`https://api.anthropic.com/v1`). It made exactly one HTTP request (no
+retries) and that request was rejected: **HTTP 400**. See "Live
+Verification Gate incident (DC-003-I019.1)" immediately below for what
+happened and what was done about it. As of this writing, no *successful*
+live carousel generation has yet occurred — a second live attempt, with
+the safe diagnostics this incident produced, is still pending fresh
+authorization.
+
+### Live Verification Gate incident (DC-003-I019.1)
+
+**What happened:** the one authorized live request completed its network
+round trip (no timeout, no transport-level failure) but Anthropic
+responded with HTTP 400. At the time, `llm-transport-http.mjs` treated any
+non-401/403/429/5xx status as a generic `LlmTransportError` and — by
+design — never read the response body at all, on the theory that avoiding
+the raw body was always the safer choice. That theory held for secrecy,
+but it meant the *only* signal available afterward was the bare status
+code: no error type, no request ID, no message. The one-request-per-gate
+rule (see "Live-verification safety rule" above) meant a second live call
+to re-diagnose it was correctly out of scope for that session — so the
+failure was reported, unresolved, and stopped there.
+
+**A second, independently confirmed problem the same incident surfaced:**
+inspecting the classification afterward showed the generic 4xx-other
+bucket was thrown as `LlmTransportError`, whose `retryable` is hardcoded
+`true`. That's correct for the genuinely transient 5xx case it's also used
+for, but wrong for a 4xx: a request-construction problem like HTTP 400 is
+deterministic and will recur identically. Outside the live-verification
+CLI's own hardcoded one-attempt cap, this meant a plain HTTP 400 would have
+been retried up to `LLM_MAX_ATTEMPTS` (default 3) in ordinary production
+use — the exact class of mistake (retrying a request guaranteed to fail
+identically) the DC-003-I006 live-verification incident had already taught
+this codebase to design against. This was a genuine, confirmed
+implementation defect, not a hypothetical — found by inspecting
+`carousel-generator.mjs`'s retry loop against `LlmTransportError`'s actual
+`retryable: true` default, not assumed.
+
+**DC-003-I019.1 fixes both, without making a second live call:**
+
+- New error class `LlmClientError` (`src/llm-provider-errors.mjs`) —
+  `retryable: false` — for any HTTP 4xx response other than 401/403
+  (`LlmAuthenticationError`) or 429 (`LlmRateLimitError`). HTTP 400 now
+  stops the retry loop after exactly one attempt, matching the "Retry
+  classification" table above (which is otherwise unchanged).
+- New module `src/llm-error-diagnostics.mjs` (`buildSafeDiagnostic()`,
+  exported as `buildLlmSafeDiagnostic`) — see "Safe LLM Error Diagnostics"
+  below for the full contract.
+- `llm-transport-http.mjs`'s generic non-ok branch now reads the response
+  body as **text** (never `response.json()`, so a non-JSON body never
+  itself throws) and reduces it to a safe diagnostic before throwing
+  `LlmClientError`. Every other branch (401/403/429/5xx/network
+  failure/timeout/malformed success body) is unchanged.
+
+No prompt, schema, model selection, provider configuration, orchestration,
+rendering, or public domain contract changed — this was a corrective pass
+scoped entirely to the transport's own error boundary. Verified without a
+live call: 23 new regression tests (`tests/unit/llm-error-diagnostics.test.mjs`,
+extended `tests/unit/llm-transport-http.test.mjs`, one end-to-end addition
+to `tests/unit/carousel-generator.test.mjs` using the real HTTP transport
+and Anthropic provider adapter with `global.fetch` stubbed), full suite
+green (699/699), all 10 fixtures still pass.
 
 ### Relationship to I016/I017
 
@@ -3534,6 +3593,86 @@ redesign, real Templated rendering, n8n workflow changes, article
 generation, publishing, approval integration, streaming, batch generation,
 caching, a model evaluation framework, and cost analytics — none of these
 were touched.
+
+## Safe LLM Error Diagnostics (DC-003-I019.1)
+
+Added directly in response to the Live Verification Gate incident above,
+to make a rejected Anthropic HTTP response diagnosable without ever
+risking exposure of anything sensitive. Lives entirely in
+`src/llm-error-diagnostics.mjs` (`buildSafeDiagnostic()`) and the one call
+site that uses it, `llm-transport-http.mjs`'s generic non-ok branch.
+
+**The contract — `buildSafeDiagnostic(response, bodyText)` returns exactly:**
+
+```js
+{ status, errorType, requestId, message }
+```
+
+| Field | Meaning | Can be `null`? |
+|---|---|---|
+| `status` | The HTTP status code | No |
+| `errorType` | Anthropic's own `error.type` (e.g. `"invalid_request_error"`) | Yes — when the body isn't recognized JSON in this shape |
+| `requestId` | The `request-id` response header, falling back to `anthropic-request-id` | Yes — when neither header is present |
+| `message` | Anthropic's own `error.message`, sanitised and capped | Yes — same conditions as `errorType` |
+
+**Parsing only happens when it's safe to:**
+- The response body is read as **text**, never via `response.json()` — a
+  non-JSON body degrades to a minimal diagnostic instead of throwing a
+  parse error out of the transport.
+- Text is only ever `JSON.parse()`'d when the response's own
+  `content-type` header declares `application/json` — a different or
+  missing content-type is treated as opaque and left unparsed entirely,
+  even if it happens to look like JSON.
+- A parsed body that doesn't match Anthropic's documented `{ type:
+  "error", error: { type, message } }` envelope also degrades to a minimal
+  diagnostic (`errorType`/`message` both `null`) — this module never
+  guesses at an unfamiliar shape.
+- `buildSafeDiagnostic()` never throws, by construction — every failure
+  path (bad content-type, unparsable JSON, wrong shape, empty body)
+  returns the minimal diagnostic rather than propagating an exception.
+
+**What is never exposed, under any input, including deliberately
+adversarial ones covered by the regression tests below:**
+- The raw response body (only `error.type`/`error.message` are ever lifted
+  out of it — no other field of the body is ever read).
+- The API key or the `x-api-key`/`authorization` header.
+- The full request payload or the prompt text.
+- Tool input/output content (the carousel slide data itself).
+- A stack trace.
+- Anything secret-shaped even inside the provider's own message text: a
+  regex redaction pass (`sk-…`, `bearer …`, or any bare 32+ character
+  token-like run) replaces matches with `[REDACTED]` before the message is
+  ever returned — defense in depth, in case a future response ever echoed
+  something sensitive back.
+- An oversized message: capped at 300 characters (plus a trailing `…`),
+  so a verbose or adversarial provider message can never balloon a thrown
+  error.
+
+**Where this plugs in:** only `llm-transport-http.mjs`'s handling of a
+generic 4xx (not 401/403/429) changed — it now reads the body as text,
+calls `buildSafeDiagnostic()`, and throws the new `LlmClientError`
+(`retryable: false`, carrying `.diagnostic`) instead of the old bare
+`LlmTransportError(status)`. The 401/403/429/5xx/network-failure/timeout
+branches, `llm-provider-anthropic.mjs`, `llm-response-validator.mjs`,
+`carousel-generator.mjs`'s retry loop, and every other I019 module are
+byte-for-byte unchanged.
+
+**Regression coverage (23 new tests, `npm test` 699/699):**
+`tests/unit/llm-error-diagnostics.test.mjs` covers the module in
+isolation — a normal `invalid_request_error` body, malformed/unparsable
+JSON, a non-JSON content-type, no content-type header, an unexpected JSON
+shape, an empty/null body, request-ID presence/absence/fallback, message
+length-capping, and secret-like redaction (both an `sk-`-prefixed and a
+bare long-token form). `tests/unit/llm-transport-http.test.mjs` confirms
+the transport itself: HTTP 400 now surfaces `LlmClientError` (not
+`LlmTransportError`) with `retryable: false`, the full diagnostic shape
+for a real Anthropic-style body, no raw-body/API-key/prompt leakage, and
+exactly one `fetch()` call per rejected request. `tests/unit/carousel-generator.test.mjs`
+adds one end-to-end test using the real `createHttpTransport` +
+`createAnthropicProvider` (with `global.fetch` stubbed, no network) proving
+a genuine HTTP 400 stops the retry loop after exactly one attempt even
+with `maxAttempts: 3` — the precise scenario the incident above was
+worried about.
 
 ## Running tests
 
@@ -3893,13 +4032,14 @@ milestone).
 | Content Asset Resolver (bridges repository to I016's unchanged error contract) | Done (DC-003-I018) — `src/content-asset-resolver.mjs`; `UnknownSourceReferenceError`/`SourceResolutionError` unchanged from I016 |
 | Content Asset CLI check | Done (DC-003-I018) — `npm run content-asset -- get\|list\|validate`, no network |
 | I016/I017 backward compatibility after the resolver swap | Done (DC-003-I018) — verified live: the unmodified I017 n8n workflow (execution 133) and the I016 CLI both resolve `GS01` correctly through the new repository with zero changes to either |
-| Real LLM provider (Anthropic) | Done (DC-003-I019) — `src/llm-provider-anthropic.mjs`, behind the unmodified DC-003-I004 provider abstraction; see "Real LLM Provider Integration (DC-003-I019)"; mock remains the default everywhere; **no live call made yet — pending fresh Strategy Office + CEO approval** |
+| Real LLM provider (Anthropic) | Done (DC-003-I019) — `src/llm-provider-anthropic.mjs`, behind the unmodified DC-003-I004 provider abstraction; see "Real LLM Provider Integration (DC-003-I019)"; mock remains the default everywhere; **one live call made — rejected with HTTP 400; see "Live Verification Gate incident (DC-003-I019.1)"; a second live attempt is pending fresh authorization** |
 | LLM transport abstraction + mock transport | Done (DC-003-I019) — `src/llm-transport-mock.mjs`; the only transport tests use |
-| LLM HTTP transport (Anthropic Messages API) | Done (DC-003-I019) — `src/llm-transport-http.mjs`; endpoint/headers/tool-use structured-output mechanism confirmed against Anthropic's published docs; not yet exercised live |
+| LLM HTTP transport (Anthropic Messages API) | Done (DC-003-I019), error-boundary hardened (DC-003-I019.1) — `src/llm-transport-http.mjs`; endpoint/headers/tool-use structured-output mechanism confirmed against Anthropic's published docs; exercised live once (HTTP 400, now diagnosable — see below) |
 | LLM response validation + structured-output normalization | Done (DC-003-I019) — `src/llm-response-validator.mjs`; forced tool-use, never prose-embedded JSON |
-| LLM provider error hierarchy + retry classification | Done (DC-003-I019) — `src/llm-provider-errors.mjs`; closed a real pre-existing gap in `carousel-generator.mjs`'s retry loop (every provider error was retried uniformly before this) |
+| LLM provider error hierarchy + retry classification | Done (DC-003-I019), extended (DC-003-I019.1) — `src/llm-provider-errors.mjs`; closed a real pre-existing gap in `carousel-generator.mjs`'s retry loop (every provider error was retried uniformly before this); I019.1 closed a second gap found via the same mechanism — generic 4xx (e.g. HTTP 400) was retryable by default until `LlmClientError` was introduced |
+| Safe LLM error diagnostics (HTTP 400/4xx) | Done (DC-003-I019.1) — `src/llm-error-diagnostics.mjs`; see "Safe LLM Error Diagnostics (DC-003-I019.1)"; status/errorType/requestId/sanitised-message only, never the raw body/API key/prompt/tool content/stack trace |
 | Real-provider generation CLI check | Done (DC-003-I019) — `npm run generate:live` (mock by default) / `-- --live` (requires `LLM_API_KEY`, single-attempt by default); rendering stays mock-only always, no `--live-render` flag exists |
-| Unit test suite | Done — 676 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Unit test suite | Done — 699 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

@@ -6,6 +6,9 @@ import { generateCarouselFromTopicPackage } from "../../src/carousel-generator.m
 import { createMockProvider } from "../../src/carousel-mock-provider.mjs";
 import { loadTopicPackage } from "../../src/topic-package-loader.mjs";
 import { CarouselGenerationFailedError, PromptBuilderError } from "../../src/carousel-generator-errors.mjs";
+import { createAnthropicProvider } from "../../src/llm-provider-anthropic.mjs";
+import { createHttpTransport } from "../../src/llm-transport-http.mjs";
+import { LlmClientError } from "../../src/llm-provider-errors.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APPROVED_TOPIC_PATH = path.join(
@@ -219,6 +222,48 @@ test("a provider error with no retryable field at all is treated as retryable (u
     CarouselGenerationFailedError
   );
   assert.equal(provider.calls(), 2, "an error with no retryable field must retry exactly as it did before this milestone");
+});
+
+// --- DC-003-I019.1: end-to-end regression for the real Live Verification
+// Gate incident — a genuine HTTP 400 from the real Anthropic HTTP
+// transport, routed through the real Anthropic provider adapter, must stop
+// the retry loop after exactly one attempt (LlmClientError.retryable ===
+// false), never exhausting maxAttempts against a deterministic rejection.
+// global.fetch is stubbed; no network call is made. ------------------------
+
+test("a real HTTP 400 through the real Anthropic transport+provider triggers exactly one attempt, even with maxAttempts: 3", async () => {
+  let fetchCallCount = 0;
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    fetchCallCount += 1;
+    return {
+      ok: false,
+      status: 400,
+      headers: { get: (name) => (name.toLowerCase() === "content-type" ? "application/json" : null) },
+      json: async () => {
+        throw new SyntaxError("json() should not be called on a non-ok response");
+      },
+      text: async () => JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "model: field required" } }),
+    };
+  };
+
+  try {
+    const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+    const provider = createAnthropicProvider({ transport, model: "claude-sonnet-5" });
+
+    await assert.rejects(
+      () => generateCarouselFromTopicPackage(loadApprovedTopic(), { provider, maxAttempts: 3 }),
+      (thrown) => {
+        assert.ok(thrown instanceof LlmClientError, "the original LlmClientError must propagate, not a wrapped CarouselGenerationFailedError");
+        assert.equal(thrown.diagnostic.status, 400);
+        assert.equal(thrown.diagnostic.errorType, "invalid_request_error");
+        return true;
+      }
+    );
+    assert.equal(fetchCallCount, 1, "an HTTP 400 must produce exactly one transport call, never retried up to maxAttempts");
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("generated Carousel Content Object independently re-validates against the I002 schema runtime", async () => {

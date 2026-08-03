@@ -182,6 +182,13 @@ export {
   LlmRateLimitError,
   LlmTimeoutError,
   LlmTransportError,
+  LlmClientError,
   LlmMalformedResponseError,
   LlmProviderRejectedError,
 } from "./llm-provider-errors.mjs";
+
+// DC-003-I019.1 — safe, secret-free diagnostics for a rejected Anthropic
+// HTTP response (see LlmClientError.diagnostic above), added after the
+// I019 Live Verification Gate's first live attempt failed with an
+// undiagnosable HTTP 400. See README "Live Verification Gate incident".
+export { buildSafeDiagnostic as buildLlmSafeDiagnostic } from "./llm-error-diagnostics.mjs";

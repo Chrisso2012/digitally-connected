@@ -29,7 +29,8 @@
 // roughly-shaped JSON out of the model, not re-implementing that
 // validation a second time.
 
-import { LlmAuthenticationError, LlmConfigurationError, LlmRateLimitError, LlmTimeoutError, LlmTransportError } from "./llm-provider-errors.mjs";
+import { LlmAuthenticationError, LlmClientError, LlmConfigurationError, LlmRateLimitError, LlmTimeoutError, LlmTransportError } from "./llm-provider-errors.mjs";
+import { buildSafeDiagnostic } from "./llm-error-diagnostics.mjs";
 
 export const TOOL_NAME = "return_carousel_slides";
 
@@ -109,16 +110,24 @@ export function createHttpTransport(config) {
         throw new LlmTransportError(`Anthropic returned a server error (HTTP ${response.status})`, null);
       }
       if (!response.ok) {
-        // A 4xx other than 401/403/429 (e.g. 400 invalid_request_error) is
-        // a request-construction problem, not a transient one — surfaced
-        // as a transport failure since it isn't one of this module's own
-        // more specific categories, but deliberately not retried by
-        // carousel-generator.mjs either way (LlmTransportError is
-        // retryable by default for the genuinely transient 5xx case
-        // above; a 4xx here still gets one retry under the existing
-        // policy, matching this codebase's existing "err toward simple,
-        // bounded retry" stance rather than adding a further category).
-        throw new LlmTransportError(`Anthropic request returned HTTP ${response.status}`, null);
+        // A 4xx other than 401/403/429 (e.g. 400 invalid_request_error) is a
+        // request-construction problem, not a transient one — DC-003-I019.1
+        // introduced LlmClientError (retryable: false) for exactly this
+        // bucket, after the I019 Live Verification Gate's first live
+        // attempt failed here with no diagnosable detail (see README "Live
+        // Verification Gate incident"). The response body is read as text
+        // (never via response.json(), so a non-JSON body never throws) and
+        // reduced to a safe, bounded diagnostic — buildSafeDiagnostic()
+        // never returns the raw body, headers, API key, request payload,
+        // prompt, or tool content; see llm-error-diagnostics.mjs.
+        let bodyText = null;
+        try {
+          bodyText = await response.text();
+        } catch {
+          bodyText = null;
+        }
+        const diagnostic = buildSafeDiagnostic(response, bodyText);
+        throw new LlmClientError(`Anthropic rejected the request (HTTP ${response.status})`, diagnostic);
       }
 
       let body;

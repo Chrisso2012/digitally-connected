@@ -88,6 +88,25 @@ export class LlmTransportError extends LlmProviderError {
 }
 
 /**
+ * The provider rejected the request itself — an HTTP 4xx response other
+ * than 401/403 (authentication) or 429 (rate limit); HTTP 400
+ * invalid_request_error is the common case, and the one that triggered
+ * this class's own introduction in DC-003-I019.1 (see README "Live
+ * Verification Gate incident"). Never retryable — a request-construction
+ * problem is deterministic and will be rejected again identically.
+ * Carries a `diagnostic` object ({ status, errorType, requestId, message })
+ * built by llm-error-diagnostics.mjs — never the raw response body,
+ * headers, API key, request payload, prompt, or tool content.
+ */
+export class LlmClientError extends LlmProviderError {
+  constructor(message, diagnostic = null) {
+    super(message, { retryable: false });
+    this.name = "LlmClientError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+/**
  * The provider's response could not be trusted — not valid JSON, missing
  * the expected structured-output block, or an input that isn't a plain
  * object. Never retryable: a shape mismatch is deterministic and will

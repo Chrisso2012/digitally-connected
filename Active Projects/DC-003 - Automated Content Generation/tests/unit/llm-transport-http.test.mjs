@@ -12,6 +12,7 @@ import {
   LlmAuthenticationError,
   LlmRateLimitError,
   LlmTransportError,
+  LlmClientError,
   LlmTimeoutError,
 } from "../../src/llm-provider-errors.mjs";
 
@@ -33,6 +34,23 @@ function jsonResponse(status, body, headers = {}) {
     status,
     headers: { get: (name) => headers[name.toLowerCase()] ?? null },
     json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+// A response double for the safe-diagnostics tests, where the caller needs
+// precise control over the raw body text and content-type independent of
+// whatever `body` would JSON.stringify to (e.g. deliberately non-JSON text,
+// or deliberately malformed JSON).
+function rawResponse(status, bodyText, headers = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+    json: async () => {
+      throw new SyntaxError("rawResponse test double: json() should not be called on a non-ok response");
+    },
+    text: async () => bodyText,
   };
 }
 
@@ -151,14 +169,98 @@ test("HTTP 5xx surfaces as LlmTransportError", () =>
     }
   ));
 
-test("another non-ok status (e.g. 400) surfaces as LlmTransportError", () =>
+test("HTTP 400 surfaces as LlmClientError, not LlmTransportError, and is not retryable", () =>
   withStubFetch(
-    async () => jsonResponse(400, {}),
+    async () => rawResponse(400, "", {}),
     async () => {
       const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
-      await assert.rejects(() => transport.send(REQUEST, {}), LlmTransportError);
+      await assert.rejects(() => transport.send(REQUEST, {}), (error) => {
+        assert.ok(error instanceof LlmClientError);
+        assert.equal(error.retryable, false);
+        return true;
+      });
     }
   ));
+
+test("HTTP 400 with an Anthropic invalid_request_error body surfaces a full safe diagnostic", () =>
+  withStubFetch(
+    async () =>
+      rawResponse(
+        400,
+        JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "model: field required" } }),
+        { "content-type": "application/json", "request-id": "req_live_test_1" }
+      ),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      await assert.rejects(() => transport.send(REQUEST, {}), (error) => {
+        assert.ok(error instanceof LlmClientError);
+        assert.deepEqual(error.diagnostic, {
+          status: 400,
+          errorType: "invalid_request_error",
+          requestId: "req_live_test_1",
+          message: "model: field required",
+        });
+        return true;
+      });
+    }
+  ));
+
+test("HTTP 400 with malformed JSON degrades to a minimal diagnostic rather than throwing a parse error", () =>
+  withStubFetch(
+    async () => rawResponse(400, "{ not valid json", { "content-type": "application/json" }),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      await assert.rejects(() => transport.send(REQUEST, {}), (error) => {
+        assert.ok(error instanceof LlmClientError);
+        assert.equal(error.diagnostic.status, 400);
+        assert.equal(error.diagnostic.errorType, null);
+        assert.equal(error.diagnostic.message, null);
+        return true;
+      });
+    }
+  ));
+
+test("HTTP 400 with a non-JSON content-type never has its body parsed", () =>
+  withStubFetch(
+    async () => rawResponse(400, "<html>Bad Request: internal-detail-marker</html>", { "content-type": "text/html" }),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      await assert.rejects(() => transport.send(REQUEST, {}), (error) => {
+        assert.ok(error instanceof LlmClientError);
+        assert.equal(error.diagnostic.errorType, null);
+        assert.equal(error.diagnostic.message, null);
+        assert.doesNotMatch(JSON.stringify(error), /internal-detail-marker/);
+        return true;
+      });
+    }
+  ));
+
+test("HTTP 400 request-id header is propagated into the diagnostic; absent yields null", () =>
+  withStubFetch(
+    async () => rawResponse(400, "", { "content-type": "application/json" }),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      await assert.rejects(() => transport.send(REQUEST, {}), (error) => {
+        assert.equal(error.diagnostic.requestId, null);
+        return true;
+      });
+    }
+  ));
+
+test("exactly one fetch call occurs for an HTTP 400 response", () => {
+  let callCount = 0;
+  return withStubFetch(
+    async () => {
+      callCount += 1;
+      return rawResponse(400, "", {});
+    },
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      await assert.rejects(() => transport.send(REQUEST, {}), LlmClientError);
+      assert.equal(callCount, 1, "the HTTP transport must never internally retry a rejected request");
+    }
+  );
+});
 
 test("a fetch rejection (network failure) surfaces as LlmTransportError", () =>
   withStubFetch(
@@ -231,6 +333,60 @@ test("no thrown error ever includes the raw response body", () =>
         assert.fail("expected to throw");
       } catch (error) {
         assert.doesNotMatch(error.message, /raw-body-marker-must-not-leak/);
+      }
+    }
+  ));
+
+test("no LlmClientError (HTTP 400 path) ever includes the raw response body outside the sanitised message field", () =>
+  withStubFetch(
+    async () =>
+      rawResponse(
+        400,
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "short safe message" },
+          extra_raw_field: "RAW_BODY_MARKER_MUST_NOT_LEAK",
+        }),
+        { "content-type": "application/json" }
+      ),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      try {
+        await transport.send(REQUEST, {});
+        assert.fail("expected to throw");
+      } catch (error) {
+        assert.ok(error instanceof LlmClientError);
+        assert.doesNotMatch(JSON.stringify(error), /RAW_BODY_MARKER_MUST_NOT_LEAK/);
+        assert.doesNotMatch(error.message, /RAW_BODY_MARKER_MUST_NOT_LEAK/);
+      }
+    }
+  ));
+
+test("no thrown error ever includes the authorization header value", () =>
+  withStubFetch(
+    async () => rawResponse(400, "", {}),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key-header-marker" });
+      try {
+        await transport.send(REQUEST, {});
+        assert.fail("expected to throw");
+      } catch (error) {
+        assert.doesNotMatch(JSON.stringify(error), /sk-test-fake-key-header-marker/);
+      }
+    }
+  ));
+
+test("no thrown error ever includes the request prompt", () =>
+  withStubFetch(
+    async () => rawResponse(400, "", {}),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      const request = { ...REQUEST, prompt: "SECRET_PROMPT_CONTENT_MARKER" };
+      try {
+        await transport.send(request, {});
+        assert.fail("expected to throw");
+      } catch (error) {
+        assert.doesNotMatch(JSON.stringify(error), /SECRET_PROMPT_CONTENT_MARKER/);
       }
     }
   ));
