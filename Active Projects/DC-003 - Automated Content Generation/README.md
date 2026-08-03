@@ -3424,12 +3424,20 @@ avoid (see "Live-verification safety rule" under Templated Renderer).
 Real LLM output is inherently non-deterministic — identical production
 inputs (the same Topic Package, the same deterministic prompt) are **not**
 guaranteed to produce byte-identical carousel copy, unlike the mock
-provider. I019 minimizes variance without eliminating it: `temperature: 0`
-(the lowest practical value) and a pinned model identifier
-(`LLM_MODEL`/`fields.model`, never hardcoded). Automated tests stay fully
-deterministic anyway, because they never call the real provider at all —
-every test runs against `createMockLlmTransport()`, exactly like every
-other milestone in this codebase runs against its own mock transport.
+provider. I019 originally tried to minimize variance with `temperature: 0`
+(the lowest practical value) plus a pinned model identifier
+(`LLM_MODEL`/`fields.model`, never hardcoded); **DC-003-I019.3 removed the
+`temperature: 0` half of that** after the Live Verification Gate's third
+live attempt was rejected — the configured model no longer accepts a
+`temperature` field at all (see "Live Verification Gate — HTTP 400 root
+cause diagnosed and fixed (DC-003-I019.3)" below). Determinism now rests on
+the pinned model identifier alone; real LLM output is expected to vary
+run-to-run more than the original design intended, and that's an accepted
+consequence of the fix, not a regression to chase. Automated tests stay
+fully deterministic regardless, because they never call the real provider
+at all — every test runs against `createMockLlmTransport()`, exactly like
+every other milestone in this codebase runs against its own mock
+transport.
 
 ### Mock-default behaviour
 
@@ -3673,6 +3681,65 @@ adds one end-to-end test using the real `createHttpTransport` +
 a genuine HTTP 400 stops the retry loop after exactly one attempt even
 with `maxAttempts: 3` — the precise scenario the incident above was
 worried about.
+
+## Live Verification Gate — HTTP 400 root cause diagnosed and fixed (DC-003-I019.3)
+
+**DC-003-I019.2** (`6a64ca1`) added the missing diagnostic-printing branch
+to `generate-live-carousel.mjs` — the CLI itself hadn't been surfacing
+`LlmClientError.diagnostic` even though I019.1 had already built it. With
+that fix in place, a **third** live-verification attempt (Strategy Office
+approved, exactly one request, no retries) returned the full diagnostic
+for the first time:
+
+```
+status:    400
+errorType: invalid_request_error
+requestId: req_011CdfztDfdvwo8VpgMNyyJc
+message:   `temperature` is deprecated for this model.
+```
+
+**Root cause, now confirmed rather than guessed:** `llm-transport-http.mjs`
+sent `temperature: 0` in every request body unconditionally (I019's
+original "minimize variance" choice — see "Determinism note" above). The
+configured model (`LLM_MODEL`, default `claude-sonnet-5`) rejects that
+field outright. This is what caused all three live HTTP 400s — the first
+two just couldn't say so, before I019.1/I019.2 existed to surface it.
+
+**DC-003-I019.3 fix — narrowly scoped, no live call made to implement or
+verify it:**
+
+- `llm-transport-http.mjs`'s request body now includes `temperature` only
+  when the caller explicitly set one (`...(request.temperature !==
+  undefined ? { temperature: request.temperature } : {})`) — omitted
+  entirely by default, rather than sent as `0`.
+- `llm-provider-anthropic.mjs`'s `createAnthropicProvider()` no longer
+  defaults `fields.temperature` to `0` (`DEFAULT_TEMPERATURE` removed) —
+  `fields.temperature` is `undefined` unless a caller explicitly passes
+  one. An explicit override is still honored end-to-end, for a future
+  model that does accept the field.
+- Every other request field (`model`, `max_tokens`, `messages`, `tools`,
+  `tool_choice`) is byte-for-byte unchanged, as is every other error class,
+  the retry loop, the mock transport/provider, prompts, schemas,
+  orchestration, rendering, and provider selection.
+
+**Regression coverage (7 new/changed tests, verified without a live
+call):** `llm-transport-http.test.mjs` confirms the request body omits
+`temperature` by default, that `model`/`max_tokens`/`messages` and the
+forced `tools`/`tool_choice` structured-output shape are all still
+present, that an explicit override is still honored, and that HTTP 400/5xx
+error classification and retry semantics are unaffected by the change.
+`llm-provider-anthropic.test.mjs`'s former "defaults" test now asserts
+`temperature` is `undefined` by default (renamed to say so), plus one new
+test confirming an explicit override still reaches the transport.
+
+**Proposed one-request live verification procedure, once authorized:**
+pre-flight (`npm test`, `npm run validate`, confirm config without
+displaying secrets) → `npm run generate:live -- GS01 --live`, no
+`--live-max-attempts` override → report `carousel_content_id`/model/slide
+count/validation result on success, or the safe
+status/errorType/requestId/message diagnostic on failure — same procedure
+as the prior two attempts, now against a request body that no longer
+carries the field that caused the rejection.
 
 ## Running tests
 
@@ -4032,14 +4099,14 @@ milestone).
 | Content Asset Resolver (bridges repository to I016's unchanged error contract) | Done (DC-003-I018) — `src/content-asset-resolver.mjs`; `UnknownSourceReferenceError`/`SourceResolutionError` unchanged from I016 |
 | Content Asset CLI check | Done (DC-003-I018) — `npm run content-asset -- get\|list\|validate`, no network |
 | I016/I017 backward compatibility after the resolver swap | Done (DC-003-I018) — verified live: the unmodified I017 n8n workflow (execution 133) and the I016 CLI both resolve `GS01` correctly through the new repository with zero changes to either |
-| Real LLM provider (Anthropic) | Done (DC-003-I019) — `src/llm-provider-anthropic.mjs`, behind the unmodified DC-003-I004 provider abstraction; see "Real LLM Provider Integration (DC-003-I019)"; mock remains the default everywhere; **one live call made — rejected with HTTP 400; see "Live Verification Gate incident (DC-003-I019.1)"; a second live attempt is pending fresh authorization** |
+| Real LLM provider (Anthropic) | Done (DC-003-I019), HTTP 400 root cause diagnosed and fixed (DC-003-I019.1–I019.3) — `src/llm-provider-anthropic.mjs`, behind the unmodified DC-003-I004 provider abstraction; see "Live Verification Gate — HTTP 400 root cause diagnosed and fixed (DC-003-I019.3)"; mock remains the default everywhere; **three live attempts made — first two undiagnosable (fixed by I019.1/I019.2), third fully diagnosed the `temperature` field defect, now fixed by I019.3; one further controlled live attempt is expected to succeed, pending fresh authorization** |
 | LLM transport abstraction + mock transport | Done (DC-003-I019) — `src/llm-transport-mock.mjs`; the only transport tests use |
 | LLM HTTP transport (Anthropic Messages API) | Done (DC-003-I019), error-boundary hardened (DC-003-I019.1) — `src/llm-transport-http.mjs`; endpoint/headers/tool-use structured-output mechanism confirmed against Anthropic's published docs; exercised live once (HTTP 400, now diagnosable — see below) |
 | LLM response validation + structured-output normalization | Done (DC-003-I019) — `src/llm-response-validator.mjs`; forced tool-use, never prose-embedded JSON |
 | LLM provider error hierarchy + retry classification | Done (DC-003-I019), extended (DC-003-I019.1) — `src/llm-provider-errors.mjs`; closed a real pre-existing gap in `carousel-generator.mjs`'s retry loop (every provider error was retried uniformly before this); I019.1 closed a second gap found via the same mechanism — generic 4xx (e.g. HTTP 400) was retryable by default until `LlmClientError` was introduced |
 | Safe LLM error diagnostics (HTTP 400/4xx) | Done (DC-003-I019.1) — `src/llm-error-diagnostics.mjs`; see "Safe LLM Error Diagnostics (DC-003-I019.1)"; status/errorType/requestId/sanitised-message only, never the raw body/API key/prompt/tool content/stack trace |
 | Real-provider generation CLI check | Done (DC-003-I019) — `npm run generate:live` (mock by default) / `-- --live` (requires `LLM_API_KEY`, single-attempt by default); rendering stays mock-only always, no `--live-render` flag exists |
-| Unit test suite | Done — 699 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Unit test suite | Done — 707 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

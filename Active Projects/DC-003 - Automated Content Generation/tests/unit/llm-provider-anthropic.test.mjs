@@ -89,7 +89,13 @@ test("timeoutMs is passed through to the transport's send() options, never hardc
   assert.equal(observedTimeout, 4242);
 });
 
-test("defaults: temperature 0 and maxTokens 4096 are used when not overridden", async () => {
+test("defaults: temperature is omitted (undefined) and maxTokens is 4096 when not overridden", async () => {
+  // DC-003-I019.3: temperature no longer defaults to 0 — the Live
+  // Verification Gate's third live attempt was rejected because the
+  // configured model no longer accepts a `temperature` field at all
+  // ("`temperature` is deprecated for this model"). See
+  // llm-transport-http.test.mjs for confirmation the request body itself
+  // omits the key entirely when this is undefined.
   let observedRequest = null;
   const spyTransport = {
     name: "spy",
@@ -100,8 +106,22 @@ test("defaults: temperature 0 and maxTokens 4096 are used when not overridden", 
   };
   const provider = createAnthropicProvider({ transport: spyTransport, model: "claude-sonnet-5" });
   await provider.generateCarousel("prompt", {});
-  assert.equal(observedRequest.temperature, 0);
+  assert.equal(observedRequest.temperature, undefined);
   assert.equal(observedRequest.maxTokens, 4096);
+});
+
+test("an explicit temperature override is still passed through to the transport", async () => {
+  let observedRequest = null;
+  const spyTransport = {
+    name: "spy",
+    async send(request) {
+      observedRequest = request;
+      return { content: [{ type: "tool_use", name: request.toolName, input: { slides: [] } }], stop_reason: "tool_use" };
+    },
+  };
+  const provider = createAnthropicProvider({ transport: spyTransport, model: "claude-sonnet-5", temperature: 0.5 });
+  await provider.generateCarousel("prompt", {});
+  assert.equal(observedRequest.temperature, 0.5);
 });
 
 // --- Failure modes, routed through the mock transport, each carrying the

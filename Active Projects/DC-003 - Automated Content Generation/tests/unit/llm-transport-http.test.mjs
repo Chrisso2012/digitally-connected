@@ -102,6 +102,106 @@ test("POSTs to <baseUrl>/messages with the required headers and a tool-forcing s
     }
   ));
 
+// --- DC-003-I019.3: `temperature` omission (the Live Verification Gate's
+// third live attempt was rejected — HTTP 400 invalid_request_error:
+// "`temperature` is deprecated for this model" — because this transport
+// used to send `temperature: 0` unconditionally). -------------------------
+
+test("the request body omits \"temperature\" entirely when request.temperature is undefined", () =>
+  withStubFetch(
+    async (url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal("temperature" in body, false, "temperature must be absent from the body, not present as null/0");
+      return jsonResponse(200, { content: [], stop_reason: "tool_use" });
+    },
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      const requestWithoutTemperature = { model: "claude-sonnet-5", prompt: "test prompt", maxTokens: 4096, toolName: TOOL_NAME };
+      await transport.send(requestWithoutTemperature, {});
+    }
+  ));
+
+test("all other required fields remain present in the body when temperature is omitted", () =>
+  withStubFetch(
+    async (url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal(body.model, "claude-sonnet-5");
+      assert.equal(body.max_tokens, 4096);
+      assert.equal(body.messages[0].role, "user");
+      assert.equal(body.messages[0].content, "test prompt");
+      return jsonResponse(200, { content: [], stop_reason: "tool_use" });
+    },
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      const requestWithoutTemperature = { model: "claude-sonnet-5", prompt: "test prompt", maxTokens: 4096, toolName: TOOL_NAME };
+      await transport.send(requestWithoutTemperature, {});
+    }
+  ));
+
+test("structured tool output is still forced (tools + tool_choice) when temperature is omitted", () =>
+  withStubFetch(
+    async (url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal(body.tool_choice.type, "tool");
+      assert.equal(body.tool_choice.name, TOOL_NAME);
+      assert.equal(body.tools.length, 1);
+      assert.equal(body.tools[0].name, TOOL_NAME);
+      assert.ok(body.tools[0].input_schema, "input_schema must still be present");
+      return jsonResponse(200, { content: [], stop_reason: "tool_use" });
+    },
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      const requestWithoutTemperature = { model: "claude-sonnet-5", prompt: "test prompt", maxTokens: 4096, toolName: TOOL_NAME };
+      await transport.send(requestWithoutTemperature, {});
+    }
+  ));
+
+test("an explicit temperature is still included in the body (opt-in override preserved)", () =>
+  withStubFetch(
+    async (url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal(body.temperature, 0.7);
+      return jsonResponse(200, { content: [], stop_reason: "tool_use" });
+    },
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      const requestWithTemperature = { model: "claude-sonnet-5", prompt: "test prompt", temperature: 0.7, maxTokens: 4096, toolName: TOOL_NAME };
+      await transport.send(requestWithTemperature, {});
+    }
+  ));
+
+test("existing error classification is unaffected by temperature omission — HTTP 400 still surfaces LlmClientError with a safe diagnostic", () =>
+  withStubFetch(
+    async () =>
+      rawResponse(400, JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "some other 400" } }), {
+        "content-type": "application/json",
+      }),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      const requestWithoutTemperature = { model: "claude-sonnet-5", prompt: "test prompt", maxTokens: 4096, toolName: TOOL_NAME };
+      await assert.rejects(() => transport.send(requestWithoutTemperature, {}), (error) => {
+        assert.ok(error instanceof LlmClientError);
+        assert.equal(error.retryable, false);
+        assert.equal(error.diagnostic.errorType, "invalid_request_error");
+        return true;
+      });
+    }
+  ));
+
+test("existing retry behaviour is unaffected — timeout/5xx/429/401 classification is unchanged regardless of temperature", () =>
+  withStubFetch(
+    async () => jsonResponse(503, {}),
+    async () => {
+      const transport = createHttpTransport({ apiKey: "sk-test-fake-key" });
+      const requestWithoutTemperature = { model: "claude-sonnet-5", prompt: "test prompt", maxTokens: 4096, toolName: TOOL_NAME };
+      await assert.rejects(() => transport.send(requestWithoutTemperature, {}), (error) => {
+        assert.ok(error instanceof LlmTransportError);
+        assert.equal(error.retryable, true);
+        return true;
+      });
+    }
+  ));
+
 test("a trailing slash on baseUrl does not produce a double slash in the request URL", () =>
   withStubFetch(
     async (url) => {

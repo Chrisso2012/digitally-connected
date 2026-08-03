@@ -9,11 +9,17 @@
 // (`x-api-key`, `anthropic-version: 2023-06-01`), and the tool-use
 // mechanism for forcing structured output are per Anthropic's published
 // Messages API documentation (https://docs.anthropic.com/en/api/messages,
-// https://docs.anthropic.com/en/docs/build-with-claude/tool-use). Not yet
-// exercised against a live request as of this comment — that requires
-// fresh Strategy Office + CEO approval per the I019 brief's own Live
-// Verification Gate, capped at one request, and is deliberately not part
-// of this milestone's automated implementation.
+// https://docs.anthropic.com/en/docs/build-with-claude/tool-use).
+//
+// DC-003-I019.3 — `temperature` is omitted from the request body by
+// default (only included when the caller explicitly set one on the
+// adapter). The Live Verification Gate's third live attempt (see README
+// "Live Verification Gate — HTTP 400 root cause diagnosed and fixed
+// (DC-003-I019.3)") was rejected with HTTP 400 invalid_request_error:
+// "`temperature` is deprecated for this model" — sending `temperature: 0`
+// unconditionally, as this transport did before I019.3, is what triggered
+// it. Every other field (model, max_tokens, messages, tools, tool_choice)
+// is unchanged.
 //
 // Structured output, not prose-embedded JSON: the request forces exactly
 // one tool call via `tool_choice`, so the response's `content` contains a
@@ -82,7 +88,13 @@ export function createHttpTransport(config) {
           body: JSON.stringify({
             model: request.model,
             max_tokens: request.maxTokens,
-            temperature: request.temperature,
+            // DC-003-I019.3: `temperature` is only included when the caller
+            // explicitly set one — the Live Verification Gate's third live
+            // attempt was rejected (HTTP 400 invalid_request_error:
+            // "`temperature` is deprecated for this model"). Omitting the
+            // key entirely (rather than sending 0) is the fix; every other
+            // field is unchanged.
+            ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
             messages: [{ role: "user", content: request.prompt }],
             tools: [{ name: request.toolName, description: "Return the six carousel slides as structured data.", input_schema: TOOL_INPUT_SCHEMA }],
             tool_choice: { type: "tool", name: request.toolName },

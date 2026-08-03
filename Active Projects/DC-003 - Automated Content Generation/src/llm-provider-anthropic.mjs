@@ -34,11 +34,6 @@ import { validateLlmTransportResponse } from "./llm-response-validator.mjs";
 import { LlmProviderError } from "./llm-provider-errors.mjs";
 
 const DEFAULT_MAX_TOKENS = 4096;
-// Lowest practical value, per the approved brief's own "Determinism"
-// section — Anthropic's API does not guarantee byte-identical output even
-// at temperature 0, so this reduces variance, it does not eliminate it.
-// See README "Determinism note" for what this does and does not promise.
-const DEFAULT_TEMPERATURE = 0;
 
 /**
  * Builds an Anthropic-backed LLM provider, implementing the same
@@ -53,7 +48,13 @@ const DEFAULT_TEMPERATURE = 0;
  * fields.model — required, the exact model identifier (e.g.
  *   "claude-sonnet-5"). Always from configuration (llm-provider-config.mjs,
  *   ultimately LLM_MODEL) or an explicit override — never hardcoded here.
- * fields.temperature — default 0 (lowest practical, see above).
+ * fields.temperature — DC-003-I019.3: no default. Omitted from the request
+ *   entirely unless the caller explicitly passes one — see
+ *   llm-transport-http.mjs's header comment for why (the Live Verification
+ *   Gate's third live attempt was rejected with HTTP 400
+ *   invalid_request_error: "`temperature` is deprecated for this model").
+ *   An explicit override is still honored, for a future model that does
+ *   accept it.
  * fields.maxTokens — default 4096.
  * fields.timeoutMs — per-call timeout passed to the transport, default
  *   15000.
@@ -67,7 +68,7 @@ export function createAnthropicProvider(fields = {}) {
   }
 
   const { transport, model } = fields;
-  const temperature = fields.temperature ?? DEFAULT_TEMPERATURE;
+  const temperature = fields.temperature; // no default — see fields.temperature above
   const maxTokens = fields.maxTokens ?? DEFAULT_MAX_TOKENS;
   const timeoutMs = fields.timeoutMs ?? 15000;
 
