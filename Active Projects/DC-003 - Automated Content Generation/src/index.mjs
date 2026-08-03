@@ -192,3 +192,9 @@ export {
 // I019 Live Verification Gate's first live attempt failed with an
 // undiagnosable HTTP 400. See README "Live Verification Gate incident".
 export { buildSafeDiagnostic as buildLlmSafeDiagnostic } from "./llm-error-diagnostics.mjs";
+
+// DC-003-I020 — Production Run Service: the one entry point that can
+// compose live Anthropic generation and live Templated rendering into one
+// persisted Finished Carousel. See "Live Production Run (DC-003-I020)" in
+// the README.
+export { executeProductionRun } from "./production-run-service.mjs";

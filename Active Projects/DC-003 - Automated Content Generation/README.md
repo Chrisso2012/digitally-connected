@@ -3741,6 +3741,221 @@ status/errorType/requestId/message diagnostic on failure — same procedure
 as the prior two attempts, now against a request body that no longer
 carries the field that caused the rejection.
 
+## Live Production Run (DC-003-I020)
+
+The first entry point in this repository that can compose a complete,
+real production run: live Anthropic generation **and** live Templated
+rendering **and** persistence, in one invocation. Every milestone before
+this one kept the two live boundaries deliberately separate (I019: live
+generation, mock rendering always; I006: live rendering exercised
+independently) — I020 is a controlled composition of what already exists,
+not new generation/rendering/persistence logic.
+
+```mermaid
+flowchart LR
+    A[Content Asset GS01\nI018, unchanged] --> B[Carousel Generator\nI004, live Anthropic provider — I019]
+    B --> C[Payload Mapper\nI005, unchanged]
+    C --> D[Renderer\nI006, live Templated transport]
+    D --> E[Finished Carousel Builder\nI007, unchanged]
+    E --> F[Finished Carousel Store\nI015, unchanged]
+    F --> G[Production Run Result]
+```
+
+### Why this bypasses the orchestrator
+
+The full production stack (Execution Ledger → Pipeline Orchestrator →
+External Invocation Adapter → n8n Adapter → Production Workflow, I008–I012)
+was inspected first, per the brief's own pre-flight instruction. It has no
+existing mechanism to carry a live provider or live transport through it:
+`normalizeInvocationRequest()` (I010) hardcodes its returned configuration
+to `{ topicPackageSource }` only, and `mapWorkflowInputToInvocationRequest()`
+(I011)/`invocation-request.schema.json` never had a `provider`/`transport`
+field to begin with — every request on that path is schema-validated,
+JSON-only data, and a live provider/transport object (a function-bearing
+adapter, not JSON) cannot pass through it without a genuine schema and
+normalizer change. That would be "redesigning the pipeline," explicitly out
+of scope for this milestone.
+
+Instead, `src/production-run-service.mjs` composes the same per-stage
+functions `pipeline-stages.mjs` itself already calls
+(`generateCarouselFromTopicPackage`, `mapCarouselToTemplatedPayload`,
+`renderTemplatedPayload`, `createFinishedCarousel`) directly and
+sequentially — exactly the pattern DC-003-I019's own
+`generate-live-carousel.mjs` already established for live generation; I020
+extends that same established pattern through live rendering and I015
+persistence, rather than inventing a second composition style. The
+Ledger/Orchestrator/Adapter stack, `content-request-service.mjs`, and every
+I016/I017 file are untouched by this milestone — zero lines changed in any
+of them.
+
+### Explicit live-mode selection
+
+```bash
+npm run production:live -- GS01 <storeDirectory>              # mock (both boundaries), safe to run anytime
+npm run production:live -- GS01 <storeDirectory> --live       # LIVE — 1 Anthropic + up to 6 Templated requests
+```
+
+`storeDirectory` is always an explicit, required argument — no default,
+matching every other storage-directory-taking CLI in this repository (I015's
+`store`, I016's `content:request`). `--live` is required and unmistakable;
+without it, `production-run-live.mjs` makes no network call of any kind —
+both the provider and the render transport are the existing mock
+implementations (`createMockProvider()`, `createMockTransport()`), and the
+CLI's own printed output never claims "Running LIVE" in that mode. There is
+no `--live-max-attempts` override on this CLI (unlike I006/I019's own live
+CLIs) — the I020 brief disallows any retry during the initial production
+run with no escape hatch, so none is offered here.
+
+### Credential requirements
+
+`--live` requires **both** `LLM_API_KEY` and `TEMPLATED_API_KEY` to be set,
+checked before either transport is constructed and before any request of
+any kind is made. Missing either one fails fast, naming exactly which is
+missing (never both when only one is absent, never neither's presence
+implied when both are missing). Configuration is read via the existing,
+unmodified `loadLlmProviderConfig()` (`LLM_API_KEY`/`LLM_MODEL`/
+`LLM_API_BASE_URL`/`LLM_REQUEST_TIMEOUT_MS`) and `loadRendererConfig()`
+(`TEMPLATED_API_KEY`/`TEMPLATED_API_BASE_URL`/`TEMPLATED_REQUEST_TIMEOUT_MS`)
+— no new configuration module was added for this milestone.
+
+### Seven-request maximum budget
+
+| Provider | Requests | Attempts each |
+|---|---|---|
+| Anthropic | 1 maximum | 1 (no retry) |
+| Templated | 6 maximum (one per slide, in order: cover, content, statistic, quote, infographic, cta) | 1 (no retry) |
+| **Total** | **7 maximum** | |
+
+Both ceilings come from the existing `resolveLlmLiveMaxAttempts()`
+(I019) and `resolveLiveMaxAttempts()` (I006) safety primitives, called
+with no override — the same "a `--live` invocation always defaults to
+exactly one attempt, completely independent of
+`LLM_MAX_ATTEMPTS`/`TEMPLATED_RENDER_MAX_ATTEMPTS`" rule those two
+milestones already established after their own incidents (see
+"Live-verification safety rule" under both "Templated Renderer" and "Real
+LLM Provider Integration" above) — reused unmodified, not reimplemented.
+
+### Stop-on-first-failure behaviour
+
+- **Anthropic failure**: `executeProductionRun()` returns before
+  `mapCarouselToTemplatedPayload()` is ever called — zero Templated
+  requests are made, no Finished Carousel is built or persisted.
+- **Templated failure**: the render loop (`for (const payload of
+  templatedPayloads)`) returns immediately on the first thrown error — no
+  later slide is requested. `renderedSlideCount` on the result reflects
+  only the slides that actually completed; `error.slideType` names which
+  slide type failed.
+- Neither path retries automatically — see "Seven-request maximum budget"
+  above.
+
+### Partial-render implications
+
+`createFinishedCarousel()` (I007, unchanged) requires exactly 6 `{
+templatedPayload, renderResult }` pairs — it structurally cannot be called
+with fewer, so a render failure makes building a Finished Carousel
+impossible by construction, not by an extra check this milestone had to
+add. A render that Templated itself already started or partially completed
+before the failing slide may still exist on Templated's own side — this
+milestone does not query, cancel, or clean it up (explicitly out of scope,
+per the brief's own "cleanup of partial Templated renders" exclusion) — but
+it is never represented here as a completed or stored carousel.
+
+### Persistence rules
+
+Persistence (`dependencies.carouselStore.save()`, I015 unchanged) is only
+ever attempted after `createFinishedCarousel()` has successfully returned —
+a failed generation, a failed/stopped render loop, or a Finished-Carousel
+composition failure never reaches `save()`. No deduplication logic was
+added: each authorized production run may create a new `carousel_id`
+(`finished-carousel-builder.mjs`'s existing random-ID generation,
+unchanged) — I015's own duplicate-save contract
+(`CarouselAlreadyExistsError`) is unmodified and is the only thing that
+can ever reject a save.
+
+### Safe output contract
+
+`executeProductionRun()` never throws once its dependencies are
+well-formed — every outcome resolves to a Production Run Result:
+
+```
+{ success, requestId, sourceReference, executionId, carouselContentId,
+  carouselId, status, slideCount, renderedSlideCount, stored,
+  storeReference, warnings, error, duration }
+```
+
+`error`, when present, is `{ stage, code, message, retryable, slideType,
+diagnostic }` — `stage` names which step failed (`asset-resolution` |
+`generation` | `mapping` | `rendering` | `finished-carousel` |
+`persistence`); `slideType` is populated only for a `rendering` failure;
+`diagnostic` passes an `LlmClientError`'s own safe diagnostic
+(`status`/`errorType`/`requestId`/sanitised `message`, DC-003-I019.1)
+through verbatim when the underlying error carries one, `null` otherwise.
+Built on top of the existing `toSafeInvocationError()` (I010, unmodified)
+for the `code`/`message`/`retryable` fields — this module does not
+reimplement safe-error shaping, it extends the existing one with the two
+fields (`stage`, `slideType`) this milestone's own richer reporting
+requirement needs. Never exposed, under any failure path: an API key, an
+authorization header, a raw provider response, a prompt, a raw Templated
+payload, a host filesystem path, or a stack trace.
+
+### Live-verification procedure
+
+1. Re-run `npm test` and `npm run validate`.
+2. Confirm `LLM_API_KEY` and `TEMPLATED_API_KEY` are present by name only,
+   never by value.
+3. Confirm `Anthropic max requests = 1`, `Templated max requests = 6`,
+   `retries per external request = 0` (all three are hardcoded/derived, not
+   configurable on this CLI — see "Seven-request maximum budget").
+4. Execute exactly once:
+   ```bash
+   npm run production:live -- GS01 <storeDirectory> --live
+   ```
+5. Make no follow-up request under any circumstances.
+6. Report the full Production Run Result (or the safe diagnostic on
+   failure), re-run `npm test`/`npm run validate` once more, and stop.
+
+### Mock-default guarantee
+
+Mock remains the default everywhere else, unchanged by this milestone:
+automated tests (this CLI's own tests only ever construct
+`createMockProvider()`/`createMockTransport()`), the I013 and I017 n8n
+workflows (neither references `production-run-live.mjs` or
+`production-run-service.mjs` at all), and the existing Content Request CLI
+(`npm run content:request`, still mock-only — I016/I017's code is
+untouched). Presence of both `LLM_API_KEY`/`TEMPLATED_API_KEY` in the
+environment has no effect on any of them; only this CLI's own explicit
+`--live` flag can ever trigger a real request, and only through this one
+new entry point.
+
+### Relationship to I016–I019
+
+- **I016/I017 (Content Request Command + its n8n workflow)**: entirely
+  unaffected — this milestone reuses I016's underlying stage functions
+  directly (see "Why this bypasses the orchestrator"), never
+  `content-request-service.mjs` itself, so neither the Content Request
+  command syntax nor either n8n workflow could have been touched even
+  indirectly.
+- **I018 (Content Asset Repository)**: reused unmodified —
+  `createContentAssetRepository({ assetsDir }).get(assetId)` is the exact
+  same call I016 and I019's CLI already make.
+- **I019 (Real LLM Provider Integration)**: reused unmodified — the same
+  `createAnthropicProvider()`/`createHttpTransport()`/
+  `loadLlmProviderConfig()`/`resolveLiveMaxAttempts()` I019's own
+  `generate-live-carousel.mjs` already uses, including the I019.1–I019.3
+  diagnostic/temperature fixes, which this milestone benefits from
+  automatically without any code change of its own.
+
+### Out of scope (I020)
+
+n8n workflow changes, automatic scheduling, an approval UI, publishing,
+social-platform integrations, article generation, multiple LLM providers,
+provider fallback, batch content requests, retries during the initial
+production run, cleanup of partial Templated renders, monitoring
+dashboards, a REST API, and authentication changes — none of these were
+touched, per the approved brief's own closing instruction not to broaden
+this milestone beyond one controlled path: `GS01 → live copy → six live
+renders → stored Finished Carousel`.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -4099,14 +4314,15 @@ milestone).
 | Content Asset Resolver (bridges repository to I016's unchanged error contract) | Done (DC-003-I018) — `src/content-asset-resolver.mjs`; `UnknownSourceReferenceError`/`SourceResolutionError` unchanged from I016 |
 | Content Asset CLI check | Done (DC-003-I018) — `npm run content-asset -- get\|list\|validate`, no network |
 | I016/I017 backward compatibility after the resolver swap | Done (DC-003-I018) — verified live: the unmodified I017 n8n workflow (execution 133) and the I016 CLI both resolve `GS01` correctly through the new repository with zero changes to either |
-| Real LLM provider (Anthropic) | Done (DC-003-I019), HTTP 400 root cause diagnosed and fixed (DC-003-I019.1–I019.3) — `src/llm-provider-anthropic.mjs`, behind the unmodified DC-003-I004 provider abstraction; see "Live Verification Gate — HTTP 400 root cause diagnosed and fixed (DC-003-I019.3)"; mock remains the default everywhere; **three live attempts made — first two undiagnosable (fixed by I019.1/I019.2), third fully diagnosed the `temperature` field defect, now fixed by I019.3; one further controlled live attempt is expected to succeed, pending fresh authorization** |
+| Real LLM provider (Anthropic) | Done (DC-003-I019), HTTP 400 root cause diagnosed and fixed (DC-003-I019.1–I019.3) — `src/llm-provider-anthropic.mjs`, behind the unmodified DC-003-I004 provider abstraction; see "Live Verification Gate — HTTP 400 root cause diagnosed and fixed (DC-003-I019.3)"; mock remains the default everywhere; **four live attempts made — first two undiagnosable (fixed by I019.1/I019.2), third fully diagnosed the `temperature` field defect, fourth (post-I019.3) succeeded — genuine live Anthropic generation confirmed working end-to-end** |
+| Live Production Run (real generation + real rendering + persistence, one entry point) | Done (DC-003-I020) — `src/production-run-service.mjs`, CLI `npm run production:live`; see "Live Production Run (DC-003-I020)"; composes I004/I005/I006/I007/I015/I018/I019 directly (bypasses the I008–I012 Ledger/Orchestrator/Adapter stack, which cannot carry a live provider/transport without a schema change — see "Why this bypasses the orchestrator"); mock remains the default without `--live`; **not yet exercised live — pending fresh Strategy Office + CEO approval, capped at 1 Anthropic + 6 Templated requests** |
 | LLM transport abstraction + mock transport | Done (DC-003-I019) — `src/llm-transport-mock.mjs`; the only transport tests use |
 | LLM HTTP transport (Anthropic Messages API) | Done (DC-003-I019), error-boundary hardened (DC-003-I019.1) — `src/llm-transport-http.mjs`; endpoint/headers/tool-use structured-output mechanism confirmed against Anthropic's published docs; exercised live once (HTTP 400, now diagnosable — see below) |
 | LLM response validation + structured-output normalization | Done (DC-003-I019) — `src/llm-response-validator.mjs`; forced tool-use, never prose-embedded JSON |
 | LLM provider error hierarchy + retry classification | Done (DC-003-I019), extended (DC-003-I019.1) — `src/llm-provider-errors.mjs`; closed a real pre-existing gap in `carousel-generator.mjs`'s retry loop (every provider error was retried uniformly before this); I019.1 closed a second gap found via the same mechanism — generic 4xx (e.g. HTTP 400) was retryable by default until `LlmClientError` was introduced |
 | Safe LLM error diagnostics (HTTP 400/4xx) | Done (DC-003-I019.1) — `src/llm-error-diagnostics.mjs`; see "Safe LLM Error Diagnostics (DC-003-I019.1)"; status/errorType/requestId/sanitised-message only, never the raw body/API key/prompt/tool content/stack trace |
 | Real-provider generation CLI check | Done (DC-003-I019) — `npm run generate:live` (mock by default) / `-- --live` (requires `LLM_API_KEY`, single-attempt by default); rendering stays mock-only always, no `--live-render` flag exists |
-| Unit test suite | Done — 707 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Unit test suite | Done — 728 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 21 from I020); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |
