@@ -161,3 +161,43 @@ test("--live with a negative --live-max-attempts value fails fast", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--live-max-attempts must be a positive integer/);
 });
+
+// --- DC-003-I019.1: the CLI's own printing of the safe LlmClientError
+// diagnostic (found to be missing during the first authorised live
+// verification attempt — see README "Live Verification Gate incident"). No
+// real network call is made: global.fetch is stubbed via a --import
+// preload module written to a temp file for the duration of one test, then
+// removed — the same "never reach the network" guarantee every other test
+// in this file relies on, just applied to the one branch that only
+// triggers once a transport actually exists. ---------------------------
+
+test("an HTTP 400 from the (stubbed) real transport prints the full safe diagnostic, not just the bare message", () => {
+  withTempDir((dir) => {
+    const preloadPath = path.join(dir, "stub-fetch-400.mjs");
+    writeFileSync(
+      preloadPath,
+      `globalThis.fetch = async () => ({
+        ok: false,
+        status: 400,
+        headers: { get: (name) => ({ "content-type": "application/json", "request-id": "req_cli_diagnostic_test" }[name.toLowerCase()] ?? null) },
+        json: async () => { throw new Error("json() must not be called on a non-ok response"); },
+        text: async () => JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "cli diagnostic print check" } }),
+      });\n`,
+      "utf-8"
+    );
+
+    const result = spawnSync(process.execPath, ["--import", preloadPath, CLI_PATH, "GS01", "--live"], {
+      encoding: "utf-8",
+      env: { ...process.env, LLM_API_KEY: "sk-test-fake-key-never-sent" },
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /FAIL\s+LlmClientError/);
+    assert.match(result.stderr, /status:\s*400/);
+    assert.match(result.stderr, /errorType:\s*invalid_request_error/);
+    assert.match(result.stderr, /requestId:\s*req_cli_diagnostic_test/);
+    assert.match(result.stderr, /message:\s*cli diagnostic print check/);
+    assert.doesNotMatch(result.stderr, /sk-test-fake-key-never-sent/);
+    assert.doesNotMatch(result.stdout, /Carousel Content generated OK/);
+  });
+});

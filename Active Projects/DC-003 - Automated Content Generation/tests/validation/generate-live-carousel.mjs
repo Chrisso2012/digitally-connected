@@ -46,7 +46,7 @@ import { mapCarouselToTemplatedPayload } from "../../src/carousel-payload-mapper
 import { renderTemplatedPayload } from "../../src/renderer.mjs";
 import { createMockTransport } from "../../src/renderer-transport-mock.mjs";
 import { PromptBuilderError, CarouselGenerationFailedError } from "../../src/carousel-generator-errors.mjs";
-import { LlmProviderError } from "../../src/llm-provider-errors.mjs";
+import { LlmProviderError, LlmClientError } from "../../src/llm-provider-errors.mjs";
 import { UnknownContentAssetError, ContentAssetSchemaError, ContentAssetReadFailureError, InvalidContentAssetError } from "../../src/content-asset-errors.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -132,6 +132,19 @@ try {
     error.attempts.forEach((attempt, index) => {
       console.error(`  attempt ${index + 1}: [${attempt.stage}] ${attempt.message}`);
     });
+  } else if (error instanceof LlmClientError) {
+    // DC-003-I019.1: the one place this CLI can surface the safe
+    // diagnostic buildSafeDiagnostic() builds — status/errorType/
+    // requestId/sanitised message only. Fields may individually be null
+    // when the provider's error body didn't match the expected shape;
+    // never the raw response body, headers, API key, or prompt.
+    console.error(`FAIL  ${error.name}`);
+    console.error(`  ${error.message}`);
+    const diagnostic = error.diagnostic ?? {};
+    console.error(`  status:    ${diagnostic.status ?? "unknown"}`);
+    console.error(`  errorType: ${diagnostic.errorType ?? "(none reported)"}`);
+    console.error(`  requestId: ${diagnostic.requestId ?? "(none reported)"}`);
+    console.error(`  message:   ${diagnostic.message ?? "(none reported)"}`);
   } else if (error instanceof LlmProviderError) {
     // Safe, structured diagnostics only — never the raw response body,
     // never headers, never the API key, never the full prompt.
