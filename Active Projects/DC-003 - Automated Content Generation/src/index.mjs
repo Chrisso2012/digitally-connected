@@ -166,3 +166,22 @@ export {
   ContentAssetReadFailureError,
   InvalidContentAssetError,
 } from "./content-asset-errors.mjs";
+
+// DC-003-I019 — Real LLM Provider Integration (Anthropic), behind the
+// existing provider abstraction — the mock provider remains the default
+// everywhere unless a caller explicitly injects this one.
+export { createAnthropicProvider } from "./llm-provider-anthropic.mjs";
+export { createHttpTransport as createLlmHttpTransport, TOOL_NAME as LLM_TOOL_NAME } from "./llm-transport-http.mjs";
+export { createMockLlmTransport } from "./llm-transport-mock.mjs";
+export { validateLlmTransportResponse } from "./llm-response-validator.mjs";
+export { loadLlmProviderConfig, resolveLiveMaxAttempts as resolveLlmLiveMaxAttempts, DEFAULT_LIVE_MAX_ATTEMPTS as LLM_DEFAULT_LIVE_MAX_ATTEMPTS } from "./llm-provider-config.mjs";
+export {
+  LlmProviderError,
+  LlmConfigurationError,
+  LlmAuthenticationError,
+  LlmRateLimitError,
+  LlmTimeoutError,
+  LlmTransportError,
+  LlmMalformedResponseError,
+  LlmProviderRejectedError,
+} from "./llm-provider-errors.mjs";

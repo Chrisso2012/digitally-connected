@@ -223,6 +223,11 @@ non-secret runtime settings for the renderer (the credential itself,
 remain unused and reserved — DC-003-I006 explicitly does not poll; it
 returns whatever status Templated's render call responds with.
 
+`config/env.example`'s LLM provider section gained four new variables in
+DC-003-I019 alongside the pre-existing `LLM_API_KEY`/`LLM_MODEL` — see
+"Real LLM Provider Integration (DC-003-I019)" → "Configuration" below for
+the full table and how they're used.
+
 ### Deviation from DC-003-T001, with reason
 
 DC-003-T001 originally proposed the six Templated template IDs as environment
@@ -585,6 +590,10 @@ malformed output would surface too. `context.topicPackage` is passed
 alongside the prompt so the mock provider can generate content grounded in
 the real topic — a real provider is free to ignore it, since everything it
 needs is already in the prompt text.
+
+**"Later" arrived in DC-003-I019** — a real provider (Anthropic) now
+exists behind this exact abstraction, unchanged. See "Real LLM Provider
+Integration (DC-003-I019)" below.
 
 ### Mock provider (`src/carousel-mock-provider.mjs`)
 
@@ -3227,6 +3236,305 @@ article generation, ingestion, or editing. Everything downstream should
 consume Content Assets from this repository, never a temporary fixture
 or a generated article, from this milestone forward.
 
+## Real LLM Provider Integration (DC-003-I019)
+
+Replaces the mock carousel-copy generator with one real LLM provider —
+Anthropic, via its Messages API — behind the exact same provider
+abstraction DC-003-I004 already established (`{ name,
+generateCarousel(prompt, context): Promise<string> }`). Nothing about the
+Prompt Builder, the Carousel Content Validator, the retry primitive, the
+Pipeline Orchestrator, the Invocation Adapter, the n8n Adapter, the
+Content Request Command, or the Content Asset Repository changed to make
+this possible — confirmed during this milestone's own pre-flight
+inspection (`pipeline-stages.mjs` already read
+`context.configuration?.provider ?? createMockProvider()`, so no
+incompatibility existed to report). **Rendering remains mock-only in
+I019** — see "Relationship to I016/I017" below.
+
+```mermaid
+flowchart LR
+    P[Deterministic Prompt\nI004, unchanged] --> A[Anthropic Provider Adapter]
+    A -- forces tool_choice --> T{{HTTP Transport}}
+    T -->|mock| MT[Mock LLM Transport\nno network]
+    T -->|http| HT[Anthropic Messages API]
+    MT --> RV[Response Validator]
+    HT --> RV
+    RV -- slidesJson --> OUT[same raw-JSON-string contract\nas the mock provider]
+    RV -. malformed/refused .-> ERR[Structured LlmProviderError]
+```
+
+### Provider selection
+
+Anthropic only — no OpenAI, no local model, no automatic fallback or
+routing, per the approved brief. Chosen as the provider "already available
+locally and easiest to verify safely through environment variables" (I019
+pre-flight item 5); no live credential was found configured in this
+environment at implementation time (checked for a `.env` file and for
+`LLM_API_KEY`/`ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in the shell — none
+were set), so the mock provider remains what every automated path uses
+until a credential is supplied and fresh live-verification approval is
+given (see "Live Verification Gate" below).
+
+### Configuration (`src/llm-provider-config.mjs`)
+
+Generic `LLM_*` names, matching the repository's own established
+convention — `config/env.example` already reserved `LLM_API_KEY`/
+`LLM_MODEL` before this milestone existed, so I019 continues that rather
+than switching to `ANTHROPIC_*`-prefixed names:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_PROVIDER` | `anthropic` | Which provider this configuration describes — informational; only one provider is wired up in I019 |
+| `LLM_API_KEY` | *(none)* | Anthropic API key — never committed; `config/env.example` ships it blank |
+| `LLM_MODEL` | `claude-sonnet-5` | The exact model identifier, pinned through configuration, never hardcoded in the adapter |
+| `LLM_API_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic's API base — configurable so a stale default never requires a code change |
+| `LLM_REQUEST_TIMEOUT_MS` | `15000` | Per-request timeout for the HTTP transport |
+| `LLM_MAX_ATTEMPTS` | `3` | Retry ceiling for production use — see "Retry classification" below |
+
+The adapter itself (`llm-provider-anthropic.mjs`) never reads this module
+— it only ever receives `{ transport, model, temperature, maxTokens,
+timeoutMs }` via explicit construction fields, and has no knowledge that
+an API key or base URL exist at all. Only a CLI (or whoever constructs the
+HTTP transport) reads `loadLlmProviderConfig()`.
+
+### Transport abstraction (`src/llm-transport-mock.mjs`, `src/llm-transport-http.mjs`)
+
+Same shape and same "no implicit default" discipline DC-003-I006
+established for the renderer: `{ name, send(request, { timeoutMs }) }`,
+and every caller must explicitly choose one.
+
+- **`createMockLlmTransport()`** — the *only* transport automated tests
+  use. Deterministic, no network, configurable via `options.mode` to
+  simulate every failure case the adapter needs to handle (`timeout`,
+  `transport-error`, `auth-error`, `rate-limit`, `malformed`, `refused`,
+  `wrong-tool`), plus `options.failuresBeforeSuccess` for retry-success
+  tests. Returns the same raw Anthropic Messages API response shape (a
+  `tool_use` content block) the real transport would, so it exercises the
+  response-validation boundary the same way.
+- **`createHttpTransport(config)`** (aliased `createLlmHttpTransport` from
+  `src/index.mjs`, to avoid colliding with the renderer's own
+  `createHttpTransport` export) — the real Anthropic integration, using
+  Node's built-in `fetch` (no new dependency, same choice DC-003-I006 made
+  for Templated). Endpoint (`POST
+  https://api.anthropic.com/v1/messages`), headers (`x-api-key`,
+  `anthropic-version: 2023-06-01`), and the tool-use mechanism for forcing
+  structured output are per Anthropic's published Messages API
+  documentation. Not yet exercised against a live request — that requires
+  fresh Strategy Office + CEO approval per the Live Verification Gate
+  below, and is deliberately not part of this milestone's automated
+  implementation.
+
+### Structured output, not prose-embedded JSON
+
+The request forces exactly one tool call via `tool_choice: { type: "tool",
+name: "return_carousel_slides" }`, so the response's `content` contains a
+`tool_use` block whose `input` is already a parsed JSON object — never
+free-form text requiring a find-the-JSON-in-prose parse, per the brief's
+explicit preference. `TOOL_INPUT_SCHEMA` (`llm-transport-http.mjs`) is
+deliberately minimal — an array of exactly 6 `{ slide_type, content }`
+objects, `content` left untyped — mirroring this codebase's own existing
+simplification (`schemas/carousel-content.schema.json` also types
+`content` generically). Precise per-slide-type field validation still
+happens afterward, unchanged, in `carousel-content-shape.mjs` — this
+schema's only job is forcing roughly-shaped JSON out of the model, not
+re-implementing that validation a second time.
+
+`validateLlmTransportResponse()` (`llm-response-validator.mjs`) is the one
+normalization boundary every response — mock or real — must cross before
+the domain layer ever sees it: checks the response is an object, checks
+`stop_reason` isn't `"refusal"` (a content-policy decline, surfaced as
+`LlmProviderRejectedError`), checks `content` is an array containing a
+`tool_use` block whose `name` matches the tool that was forced, and checks
+that block's `input` is a JSON object — then re-serializes it
+(`JSON.stringify()`) into a raw string so `generateCarousel()`'s return
+value matches `createMockProvider()`'s own contract exactly (a raw JSON
+string, never a pre-parsed object). Every shape mismatch throws
+`LlmMalformedResponseError` with safe, type-level diagnostics
+(`field`/`expected`/`received`) — never the raw response body, never the
+actual value of a mismatched field.
+
+### Error hierarchy (`src/llm-provider-errors.mjs`)
+
+Mirrors the renderer's error hierarchy exactly — every error extends
+`LlmProviderError` and carries a `.retryable` boolean:
+
+| Error | When | `retryable` |
+|---|---|---|
+| `LlmConfigurationError` | `LLM_API_KEY` missing at transport construction | `false` |
+| `LlmAuthenticationError` | Anthropic rejected the API key (HTTP 401/403) | `false` |
+| `LlmRateLimitError` | Anthropic reported a rate limit (HTTP 429); carries `retryAfterMs` | `true` |
+| `LlmTimeoutError` | request exceeded the configured timeout | `true` |
+| `LlmTransportError` | network-level failure, or HTTP 5xx/other non-ok status | `true` |
+| `LlmMalformedResponseError` | transport response has an untrustworthy shape | `false` |
+| `LlmProviderRejectedError` | the model declined the request (`stop_reason: "refusal"`) | `false` |
+
+None of these classes are special-cased by name — `carousel-generator.mjs`
+never imports or checks `instanceof` against any of them (see "Retry
+classification" next).
+
+### Retry classification
+
+**A real gap this milestone had to close, not just extend:** before I019,
+`carousel-generator.mjs` caught every provider exception uniformly and
+retried it up to `maxAttempts` times — harmless for the mock provider
+(which never throws in practice), but a real problem for a real provider:
+an authentication failure or a misconfiguration would have been retried
+against a live endpoint up to 3 times by default, wasting real requests on
+a failure guaranteed to recur identically. The fix is a single,
+provider-agnostic check in the existing retry loop:
+
+```js
+} catch (cause) {
+  if (cause?.retryable === false) {
+    throw cause; // non-retryable — propagate immediately
+  }
+  return { ok: false, stage: "provider", message: `Provider "${provider.name}" threw: ${cause.message}`, details: [] };
+}
+```
+
+`cause?.retryable === false` is a generic property check, not an
+`instanceof` check against any specific provider's error classes —
+`carousel-generator.mjs` stays completely unaware of what provider it's
+talking to, and the property itself isn't a new concept: it mirrors the
+`retryable` field DC-003-I010's `InvocationResponse.error` already
+established as this codebase's own vocabulary for exactly this signal. An
+error with no `retryable` field at all is still treated as retryable — the
+pre-I019 default behavior, unchanged.
+
+Classification, matching the approved brief exactly:
+
+- **Retryable**: `LlmTimeoutError`, `LlmTransportError` (transient
+  transport failure or a 5xx), `LlmRateLimitError`.
+- **Not retryable**: `LlmConfigurationError`, `LlmAuthenticationError`,
+  `LlmMalformedResponseError`, `LlmProviderRejectedError` — a schema-invalid
+  or malformed generated response is deterministic, so the same malformed
+  response would recur identically on retry.
+
+The Anthropic adapter itself makes **exactly one** transport call per
+`generateCarousel()` invocation — no internal retry loop. All retry
+orchestration is `carousel-generator.mjs`'s own `withRetry()` wrapper's
+job, unmodified in its own retry mechanics (only its provider-error
+classification was extended, as above) — a second, adapter-internal retry
+loop would risk exactly the kind of attempt-count multiplication the
+DC-003-I006 live-verification incident already taught this codebase to
+avoid (see "Live-verification safety rule" under Templated Renderer).
+
+### Determinism note
+
+Real LLM output is inherently non-deterministic — identical production
+inputs (the same Topic Package, the same deterministic prompt) are **not**
+guaranteed to produce byte-identical carousel copy, unlike the mock
+provider. I019 minimizes variance without eliminating it: `temperature: 0`
+(the lowest practical value) and a pinned model identifier
+(`LLM_MODEL`/`fields.model`, never hardcoded). Automated tests stay fully
+deterministic anyway, because they never call the real provider at all —
+every test runs against `createMockLlmTransport()`, exactly like every
+other milestone in this codebase runs against its own mock transport.
+
+### Mock-default behaviour
+
+The mock provider (`createMockProvider()`, DC-003-I004, unchanged) remains
+the default **everywhere** — the Pipeline Orchestrator, the Content
+Request Command, both n8n workflows, and every CLI except one. Nothing
+switches to the real provider implicitly: a caller must explicitly
+construct `createAnthropicProvider({...})` and inject it via
+`context.configuration.provider` (or, for the one CLI that supports it,
+pass `--live`). Setting `LLM_API_KEY` in the environment, by itself, has
+**no effect** on any existing command — `content-request-service.mjs` and
+`pipeline-stages.mjs` never read `LLM_*` env vars at all; only an explicit
+provider injection would change generation, and nothing in the I016/I017
+call chain performs one (verified by a compatibility test in
+`content-request-cli.test.mjs` that runs the exact command with a fake
+`LLM_API_KEY` present and confirms the run succeeds identically).
+
+### Generating a carousel with the real provider, in code
+
+```js
+import { generateCarouselFromTopicPackage, createAnthropicProvider, createLlmHttpTransport, loadLlmProviderConfig } from "./src/index.mjs";
+
+const config = loadLlmProviderConfig(); // reads LLM_* from process.env
+const transport = createLlmHttpTransport(config); // throws LlmConfigurationError if LLM_API_KEY is unset
+const provider = createAnthropicProvider({ transport, model: config.model, timeoutMs: config.requestTimeoutMs });
+
+const carousel = await generateCarouselFromTopicPackage(topicPackage, { provider, maxAttempts: config.maxAttempts });
+// same shape, same validation, same retries as the mock provider path —
+// only carousel.llm_model differs ("anthropic-<model>" instead of
+// "mock-provider-v1").
+```
+
+### CLI (`tests/validation/generate-live-carousel.mjs`, `npm run generate:live`)
+
+```bash
+npm run generate:live                                        # mock (default), assetId GS01, safe to run anytime
+npm run generate:live -- GS01 --live                         # requires LLM_API_KEY; performs one real Anthropic call
+npm run generate:live -- GS01 --live --live-max-attempts=2   # explicit opt-in only
+```
+
+Full path: Content Asset (default `GS01`, via the unchanged I018
+repository) → Topic Package → Carousel Content Generator (mock provider by
+default, real Anthropic provider only with `--live`) → validated Carousel
+Content → Payload Mapper (I005, unchanged) → Renderer — **always the mock
+transport, regardless of `--live`**. There is no `--live-render` flag on
+this CLI; none should ever be added to it — per the brief's own closing
+instruction not to combine real LLM generation and real Templated
+rendering in the same milestone. Without `--live`, this CLI makes no
+network call of any kind. `--live` fails fast, before constructing
+anything, if `LLM_API_KEY` isn't set. Exits `0` on success, non-zero with a
+safe structured error otherwise (never the raw response body, the API key,
+or a stack trace for expected failure modes). Does not write any file.
+
+### Live-verification safety rule
+
+Same pattern DC-003-I006 established after its own incident (see
+"Live-verification safety rule" under Templated Renderer): `--live` always
+defaults to exactly one attempt via `resolveLiveMaxAttempts()`
+(`llm-provider-config.mjs`, aliased `resolveLlmLiveMaxAttempts` from
+`src/index.mjs`), completely decoupled from `LLM_MAX_ATTEMPTS` — raising
+it requires an explicit, per-invocation `--live-max-attempts=N` flag,
+never an env var or config file. `npm run generate:live` deliberately does
+**not** hardcode `--live` into the script itself (unlike `render:live`,
+which does) — an extra layer of friction given I019's stricter Live
+Verification Gate below; the flag must be typed explicitly on every
+invocation.
+
+### Live Verification Gate — not yet exercised
+
+**No live Anthropic call has been made as of this milestone's delivery.**
+Per the approved brief, none may occur until:
+
+1. All automated tests pass (confirmed — see "Testing" below).
+2. Fixture validation passes (confirmed — `npm run validate`).
+3. Configuration is confirmed locally without displaying secrets (checked:
+   no `.env` file and no `LLM_API_KEY`/`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`
+   currently set in this environment).
+4. The exact model, endpoint, and maximum request count are reported.
+5. Strategy Office and CEO provide fresh approval.
+
+The first verification, when authorized, will be capped at exactly one
+provider request — `npm run generate:live -- GS01 --live` with no
+`--live-max-attempts` override, against `LLM_MODEL` (default
+`claude-sonnet-5`) at `LLM_API_BASE_URL` (default
+`https://api.anthropic.com/v1`) — no retries, per the brief's own
+instruction, unless separately authorized.
+
+### Relationship to I016/I017
+
+The existing command — `Create 6 designs based on article GS01` — is
+**unchanged**, and continues to use the real Content Asset Repository, the
+real Content Request flow, real orchestration, the mock LLM provider by
+default, and the mock renderer, exactly as it did before I019. Real LLM
+use requires an explicit provider injection this call chain never
+performs; I019 does not silently make either existing n8n workflow
+billable. See "Mock-default behaviour" above for how this is verified.
+
+### Out of scope (I019)
+
+Multiple LLM providers, automatic provider fallback or routing, prompt
+redesign, real Templated rendering, n8n workflow changes, article
+generation, publishing, approval integration, streaming, batch generation,
+caching, a model evaluation framework, and cost analytics — none of these
+were touched.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -3238,6 +3546,7 @@ npm test       # unit tests: tests/unit/*.test.mjs
 npm run validate  # CLI summary: all 6 approved fixtures against their schemas
 npm run check:topic -- <path>  # CLI check of one Topic Package file
 npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
+npm run generate:live -- [assetId] [--live]  # CLI generate a carousel from a Content Asset; mock by default, real Anthropic only with --live
 npm run map:payload -- <path>  # CLI map one Carousel Content file into six Templated Payloads
 npm run render:mock -- <path>  # CLI mock-render one Templated Payload file
 npm run build:carousel -- <path>  # CLI build one Finished Carousel end-to-end, offline
@@ -3380,14 +3689,43 @@ the workflow (`requestId` still preserved on that fallback path);
 clock/ID generator; `persistWorkflowOutput()` writing valid, complete JSON
 to disk; `run()` itself performing no file I/O of its own; and CLI exit
 codes for a complete run, a workflow failure, and rejected input — no
-network, no production services anywhere. Tests that need a
+network, no production services anywhere. From DC-003-I019: `loadLlmProviderConfig()` defaults and env-var overrides;
+`resolveLiveMaxAttempts()` defaulting to `1` and staying decoupled from
+`LLM_MAX_ATTEMPTS`; `validateLlmTransportResponse()`'s full normalization
+boundary (a well-formed `tool_use` response, a non-object response, a
+`stop_reason: "refusal"` decline, a missing/non-array `content`, a
+missing or wrong-named `tool_use` block, a non-object `input`), including
+that none of its diagnostics ever leak the raw response or a mismatched
+field's actual value; every configurable mode of the mock LLM transport;
+the Anthropic provider adapter's construction preconditions, successful
+structured-response generation, exact request construction (model,
+temperature, maxTokens, prompt, toolName, timeoutMs all passed through,
+never hardcoded), exactly-one-call-per-invocation (no internal retry),
+every failure mode routed through the mock transport with its expected
+error type and `.retryable` classification, and that thrown errors never
+mention the prompt text; the HTTP transport's request construction
+(headers, body, `tool_choice`, base-URL trailing-slash handling) and
+status-code mapping (401/403/429/5xx/other-non-ok/network-failure/
+timeout/invalid-JSON-body), all verified with a stubbed `global.fetch` —
+no test in this file makes a real HTTP request; the new retry-classification
+behavior in `carousel-generator.mjs` (`retryable: false` propagates
+immediately and stops the retry loop at one attempt; `retryable: true` and
+"no field at all" both still retry to exhaustion exactly as before);
+`generate-live-carousel.mjs`'s mock-default path (including that a present
+`LLM_API_KEY` alone never switches generation off the mock provider) and
+its `--live` gate (missing `LLM_API_KEY` and a bad `--live-max-attempts`
+both fail before any transport is constructed or any live attempt is
+announced); and a dedicated I016/I017 compatibility test confirming
+`Create 6 designs based on article GS01` succeeds identically with a fake
+`LLM_API_KEY` present in the environment. Tests that need a
 "broken" file, a failing provider, or a failing transport use a `node:fs`
 temporary directory, an in-memory `structuredClone()`/object literal, a
 small stub defined inline in the test file, the mock transport's
 configurable failure modes, or one of the dedicated fixtures under
 `tests/fixtures/carousel-content/` — **no test ever writes to or modifies a
 file under `config/`, `schemas/`, or an existing approved fixture, and no
-test ever sets `--live` or reaches the network.**
+test ever sets `--live`, reaches the network, or calls a real LLM
+provider.**
 
 ## Expected error behavior
 
@@ -3439,7 +3777,8 @@ test ever sets `--live` or reaches the network.**
 ## Dependencies
 
 Still just two, both added in DC-003-I002, both maintained and widely used —
-**DC-003-I003 through DC-003-I016 all added no new dependencies:**
+**DC-003-I003 through DC-003-I018 all added no new dependencies, and
+DC-003-I019 adds none either:**
 
 - **`ajv`** (2020-12 dialect) — the JSON Schema validator itself. Explicitly
   requested by this task over the I001 hand-rolled subset validator.
@@ -3475,7 +3814,12 @@ pure mapping functions plus the External Invocation Adapter it's handed.
 The Production Workflow needed nothing either — `node:fs` `writeFileSync()`
 for output persistence (the same dependency-free file I/O every other CLI
 in this codebase already uses) and the n8n Adapter it's handed; no new
-error class, no new schema, no new abstraction.
+error class, no new schema, no new abstraction. The real LLM Provider
+Integration needed no Anthropic SDK either — Node's built-in global
+`fetch` (Node 18+) plus `AbortController` for timeouts was enough, the
+exact same choice DC-003-I006 made for the Templated HTTP transport;
+`node:crypto` wasn't needed here at all (no new IDs are minted by this
+milestone).
 
 ## Implementation status
 
@@ -3549,8 +3893,13 @@ error class, no new schema, no new abstraction.
 | Content Asset Resolver (bridges repository to I016's unchanged error contract) | Done (DC-003-I018) — `src/content-asset-resolver.mjs`; `UnknownSourceReferenceError`/`SourceResolutionError` unchanged from I016 |
 | Content Asset CLI check | Done (DC-003-I018) — `npm run content-asset -- get\|list\|validate`, no network |
 | I016/I017 backward compatibility after the resolver swap | Done (DC-003-I018) — verified live: the unmodified I017 n8n workflow (execution 133) and the I016 CLI both resolve `GS01` correctly through the new repository with zero changes to either |
-| Unit test suite | Done — 602 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
-| Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
+| Real LLM provider (Anthropic) | Done (DC-003-I019) — `src/llm-provider-anthropic.mjs`, behind the unmodified DC-003-I004 provider abstraction; see "Real LLM Provider Integration (DC-003-I019)"; mock remains the default everywhere; **no live call made yet — pending fresh Strategy Office + CEO approval** |
+| LLM transport abstraction + mock transport | Done (DC-003-I019) — `src/llm-transport-mock.mjs`; the only transport tests use |
+| LLM HTTP transport (Anthropic Messages API) | Done (DC-003-I019) — `src/llm-transport-http.mjs`; endpoint/headers/tool-use structured-output mechanism confirmed against Anthropic's published docs; not yet exercised live |
+| LLM response validation + structured-output normalization | Done (DC-003-I019) — `src/llm-response-validator.mjs`; forced tool-use, never prose-embedded JSON |
+| LLM provider error hierarchy + retry classification | Done (DC-003-I019) — `src/llm-provider-errors.mjs`; closed a real pre-existing gap in `carousel-generator.mjs`'s retry loop (every provider error was retried uniformly before this) |
+| Real-provider generation CLI check | Done (DC-003-I019) — `npm run generate:live` (mock by default) / `-- --live` (requires `LLM_API_KEY`, single-attempt by default); rendering stays mock-only always, no `--live-render` flag exists |
+| Unit test suite | Done — 676 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

@@ -215,6 +215,40 @@ test("without --json, default human-readable output is unchanged", () => {
   });
 });
 
+// --- DC-003-I019 compatibility: the existing command and this CLI's
+// mock-only behavior are unaffected by the new LLM provider integration,
+// even when LLM_API_KEY is present in the environment — this CLI (and
+// content-request-service.mjs underneath it) never reads LLM_* env vars
+// or wires a provider at all, so there is nothing for a present API key to
+// switch on. Real LLM use requires explicit configuration this path never
+// performs (see generate-live-carousel-cli.test.mjs for the CLI that
+// actually gates real provider use). -----------------------------------
+
+test("the command remains 'Create 6 designs based on article GS01' and still succeeds identically even with LLM_API_KEY set in the environment", () => {
+  // content-request-service.mjs (and everything beneath it in this call
+  // chain — pipeline-stages.mjs, the Pipeline Orchestrator) never reads
+  // LLM_* env vars or constructs a real provider; only an explicit
+  // context.configuration.provider injection would change generation off
+  // the mock provider, and nothing on this path performs one. This test
+  // confirms an LLM_API_KEY present in the environment has no observable
+  // effect on this existing command at all — not even a behavioral
+  // side-channel — by asserting the run succeeds exactly as it does
+  // without one.
+  withTempDir((storeDir) => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_PATH, "Create 6 designs based on article GS01", storeDir, "--json"],
+      { encoding: "utf-8", env: { ...process.env, TEMPLATED_API_KEY: undefined, LLM_API_KEY: "sk-fake-present-but-must-have-no-effect" } }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.status, "completed");
+    assert.equal(parsed.stored, true);
+    assert.match(parsed.storeReference, /^local-json-carousel-store:car_/);
+  });
+});
+
 test("running the same command twice against the same store directory succeeds both times (each production run gets its own carousel_id), and both land in the I015 store", () => {
   withTempDir((storeDir) => {
     const first = runCli("Create 6 designs based on article GS01", storeDir);

@@ -160,6 +160,67 @@ test("a Topic Package with no usable content throws PromptBuilderError without c
   assert.equal(providerCalled, false, "the provider must never be called when the prompt can't be built");
 });
 
+// --- DC-003-I019: retry classification for provider errors carrying a
+// `.retryable` field (see carousel-generator.mjs header comment) ---------
+
+function createProviderThatThrows(error) {
+  let calls = 0;
+  return {
+    name: "throwing-stub",
+    calls: () => calls,
+    async generateCarousel() {
+      calls += 1;
+      throw error;
+    },
+  };
+}
+
+test("a provider error with retryable:false propagates immediately, bypassing retry", async () => {
+  class FakeNonRetryableError extends Error {
+    constructor(message) {
+      super(message);
+      this.retryable = false;
+    }
+  }
+  const error = new FakeNonRetryableError("fake authentication failure");
+  const provider = createProviderThatThrows(error);
+
+  await assert.rejects(
+    () => generateCarouselFromTopicPackage(loadApprovedTopic(), { provider, maxAttempts: 5 }),
+    (thrown) => {
+      assert.equal(thrown, error, "the exact original error must propagate, not a wrapped CarouselGenerationFailedError");
+      return true;
+    }
+  );
+  assert.equal(provider.calls(), 1, "a non-retryable provider error must stop the retry loop after exactly one attempt");
+});
+
+test("a provider error with retryable:true is still retried up to maxAttempts, then wrapped as before", async () => {
+  class FakeRetryableError extends Error {
+    constructor(message) {
+      super(message);
+      this.retryable = true;
+    }
+  }
+  const provider = createProviderThatThrows(new FakeRetryableError("fake transient failure"));
+
+  await assert.rejects(
+    () => generateCarouselFromTopicPackage(loadApprovedTopic(), { provider, maxAttempts: 3 }),
+    CarouselGenerationFailedError
+  );
+  assert.equal(provider.calls(), 3, "a retryable provider error must still exhaust maxAttempts");
+});
+
+test("a provider error with no retryable field at all is treated as retryable (unchanged, backward-compatible default)", async () => {
+  const provider = createProviderThatThrows(new Error("plain error, no retryable field"));
+
+  await assert.rejects(
+    () => generateCarouselFromTopicPackage(loadApprovedTopic(), { provider, maxAttempts: 2 }),
+    CarouselGenerationFailedError
+  );
+  assert.equal(provider.calls(), 2, "an error with no retryable field must retry exactly as it did before this milestone");
+});
+
 test("generated Carousel Content Object independently re-validates against the I002 schema runtime", async () => {
   const { createValidator } = await import("../../src/validator.mjs");
   const carousel = await generateCarouselFromTopicPackage(loadApprovedTopic());

@@ -8,6 +8,25 @@
 // Each responsibility stays in its own module (prompt-builder, provider,
 // validator, retry) — this file only sequences them. No rendering, no
 // Templated API calls, no n8n integration, no filesystem writes.
+//
+// DC-003-I019 addition: a provider error whose `.retryable` property is
+// exactly `false` now propagates immediately, bypassing this function's
+// own retry loop, instead of being silently retried up to `maxAttempts`
+// times. Before this, EVERY provider exception was caught uniformly and
+// retried — harmless for the mock provider (which never throws in
+// practice), but a real problem for a real provider: an authentication
+// failure or a misconfiguration would have been retried against a live
+// endpoint up to 3 times by default, wasting real requests on a failure
+// guaranteed to recur identically (exactly the class of mistake the
+// DC-003-I006 live-verification incident already taught this codebase to
+// avoid). `retryable` is deliberately a generic, provider-agnostic
+// property check (`cause?.retryable === false`), not an `instanceof`
+// check against any specific provider's error classes — this file stays
+// completely unaware of what provider it's talking to, matching this
+// module's own "the only module that wires the others together" scope.
+// It mirrors the `retryable` field DC-003-I010's InvocationResponse.error
+// already established as this codebase's own vocabulary for exactly this
+// signal — not a new concept.
 
 import { randomUUID } from "node:crypto";
 import { buildCarouselPrompt, PROMPT_VERSION } from "./carousel-prompt-builder.mjs";
@@ -43,8 +62,11 @@ function generateCarouselContentId() {
  * options.carouselContentId — override the generated ID (used by tests).
  *
  * Throws PromptBuilderError immediately if the Topic Package has no usable
- * content to prompt from (retrying would never help). Throws
- * CarouselGenerationFailedError if every retry attempt fails validation.
+ * content to prompt from (retrying would never help). Propagates a
+ * provider error immediately (bypassing retry) if it carries
+ * `retryable: false` — see this module's header comment. Throws
+ * CarouselGenerationFailedError if every retry attempt fails validation
+ * (or exhausts on retryable provider errors).
  */
 export async function generateCarouselFromTopicPackage(topicPackage, options = {}) {
   const provider = options.provider ?? createMockProvider();
@@ -65,6 +87,9 @@ export async function generateCarouselFromTopicPackage(topicPackage, options = {
       try {
         raw = await provider.generateCarousel(prompt, { topicPackage });
       } catch (cause) {
+        if (cause?.retryable === false) {
+          throw cause; // non-retryable — propagate immediately, see header comment
+        }
         return { ok: false, stage: "provider", message: `Provider "${provider.name}" threw: ${cause.message}`, details: [] };
       }
 
