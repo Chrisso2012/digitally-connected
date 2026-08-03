@@ -33,6 +33,7 @@ const REQUIRED_SCHEMA_VERSION_KEYS = [
   "invocation_request",
   "invocation_response",
   "content_request",
+  "content_asset",
 ];
 // Deliberately loose substring match — this is a safety net against obvious
 // mistakes (pasting a real key into config), not a secrets scanner.

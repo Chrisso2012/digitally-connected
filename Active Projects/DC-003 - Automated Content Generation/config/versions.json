@@ -1,6 +1,6 @@
 {
   "project_version": "0.1.0",
-  "foundation_status": "DC-003-I016 complete — foundation, config/schema loader, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer (live-verified), Finished Carousel Builder, the Execution Ledger (operational audit layer), the Pipeline Orchestrator (single execution engine, hardened per I010.1), the External Invocation Adapter (the platform's first external boundary), the n8n Adapter (thin translation layer for n8n workflows), the Production Workflow (full end-to-end composition of every layer above), a real n8n workflow invoking it (I013), the Carousel Approval Workflow (I014), the Finished Carousel Store (I015), and the Content Request Command (I016) — the first user-facing command composing all of the above.",
+  "foundation_status": "DC-003-I018 complete — foundation, config/schema loader, Topic Package loader, mock carousel content generator, carousel payload mapper, Templated renderer (live-verified), Finished Carousel Builder, the Execution Ledger (operational audit layer), the Pipeline Orchestrator (single execution engine, hardened per I010.1), the External Invocation Adapter (the platform's first external boundary), the n8n Adapter (thin translation layer for n8n workflows), the Production Workflow (full end-to-end composition of every layer above), a real n8n workflow invoking it (I013), the Carousel Approval Workflow (I014), the Finished Carousel Store (I015), the Content Request Command (I016), the n8n Content Request Workflow (I017), and the Content Asset Repository (I018) — the permanent, repository-owned production source layer replacing I016's original fixture-backed resolver.",
   "design_system_version": "dc-002-v1",
   "template_registry_version": "1.0",
   "schema_versions": {
@@ -12,7 +12,8 @@
     "execution_record": "1.0",
     "invocation_request": "1.0",
     "invocation_response": "1.0",
-    "content_request": "1.0"
+    "content_request": "1.0",
+    "content_asset": "1.0"
   },
   "prompt_version": "carousel-copy.v1"
 }

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/content-asset.schema.json",
+  "title": "Content Asset",
+  "description": "DC-003-I018 — the canonical, repository-owned production source. Not a Finished Carousel, an Article, a Topic Package, or an LLM prompt on its own — it is the approved envelope a Topic Package is embedded within, retrievable by asset_id from the Content Asset Repository (content-assets/). Deliberately small: no rendered slides, approval history, persistence metadata, or provider outputs belong here.",
+  "type": "object",
+  "required": ["asset_id", "title", "summary", "topic_package", "status", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "asset_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Human-assigned, not machine-generated — unlike every other DC-003 identifier (topic_/car_/exec_/req_/...), a Content Asset's ID has no prefix convention. Must match the JSON filename exactly (content-assets/<asset_id>.json)."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "topic_package": {
+      "type": "object",
+      "description": "A full Topic Package object, validated separately against topic-package.schema.json by the Content Asset Repository — not re-specified here, matching this codebase's existing convention of not duplicating one schema inside another (see README 'Schemas' for the same simplification applied to Carousel Content's per-slide fields)."
+    },
+    "status": { "type": "string", "enum": ["approved", "draft", "archived"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "metadata": { "type": ["object", "null"] }
+  }
+}

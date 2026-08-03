@@ -4,12 +4,21 @@
 // persistence logic of its own:
 //
 //   User Content Request
-//         -> Content Request Parser        (this milestone)
-//         -> Source Resolver                (this milestone, over I003's loadTopicPackage)
+//         -> Content Request Parser        (I016)
+//         -> Content Asset Resolver         (I018, replacing I016's original fixture-directory resolver)
 //         -> I012 Production Workflow        (unchanged)
 //         -> Finished Carousel
 //         -> I015 Finished Carousel Store    (unchanged)
-//         -> Content Request Result          (this milestone)
+//         -> Content Request Result          (I016)
+//
+// DC-003-I018 update: source resolution now goes through the Content
+// Asset Repository (content-asset-resolver.mjs, over
+// content-asset-repository.mjs) instead of I016's original
+// fixture-directory scan by backlog_reference_id. The only visible
+// change at this module's own boundary is the dependency name
+// (`contentAssetsDir` instead of `topicPackagesDir`) — every other
+// contract (the request shape, the result shape, both error tiers below)
+// is unchanged, and DC-003-I017's n8n workflow needed no changes at all.
 //
 // Two failure tiers, matching this module's own errors file:
 //   1. Request-shape problems (ambiguous command, unsupported design
@@ -24,7 +33,7 @@
 
 import { createContentRequest } from "./content-request.mjs";
 import { parseContentRequestCommand } from "./content-request-parser.mjs";
-import { resolveSource } from "./content-request-source-resolver.mjs";
+import { resolveContentAsset } from "./content-asset-resolver.mjs";
 import { mapContentRequestToProductionWorkflowInput } from "./content-request-workflow-mapper.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
 import { PipelineConfigurationError } from "./pipeline-errors.mjs";
@@ -72,8 +81,9 @@ function buildResult({ contentRequest, executionId, carouselId, status, stored, 
  * dependencies.carouselStore — required, the return value of
  *   createFinishedCarouselStore() (an object with save() and, since
  *   DC-003-I016, name).
- * dependencies.topicPackagesDir — required, passed through to
- *   resolveSource().
+ * dependencies.contentAssetsDir — required, passed through to
+ *   resolveContentAsset() (DC-003-I018; was `topicPackagesDir` under
+ *   DC-003-I016's original fixture-directory resolver).
  * dependencies.now / dependencies.idGenerator / dependencies.validator —
  *   passed through to createContentRequest() for deterministic tests.
  *
@@ -114,9 +124,9 @@ export async function executeContentRequest(request, dependencies = {}) {
 
   let resolvedTopicPackage;
   try {
-    resolvedTopicPackage = resolveSource(
+    resolvedTopicPackage = resolveContentAsset(
       { sourceType: contentRequest.source_type, sourceReference: contentRequest.source_reference },
-      { topicPackagesDir: dependencies.topicPackagesDir, validator: dependencies.validator }
+      { contentAssetsDir: dependencies.contentAssetsDir, validator: dependencies.validator }
     );
   } catch (cause) {
     return buildResult({ contentRequest, status: "rejected", stored: false, error: safeErrorShape(cause) });

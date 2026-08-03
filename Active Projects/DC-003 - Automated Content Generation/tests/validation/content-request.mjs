@@ -4,16 +4,18 @@
 // mock rendering only, matching every other CLI in this codebase.
 //
 // Usage:
-//   node tests/validation/content-request.mjs "<command>" <storeDirectory> [topicPackagesDir] [--json]
+//   node tests/validation/content-request.mjs "<command>" <storeDirectory> [contentAssetsDir] [--json]
 //
-//   or: npm run content:request -- "<command>" <storeDirectory> [topicPackagesDir] [--json]
+//   or: npm run content:request -- "<command>" <storeDirectory> [contentAssetsDir] [--json]
 //
-// topicPackagesDir defaults to tests/fixtures/topic-packages/ — this
-// repository has no real article/source registry yet (see README
-// "Content Request Command — current limitations"), so the default
-// resolves against the same approved fixture Topic Packages this
-// milestone's own tests use. Pass an explicit third argument to resolve
-// against a different directory.
+// contentAssetsDir defaults to the repository's own content-assets/
+// directory (DC-003-I018's Content Asset Repository — see README
+// "Content Asset Repository"). Was topicPackagesDir, defaulting to a
+// test fixture directory, under DC-003-I016's original resolver; I018
+// replaced that fixture-backed resolution with this repository-backed
+// one, without changing this CLI's command syntax or result shape at
+// all. Pass an explicit third argument to resolve against a different
+// directory.
 //
 // --json (DC-003-I017 addition): prints exactly one line — the Content
 // Request Result as JSON — instead of the human-readable summary below,
@@ -51,14 +53,14 @@ import {
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOPIC_PACKAGES_DIR = path.join(__dirname, "..", "fixtures", "topic-packages");
+const DEFAULT_CONTENT_ASSETS_DIR = path.join(__dirname, "..", "..", "content-assets");
 
 const rawArgs = process.argv.slice(2);
 const jsonMode = rawArgs.includes("--json");
-const [command, storeDirectory, topicPackagesDirArg] = rawArgs.filter((arg) => arg !== "--json");
+const [command, storeDirectory, contentAssetsDirArg] = rawArgs.filter((arg) => arg !== "--json");
 
 function usageAndExit() {
-  console.error('Usage: node tests/validation/content-request.mjs "<command>" <storeDirectory> [topicPackagesDir] [--json]');
+  console.error('Usage: node tests/validation/content-request.mjs "<command>" <storeDirectory> [contentAssetsDir] [--json]');
   console.error('Example: node tests/validation/content-request.mjs "Create 6 designs based on article GS01" ./output/finished-carousels');
   process.exit(1);
 }
@@ -112,12 +114,12 @@ try {
   const productionWorkflow = buildProductionWorkflow();
   const carouselStoreAdapter = createLocalJsonCarouselStoreAdapter({ storageDir: storeDirectory });
   const carouselStore = createFinishedCarouselStore({ adapter: carouselStoreAdapter });
-  const topicPackagesDir = topicPackagesDirArg ?? DEFAULT_TOPIC_PACKAGES_DIR;
+  const contentAssetsDir = contentAssetsDirArg ?? DEFAULT_CONTENT_ASSETS_DIR;
 
   const result = await executeContentRequest(command, {
     productionWorkflow,
     carouselStore,
-    topicPackagesDir,
+    contentAssetsDir,
   });
 
   if (jsonMode) {

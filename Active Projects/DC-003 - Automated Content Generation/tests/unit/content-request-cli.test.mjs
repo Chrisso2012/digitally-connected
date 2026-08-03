@@ -30,14 +30,27 @@ function withTempDir(fn) {
   }
 }
 
-function writeMatchingTopicPackage(dir, sourceReference) {
+// DC-003-I018 — writes a Content Asset file (repository-backed
+// resolution), not a raw Topic Package. Filename is the asset ID itself
+// — resolveContentAsset() looks up `<contentAssetsDir>/<assetId>.json`
+// directly, replacing DC-003-I016's original directory-scan.
+function writeMatchingContentAsset(dir, assetId) {
   const topicPackage = JSON.parse(readFileSync(TOPIC_PACKAGE_FIXTURE, "utf-8"));
   topicPackage.source = "backlog";
-  topicPackage.backlog_reference_id = sourceReference;
-  writeFileSync(path.join(dir, "source.json"), JSON.stringify(topicPackage), "utf-8");
+  topicPackage.backlog_reference_id = assetId;
+  const contentAsset = {
+    asset_id: assetId,
+    title: topicPackage.working_title,
+    summary: topicPackage.core_message,
+    topic_package: topicPackage,
+    status: "approved",
+    created_at: "2026-08-04T00:00:00Z",
+    metadata: null,
+  };
+  writeFileSync(path.join(dir, `${assetId}.json`), JSON.stringify(contentAsset), "utf-8");
 }
 
-test("a valid command against the default (repository) topicPackagesDir succeeds and prints a safe summary", () => {
+test("a valid command against the default (repository) contentAssetsDir succeeds and prints a safe summary", () => {
   withTempDir((storeDir) => {
     const result = runCli("Create 6 designs based on article GS01", storeDir);
     assert.equal(result.status, 0, result.stderr);
@@ -52,10 +65,10 @@ test("a valid command against the default (repository) topicPackagesDir succeeds
   });
 });
 
-test("a valid command against an explicit custom topicPackagesDir succeeds", () => {
+test("a valid command against an explicit custom contentAssetsDir succeeds", () => {
   withTempDir((storeDir) => {
     withTempDir((sourceDir) => {
-      writeMatchingTopicPackage(sourceDir, "CUSTOM01");
+      writeMatchingContentAsset(sourceDir, "CUSTOM01");
       const result = runCli("Create 6 designs based on article CUSTOM01", storeDir, sourceDir);
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /Content Request complete/);

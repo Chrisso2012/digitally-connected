@@ -51,7 +51,13 @@ instance: a second, independent manual-trigger workflow (alongside, not
 replacing, DC-003-I013's) that invokes DC-003-I016's CLI unchanged and
 persists through DC-003-I015 into a directory inside the durable
 `n8n_data` volume; see "n8n Content Request Workflow (DC-003-I017)"
-below.
+below — and the Content Asset Repository added in DC-003-I018,
+replacing DC-003-I016's original fixture-directory resolver with a real,
+repository-owned, version-controlled source of production-ready Content
+Assets (`content-assets/GS01.json`) — the permanent structure future
+milestones (including the planned DC-004) will populate; DC-003-I016 and
+DC-003-I017 both continue working completely unchanged, verified live;
+see "Content Asset Repository" below.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -145,15 +151,20 @@ DC-003 - Automated Content Generation/
 │   ├── finished-carousel-store-errors.mjs # DC-003-I015 — structured persistence errors
 │   ├── content-request-parser.mjs    # DC-003-I016 — narrow command string -> structured request
 │   ├── content-request.mjs           # DC-003-I016 — immutable Content Request domain object
-│   ├── content-request-source-resolver.mjs # DC-003-I016 — sourceReference -> approved Topic Package
 │   ├── content-request-workflow-mapper.mjs  # DC-003-I016 — Content Request -> I012 workflow input
 │   ├── content-request-service.mjs   # DC-003-I016 — see "Content Request Command"
-│   └── content-request-errors.mjs    # DC-003-I016 — structured Content Request errors
+│   ├── content-request-errors.mjs    # DC-003-I016 — structured Content Request errors
+│   ├── content-asset-repository.mjs  # DC-003-I018 — see "Content Asset Repository"
+│   ├── content-asset-resolver.mjs    # DC-003-I018 — bridges the repository to I016's resolution contract
+│   └── content-asset-errors.mjs      # DC-003-I018 — structured Content Asset errors
+├── content-assets/                    # DC-003-I018 — the repository itself (version-controlled, human-readable)
+│   └── GS01.json                       # the one real asset as of I018 — see "current limitation" below
 ├── tests/
 │   ├── fixtures/                    # one realistic example JSON per schema (approved)
 │   │   ├── invalid/                  # deliberately-broken JSON, test-only, never "approved"
-│   │   ├── topic-packages/           # DC-003-I003 — readiness/failure-mode fixtures, test-only;
-│   │   │                             #   also holds DC-003-I016's approved GS01 stand-in fixture
+│   │   ├── topic-packages/           # DC-003-I003 — readiness/failure-mode fixtures, test-only
+│   │   │                             #   (DC-003-I016's GS01 stand-in fixture lived here; superseded
+│   │   │                             #   and removed by DC-003-I018 — see content-assets/GS01.json)
 │   │   └── carousel-content/         # DC-003-I005 — mapper failure-mode fixtures, test-only
 │   ├── unit/                        # node:test suite, see "Running tests"
 │   └── validation/
@@ -170,7 +181,8 @@ DC-003 - Automated Content Generation/
 │       ├── production-workflow.mjs   # DC-003-I012 — full end-to-end production run + output persistence
 │       ├── approve-carousel.mjs      # DC-003-I014 — apply one approve/reject/publish decision
 │       ├── carousel-store.mjs        # DC-003-I015 — save/get/list/replace against local JSON storage
-│       └── content-request.mjs       # DC-003-I016 — see "Content Request Command" (DC-003-I017 added --json)
+│       ├── content-request.mjs       # DC-003-I016 — see "Content Request Command" (DC-003-I017 added --json)
+│       └── content-asset.mjs         # DC-003-I018 — get/list/validate against the Content Asset Repository
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -2753,36 +2765,17 @@ duplicated, or reshaped to fit.
 
 ### Source resolution
 
-**Repository-evidence finding, checked before writing this module:**
-Topic Packages have no ID-based lookup or registry anywhere in this
-codebase — `loadTopicPackage()` (DC-003-I003, unchanged) only ever loads
-by an explicit file path. `topic-package.schema.json`'s own
-`backlog_reference_id` field (present since DC-003-I001, always `null` in
-every fixture until this milestone) is the one field already designed
-for linking a Topic Package back to an external source. No second
-article registry or identifier format was invented.
-
-`resolveSource()` (`src/content-request-source-resolver.mjs`) scans an
-explicit, injectable `topicPackagesDir` (never hardcoded, matching
-DC-003-I015's storage-directory convention) for Topic Package JSON files,
-loads each via `loadTopicPackage()` unchanged, and matches on
-`backlog_reference_id === sourceReference`. A file that fails to load,
-fails schema validation, or fails readiness (e.g. `status: "draft"`) is
-skipped as a non-match, not treated as a resolver error — a real source
-directory legitimately mixes ready and not-ready Topic Packages. Zero
-matches throws `UnknownSourceReferenceError`; more than one match throws
-`SourceResolutionError` (ambiguous — refuses to guess which was meant).
-
-**Current limitation, reported per the I016 brief's own instruction:**
-`GS01` does not exist anywhere in this repository as a real source.
-`tests/fixtures/topic-packages/backlog-gs01.approved.json` is an
-approved fixture Topic Package standing in for it (`source: "backlog"`,
-`backlog_reference_id: "GS01"`), used both by this milestone's own tests
-and as the CLI's default `topicPackagesDir`. **A real article/source
-registry — where `GS01` and similar references would actually come from
-— is an unresolved operational dependency, not something this milestone
-builds.** Pass an explicit third CLI argument to resolve against a real
-directory once one exists.
+**Superseded by DC-003-I018 — see "Content Asset Repository" below.**
+Source resolution originally worked by scanning a directory of Topic
+Package files for one matching `backlog_reference_id` (`resolveSource()`
+in a now-deleted `src/content-request-source-resolver.mjs`, backed by a
+test-only fixture directory). DC-003-I018 replaced that fixture-backed
+mechanism entirely with a real, repository-owned, version-controlled
+Content Asset Repository — `GS01` now resolves through
+`content-assets/GS01.json`, an asset_id lookup, not a directory scan.
+`UnknownSourceReferenceError`/`SourceResolutionError` are unchanged; the
+command syntax, the CLI, and DC-003-I017's n8n workflow all needed zero
+changes. See "Content Asset Repository" for the full detail.
 
 ### The service (`src/content-request-service.mjs`)
 
@@ -2876,13 +2869,14 @@ a partial or failed carousel.
 ### CLI (`tests/validation/content-request.mjs`, `npm run content:request`)
 
 ```bash
-npm run content:request -- "Create 6 designs based on article GS01" <storeDirectory> [topicPackagesDir] [--json]
+npm run content:request -- "Create 6 designs based on article GS01" <storeDirectory> [contentAssetsDir] [--json]
 ```
 
 `storeDirectory` is required, exactly like `npm run store`.
-`topicPackagesDir` is optional, defaulting to
-`tests/fixtures/topic-packages/` — the approved-fixture stand-in
-described above. The CLI builds the same
+`contentAssetsDir` is optional, defaulting to the repository's own
+`content-assets/` directory (was `topicPackagesDir`, defaulting to a test
+fixture directory, before DC-003-I018 — see "Content Asset Repository"
+below). The CLI builds the same
 ledger→orchestrator→invocation-adapter→n8n-adapter→production-workflow
 stack every other production-path CLI in this repository already builds,
 using an in-memory Ledger Store scoped to that one invocation (the
@@ -3095,6 +3089,143 @@ Command — current limitations" above).
 - The workflow remains manual-trigger-only, synchronous, one request per
   execution — no schedule, webhook, form, or other autonomous trigger
   exists.
+
+## Content Asset Repository
+
+DC-003-I018 replaces DC-003-I016's original temporary fixture-directory
+resolver with a real, repository-owned, version-controlled Content Asset
+Repository. This becomes the authoritative source for every future
+production request — not an article system, and not a Topic Package
+registry; it deliberately stores **Content Assets**, per the approved
+brief's own framing.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    CR[Content Request] --> CAR2[Content Asset Resolver]
+    CAR2 --> REPO[Content Asset Repository]
+    REPO --> RCA[Resolved Content Asset]
+    RCA --> PW[Existing Production Workflow]
+    PW --> FC[Finished Carousel]
+```
+
+### The Content Asset concept
+
+A Content Asset is the canonical, approved source material for
+downstream production — deliberately **not** a Finished Carousel, an
+Article, a Topic Package, or an LLM prompt on its own. It's the envelope
+a Topic Package is embedded within, retrievable by `asset_id`.
+
+`schemas/content-asset.schema.json` is intentionally small:
+
+```
+{ asset_id, title, summary, topic_package, status, created_at, metadata }
+```
+
+No rendered slides, approval history, persistence metadata, or provider
+outputs — those all belong to later stages this repository has no
+knowledge of. `topic_package` is a full Topic Package object, validated
+separately against `topic-package.schema.json` (not re-specified inside
+`content-asset.schema.json`, matching this codebase's existing "don't
+duplicate one schema inside another" convention — see "Schemas" above).
+`asset_id` is **human-assigned, not machine-generated** — unlike every
+other DC-003 identifier (`topic_`/`car_`/`exec_`/`req_`/...), a Content
+Asset's ID has no prefix convention (`GS01`, not `asset_GS01`), since
+assets are curated by hand (or a future ingestion pipeline), not
+generated at runtime by this pipeline.
+
+### Repository layout
+
+```
+content-assets/
+    GS01.json
+```
+
+Repository-owned, version-controlled, human-readable — one file per
+asset, at `content-assets/<asset_id>.json`. The filename **is** the
+identifier; there is no separate ID-to-file mapping, no second registry.
+
+### Resolver (`src/content-asset-repository.mjs`, `src/content-asset-resolver.mjs`)
+
+Two small modules, deliberately **not** a full adapter-abstraction layer
+like DC-003-I008's Ledger Store or DC-003-I015's Finished Carousel
+Store — the approved brief's own "repository remains simple" review
+criterion, and this repository has no write path in this milestone's
+scope to make an adapter abstraction worth the complexity:
+
+- **`content-asset-repository.mjs`** — `createContentAssetRepository({
+  assetsDir })` → `{ get, list, exists }`. `get(assetId)` loads by ID,
+  validates the envelope against `content-asset.schema.json` **and** the
+  embedded `topic_package` against `topic-package.schema.json`, verifies
+  the stored `asset_id` matches the requested one, and returns an
+  immutable object — or fails explicitly (never guesses) with one of five
+  structured errors. `list()` returns every asset ordered deterministically
+  by `asset_id`, detecting genuine cross-file ID collisions along the way
+  (see "a real design correction" below). Reads `node:fs` directly — see
+  the module's own header comment for why that's the right call here,
+  not a contradiction of DC-003-I008/I015's own adapter pattern.
+- **`content-asset-resolver.mjs`** — `resolveContentAsset({ sourceType,
+  sourceReference }, { contentAssetsDir })` bridges the repository to the
+  *exact* resolution contract DC-003-I016's Content Request Service
+  already depended on: given a source reference, return a validated
+  Topic Package. Every repository error is mapped onto DC-003-I016's own
+  `UnknownSourceReferenceError`/`SourceResolutionError` — unchanged —  so
+  `content-request-service.mjs` (and everything downstream, including
+  DC-003-I017's n8n workflow) needed zero changes to their own error
+  handling, only a renamed dependency (`contentAssetsDir`, was
+  `topicPackagesDir`).
+
+**A real design correction, found by the milestone's own tests, not
+assumed correct:** an early version of `get()` enforced that a stored
+asset's own `asset_id` field always matched its filename — which, on
+reflection, made `DuplicateContentAssetIdError` structurally
+unreachable: two files can never share a filename in one directory, so if
+filename must always match content, two different files can never
+declare the same `asset_id` either. Fixed by splitting the check:
+`get()` (a targeted, identity-verified single lookup) still enforces the
+match; `list()` (a whole-repository integrity scan) trusts each file's
+own internal `asset_id` instead, so a genuine cross-file collision — the
+scenario duplicate detection actually exists to catch — is now reachable
+and tested.
+
+### CLI (`tests/validation/content-asset.mjs`, `npm run content-asset`)
+
+```bash
+npm run content-asset -- get <assetId> [assetsDir]
+npm run content-asset -- list [assetsDir]
+npm run content-asset -- validate <assetId> [assetsDir]
+```
+
+`assetsDir` is optional on every subcommand, defaulting to the
+repository's own `content-assets/` — the only CLI in this codebase whose
+primary storage location needs no explicit argument at all, since (unlike
+`npm run store`'s caller-chosen storage directory) there is exactly one
+canonical Content Asset Repository. Pass an explicit trailing argument to
+point at a different directory (used by this CLI's own tests).
+
+### Relationship to DC-003-I016 / DC-003-I017
+
+Both continue to work completely unchanged at the observable level. The
+command `Create 6 designs based on article GS01` still resolves, still
+produces exactly six mock-rendered slides, still persists through
+DC-003-I015 — internally, `GS01` now resolves through the Content Asset
+Repository instead of a fixture directory. Verified directly: DC-003-I017's
+own n8n workflow (`00Qh0qFIzE5swDUP`) was executed again, completely
+unmodified, after this milestone landed, and completed successfully
+(execution `133`), resolving through the new repository with zero
+workflow changes.
+
+### Current limitation
+
+`content-assets/GS01.json` represents the same approved fixture Topic
+Package DC-003-I016 originally stood in with — **it is not a real
+article/source asset.** DC-003-I018 establishes the permanent structure
+future milestones (including the planned DC-004 Content Authoring
+Engine) will populate with real assets; it does not itself implement
+article generation, ingestion, or editing. Everything downstream should
+consume Content Assets from this repository, never a temporary fixture
+or a generated article, from this milestone forward.
 
 ## Running tests
 
@@ -3410,11 +3541,15 @@ error class, no new schema, no new abstraction.
 | Finished Carousel Store (save/get/list/replace, local JSON) | Done (DC-003-I015) — `src/finished-carousel-store.mjs` + `src/local-json-carousel-store-adapter.mjs`; see "Finished Carousel Store"; domain layer never imports `node:fs`, atomic writes, path-traversal-safe, no approval logic, Execution Ledger untouched |
 | Storage Adapter abstraction | Done (DC-003-I015) — `src/finished-carousel-store-adapter.mjs`, `assertValidCarouselStoreAdapter()`; mirrors DC-003-I008's Ledger Store abstraction exactly |
 | Carousel Store CLI check | Done (DC-003-I015) — `npm run store`, no network, no ledger writes |
-| Content Request parser, domain object, source resolver, workflow mapper | Done (DC-003-I016) — `src/content-request-parser.mjs`, `src/content-request.mjs`, `src/content-request-source-resolver.mjs`, `src/content-request-workflow-mapper.mjs`; see "Content Request Command" |
+| Content Request parser, domain object, workflow mapper | Done (DC-003-I016) — `src/content-request-parser.mjs`, `src/content-request.mjs`, `src/content-request-workflow-mapper.mjs`; see "Content Request Command" |
 | Content Request Service (compose I012 + I015 into one command) | Done (DC-003-I016) — `src/content-request-service.mjs`; never throws from source resolution onward, matching I012's own contract; no persistence on a failed/partial execution |
-| Content Request CLI check | Done (DC-003-I016) — `npm run content:request`, no network, no live rendering; `--json` mode added (DC-003-I017) |
+| Content Request CLI check | Done (DC-003-I016) — `npm run content:request`, no network, no live rendering; `--json` mode added (DC-003-I017); default resolution directory repointed to `content-assets/` (DC-003-I018) |
 | n8n Content Request Workflow (real n8n instance, invokes I016 unchanged) | Done (DC-003-I017) — `workflows/dc003-i017-content-request-workflow.json`; see "n8n Content Request Workflow (DC-003-I017)"; verified success path (execution 131, `car_7b97c6df70a84b61`) and controlled failure path (execution 132, unknown source), no carousel persisted for the failed run |
-| Unit test suite | Done — 570 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Content Asset Repository (get/list, schema-validated, immutable) | Done (DC-003-I018) — `src/content-asset-repository.mjs`; see "Content Asset Repository"; replaces I016's original fixture-directory resolver, no adapter abstraction (repository is read-only, no write path in scope) |
+| Content Asset Resolver (bridges repository to I016's unchanged error contract) | Done (DC-003-I018) — `src/content-asset-resolver.mjs`; `UnknownSourceReferenceError`/`SourceResolutionError` unchanged from I016 |
+| Content Asset CLI check | Done (DC-003-I018) — `npm run content-asset -- get\|list\|validate`, no network |
+| I016/I017 backward compatibility after the resolver swap | Done (DC-003-I018) — verified live: the unmodified I017 n8n workflow (execution 133) and the I016 CLI both resolve `GS01` correctly through the new repository with zero changes to either |
+| Unit test suite | Done — 602 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
@@ -3426,10 +3561,10 @@ error class, no new schema, no new abstraction.
 | General-purpose natural-language understanding for content requests | Not started — explicitly out of scope for I016; one deterministic command shape only |
 | Multiple Content Request types / batch requests / scheduling | Not started — explicitly out of scope for I016 |
 | Publishing or approval UI reachable via the Content Request command | Not started — explicitly out of scope for I016; DC-003-I014's approve/reject/publish functions exist but this command doesn't call them |
-| Real article/source registry | Not started — operational dependency flagged by DC-003-I016, confirmed still open by DC-003-I017; `GS01` resolves only against an approved fixture Topic Package (`tests/fixtures/topic-packages/backlog-gs01.approved.json`), not a real source, through either the CLI or the n8n workflow |
-| Article ingestion tooling | Not started — explicitly out of scope for I017; I017 proves the operational command path, it doesn't implement ingestion or replace the GS01 fixture |
+| Real article/source content in the Content Asset Repository | Not started — the repository itself is real and permanent (DC-003-I018), but its one asset, `content-assets/GS01.json`, still represents the same DC-003-I016 approved fixture, not a real article/source |
+| Article generation, ingestion, or editing tooling | Not started — explicitly out of scope for I018; I018 establishes the permanent structure the planned DC-004 Content Authoring Engine will populate, it doesn't populate it with real content itself |
 | REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
-| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, I015, I016, and I017 |
+| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, I015, I016, I017, and I018 |
 | Asynchronous execution | Not started — DC-003-I010/I011/I012 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
 

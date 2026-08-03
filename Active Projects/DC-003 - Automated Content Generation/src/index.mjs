@@ -142,7 +142,6 @@ export {
 // DC-003-I016 — Content Request Command
 export { createContentRequest } from "./content-request.mjs";
 export { parseContentRequestCommand } from "./content-request-parser.mjs";
-export { resolveSource } from "./content-request-source-resolver.mjs";
 export { mapContentRequestToProductionWorkflowInput } from "./content-request-workflow-mapper.mjs";
 export { executeContentRequest } from "./content-request-service.mjs";
 export {
@@ -155,3 +154,15 @@ export {
   ContentRequestPersistenceFailedError,
   DuplicateStoredCarouselError,
 } from "./content-request-errors.mjs";
+
+// DC-003-I018 — Content Asset Repository (replaces I016's original
+// fixture-directory resolver; see content-request-service.mjs)
+export { createContentAssetRepository } from "./content-asset-repository.mjs";
+export { resolveContentAsset } from "./content-asset-resolver.mjs";
+export {
+  UnknownContentAssetError,
+  DuplicateContentAssetIdError,
+  ContentAssetSchemaError,
+  ContentAssetReadFailureError,
+  InvalidContentAssetError,
+} from "./content-asset-errors.mjs";

@@ -1,13 +1,14 @@
 // DC-003 — schema registry.
 //
-// Loads the nine approved JSON Schemas (five from DC-003-T002, plus
+// Loads the ten approved JSON Schemas (five from DC-003-T002, plus
 // DC-003-I008's execution-record.schema.json, DC-003-I010's
-// invocation-request.schema.json / invocation-response.schema.json, and
-// DC-003-I016's content-request.schema.json — none part of the original
-// T002 five) and exposes them behind stable, camelCase identifiers
-// (matching the JS-side naming convention documented in DC-003-T002 §8)
-// so later modules never need to know a schema's filesystem path — only
-// its identifier.
+// invocation-request.schema.json / invocation-response.schema.json,
+// DC-003-I016's content-request.schema.json, and DC-003-I018's
+// content-asset.schema.json — none part of the original T002 five) and
+// exposes them behind stable, camelCase identifiers (matching the
+// JS-side naming convention documented in DC-003-T002 §8) so later
+// modules never need to know a schema's filesystem path — only its
+// identifier.
 
 import { readJsonFileSync } from "./read-json-file.mjs";
 import { resolveFromRoot } from "./paths.mjs";
@@ -30,12 +31,14 @@ const SCHEMA_FILES = {
   invocationResponse: "invocation-response.schema.json",
   // DC-003-I016 — the first user-facing command's domain object.
   contentRequest: "content-request.schema.json",
+  // DC-003-I018 — the Content Asset Repository's domain object.
+  contentAsset: "content-asset.schema.json",
 };
 
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
 
 /**
- * Loads all nine schemas and returns them keyed by identifier, e.g.
+ * Loads all ten schemas and returns them keyed by identifier, e.g.
  * `registry.topicPackage`. Fails fast on the first missing or malformed
  * schema file.
  */

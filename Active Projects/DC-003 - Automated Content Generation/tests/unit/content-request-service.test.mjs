@@ -32,11 +32,24 @@ function withTempDir(fn) {
   }
 }
 
-function writeMatchingTopicPackage(dir, sourceReference) {
+// DC-003-I018 — writes a Content Asset file (the repository-backed
+// resolution unit), not a raw Topic Package — resolveContentAsset() now
+// looks up `<contentAssetsDir>/<assetId>.json` directly, replacing
+// DC-003-I016's original directory-scan-by-backlog_reference_id.
+function writeMatchingContentAsset(dir, assetId) {
   const topicPackage = JSON.parse(readFileSync(TOPIC_PACKAGE_FIXTURE, "utf-8"));
   topicPackage.source = "backlog";
-  topicPackage.backlog_reference_id = sourceReference;
-  writeFileSync(path.join(dir, "source.json"), JSON.stringify(topicPackage), "utf-8");
+  topicPackage.backlog_reference_id = assetId;
+  const contentAsset = {
+    asset_id: assetId,
+    title: topicPackage.working_title,
+    summary: topicPackage.core_message,
+    topic_package: topicPackage,
+    status: "approved",
+    created_at: "2026-08-04T00:00:00Z",
+    metadata: null,
+  };
+  writeFileSync(path.join(dir, `${assetId}.json`), JSON.stringify(contentAsset), "utf-8");
 }
 
 function buildFinishedCarousel(overrides = {}) {
@@ -173,16 +186,16 @@ test("throws ContentRequestValidationError for a structured request with an unsu
 
 // --- successful end-to-end request (fake production workflow) ----------
 
-test("a successful request resolves the source, invokes production, persists, and returns a complete result", async () => {
+test("a successful request resolves the source through the Content Asset Repository, invokes production, persists, and returns a complete result", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const productionWorkflow = createFakeProductionWorkflow((input) => buildWorkflowResult({ carouselId: "car_success0001", requestId: input.requestId }));
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
     const result = await executeContentRequest("Create 6 designs based on article GS01", {
       productionWorkflow,
       carouselStore,
-      topicPackagesDir: dir,
+      contentAssetsDir: dir,
       now: () => "2026-08-04T00:00:00.000Z",
       idGenerator: () => "req_deterministic0001",
     });
@@ -198,8 +211,9 @@ test("a successful request resolves the source, invokes production, persists, an
     assert.deepEqual(result.warnings, []);
     assert.equal(result.error, null);
 
-    // the workflow was actually invoked with the resolved source and the
-    // content request's own request_id as the production requestId
+    // the workflow was actually invoked with the resolved source's
+    // embedded topic_package, and the content request's own request_id
+    // as the production requestId
     assert.equal(productionWorkflow.calls.length, 1);
     assert.equal(productionWorkflow.calls[0].requestId, "req_deterministic0001");
     assert.equal(productionWorkflow.calls[0].topicPackageData.backlog_reference_id, "GS01");
@@ -208,14 +222,14 @@ test("a successful request resolves the source, invokes production, persists, an
 
 test("the stored carousel is retrievable and has exactly six slides", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const productionWorkflow = createFakeProductionWorkflow((input) => buildWorkflowResult({ carouselId: "car_sixslides01", requestId: input.requestId }));
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
     const result = await executeContentRequest("Create 6 designs based on article GS01", {
       productionWorkflow,
       carouselStore,
-      topicPackagesDir: dir,
+      contentAssetsDir: dir,
     });
 
     const stored = carouselStore.get(result.carouselId);
@@ -225,14 +239,14 @@ test("the stored carousel is retrievable and has exactly six slides", async () =
 
 test("requestId, executionId, and carouselId are all distinct from each other and from the source reference", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const productionWorkflow = createFakeProductionWorkflow((input) => buildWorkflowResult({ carouselId: "car_distinctids1", executionId: "exec_distinctids1", requestId: input.requestId }));
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
     const result = await executeContentRequest("Create 6 designs based on article GS01", {
       productionWorkflow,
       carouselStore,
-      topicPackagesDir: dir,
+      contentAssetsDir: dir,
       idGenerator: () => "req_distinctids0",
     });
 
@@ -243,11 +257,11 @@ test("requestId, executionId, and carouselId are all distinct from each other an
 
 test("result object is deeply frozen", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const productionWorkflow = createFakeProductionWorkflow(buildWorkflowResult());
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
-    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, topicPackagesDir: dir });
+    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, contentAssetsDir: dir });
     assert.ok(Object.isFrozen(result));
     assert.ok(Object.isFrozen(result.warnings));
     assert.throws(() => {
@@ -258,11 +272,11 @@ test("result object is deeply frozen", async () => {
 
 test("never returns PipelineContext, raw provider responses, credentials, or the full finished carousel", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const productionWorkflow = createFakeProductionWorkflow(buildWorkflowResult());
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
-    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, topicPackagesDir: dir });
+    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, contentAssetsDir: dir });
     assert.deepEqual(
       Object.keys(result).sort(),
       ["carouselId", "error", "executionId", "requestId", "sourceReference", "status", "storeReference", "stored", "success", "warnings"]
@@ -280,7 +294,7 @@ test("an unknown source reference resolves to a safe failed result without ever 
     const result = await executeContentRequest("Create 6 designs based on article DOES_NOT_EXIST", {
       productionWorkflow,
       carouselStore,
-      topicPackagesDir: dir,
+      contentAssetsDir: dir,
     });
 
     assert.equal(result.success, false);
@@ -298,13 +312,13 @@ test("an unknown source reference resolves to a safe failed result without ever 
 
 test("a failed production execution returns a safe failed result and never persists anything", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const productionWorkflow = createFakeProductionWorkflow(
       buildWorkflowResult({ status: "failed", error: { code: "RenderFailed", message: "mock render failure", retryable: false } })
     );
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
-    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, topicPackagesDir: dir });
+    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, contentAssetsDir: dir });
 
     assert.equal(result.success, false);
     assert.equal(result.status, "failed");
@@ -320,7 +334,7 @@ test("a failed production execution returns a safe failed result and never persi
 
 test("a duplicate stored carousel is reported as DuplicateStoredCarouselError, production is still reported as completed", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
     // Pre-seed the store with a carousel sharing the exact carousel_id the
     // fake production workflow is about to "produce" — the deterministic
@@ -330,7 +344,7 @@ test("a duplicate stored carousel is reported as DuplicateStoredCarouselError, p
 
     const productionWorkflow = createFakeProductionWorkflow((input) => buildWorkflowResult({ carouselId: "car_alreadystored", requestId: input.requestId }));
 
-    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, topicPackagesDir: dir });
+    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, contentAssetsDir: dir });
 
     assert.equal(result.success, false);
     assert.equal(result.status, "completed");
@@ -346,11 +360,11 @@ test("a duplicate stored carousel is reported as DuplicateStoredCarouselError, p
 
 test("a generic persistence failure is reported as ContentRequestPersistenceFailedError without leaking the raw cause", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const carouselStore = createFinishedCarouselStore({ adapter: createBrokenWriteAdapter() });
     const productionWorkflow = createFakeProductionWorkflow((input) => buildWorkflowResult({ carouselId: "car_brokenwrite01", requestId: input.requestId }));
 
-    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, topicPackagesDir: dir });
+    const result = await executeContentRequest("Create 6 designs based on article GS01", { productionWorkflow, carouselStore, contentAssetsDir: dir });
 
     assert.equal(result.success, false);
     assert.equal(result.stored, false);
@@ -367,7 +381,7 @@ test("no result.error ever contains a stack trace marker", async () => {
     const productionWorkflow = createFakeProductionWorkflow(buildWorkflowResult());
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
-    const result = await executeContentRequest("Create 6 designs based on article DOES_NOT_EXIST", { productionWorkflow, carouselStore, topicPackagesDir: dir });
+    const result = await executeContentRequest("Create 6 designs based on article DOES_NOT_EXIST", { productionWorkflow, carouselStore, contentAssetsDir: dir });
     assert.doesNotMatch(result.error.message, /at file:\/\//);
   });
 });
@@ -395,16 +409,16 @@ function buildRealProductionWorkflow() {
   return createProductionWorkflow({ n8nAdapter });
 }
 
-test("composes the real, unmodified I003-I012 stack end to end (not a fake) and produces a stored, six-slide, mock-only carousel", async () => {
+test("composes the real, unmodified I003-I012 stack end to end (not a fake), resolving through the real Content Asset Repository, and produces a stored, six-slide, mock-only carousel", async () => {
   await withTempDir(async (dir) => {
-    writeMatchingTopicPackage(dir, "GS01");
+    writeMatchingContentAsset(dir, "GS01");
     const productionWorkflow = buildRealProductionWorkflow();
     const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
 
     const result = await executeContentRequest("Create 6 designs based on article GS01", {
       productionWorkflow,
       carouselStore,
-      topicPackagesDir: dir,
+      contentAssetsDir: dir,
     });
 
     assert.equal(result.success, true);
@@ -418,4 +432,23 @@ test("composes the real, unmodified I003-I012 stack end to end (not a fake) and 
     assert.equal(stored.overall_status, "completed");
     assert.equal(stored.execution_metadata.provider, "mock-transport");
   });
+});
+
+// --- real repository asset (the actual GS01.json shipped with DC-003-I018) --
+
+test("resolves against the real, repository-owned content-assets/GS01.json — the actual production data, not a test fixture", async () => {
+  const CONTENT_ASSETS_DIR = path.join(__dirname, "..", "..", "content-assets");
+  const productionWorkflow = buildRealProductionWorkflow();
+  const carouselStore = createFinishedCarouselStore({ adapter: createInMemoryStorageAdapter() });
+
+  const result = await executeContentRequest("Create 6 designs based on article GS01", {
+    productionWorkflow,
+    carouselStore,
+    contentAssetsDir: CONTENT_ASSETS_DIR,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.sourceReference, "GS01");
+  const stored = carouselStore.get(result.carouselId);
+  assert.equal(stored.slides.length, 6);
 });
