@@ -21,9 +21,11 @@ Adapter added in DC-003-I011, a thin translation layer between an n8n
 workflow and the External Invocation Adapter; see "n8n Adapter" below —
 and the Production Workflow added in DC-003-I012, the first complete
 end-to-end demonstration composing every layer above into one runnable
-production execution; see "Production Workflow" below. No actual n8n
-workflow is installed or run anywhere in this repository — DC-003-I011 is
-the integration layer a real n8n instance would call, not n8n itself.
+production execution; see "Production Workflow" below — and the n8n
+Workflow added in DC-003-I013, a real, manual-trigger, mock-only n8n
+workflow that invokes DC-003-I012's CLI unmodified against a real local
+n8n instance, exported to `workflows/`; see "n8n Workflow (DC-003-I013)"
+below.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -134,9 +136,11 @@ DC-003 - Automated Content Generation/
 └── README.md
 ```
 
-`prompts/` and `workflows/` are created empty (via `.gitkeep`) because the
-architecture in DC-003-T001 names them as the homes for the LLM prompt and
-the exported n8n workflow — both explicitly out of scope for every task so far.
+`prompts/` is still empty (via `.gitkeep`) — the architecture in
+DC-003-T001 names it as the future home for the LLM prompt, out of scope
+for every task so far. `workflows/` now contains the DC-003-I013 export,
+`dc003-i013-production-workflow.json` — see "n8n Workflow (DC-003-I013)"
+below.
 
 ## Configuration
 
@@ -2257,6 +2261,106 @@ persistWorkflowOutput("./workflow-output.json", result);
 //                    completedAt, warningCount, hasError }
 ```
 
+## n8n Workflow (DC-003-I013)
+
+DC-003-I013 is the platform's first workflow actually built and run inside
+a real n8n instance — every earlier milestone up to and including I012 only
+ran through this repository's own CLIs. I013 introduces no new platform
+logic: it wires a real n8n workflow to invoke I012's CLI
+(`tests/validation/production-workflow.mjs`) completely unmodified.
+
+### Invocation mechanism
+
+n8n runs in a separate Docker container (`n8n-test`) from this repository.
+For an n8n workflow to invoke this codebase at all, the container needs
+both a way to reach the repo's files and a node capable of running a shell
+command:
+
+- The repository is **bind-mounted read-only** into the container at
+  `/data/dc003-repo` (`-v "<repo path>:/data/dc003-repo:ro"`). n8n cannot
+  write to, or modify, the repository through this mount — verified
+  directly (`touch` inside the mount fails with "Read-only file system").
+- The workflow's **Execute Command** node runs, inside the container:
+  ```
+  RUN_DIR=/tmp/dc003-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}
+  mkdir -p "$RUN_DIR"
+  cat > "$RUN_DIR/input.json" << 'INPUT_EOF'
+  {{ JSON.stringify($json) }}
+  INPUT_EOF
+  cd /data/dc003-repo
+  node tests/validation/production-workflow.mjs "$RUN_DIR/input.json" "$RUN_DIR/ledger.jsonl" "$RUN_DIR/output.json" > "$RUN_DIR/run.log" 2>&1 || true
+  cat "$RUN_DIR/output.json"
+  ```
+  Workflow input and run artifacts (ledger, output, log) live under `/tmp`
+  inside the container — never inside the read-only repo mount. No
+  environment variables are required: the CLI's renderer defaults to the
+  mock transport (`src/renderer-transport-mock.mjs`) unless a live
+  transport is explicitly configured, which nothing in this workflow does.
+
+### `NODES_EXCLUDE` — scoped, deliberate re-enablement of Execute Command
+
+n8n 2.x disables the Execute Command and Local File Trigger nodes **by
+default**, for security (`@n8n/config`'s `NodesConfig.exclude` defaults to
+`['n8n-nodes-base.executeCommand', 'n8n-nodes-base.localFileTrigger']`,
+documented as an n8n "v2 breaking change"). The `n8n-test` container is
+started with:
+
+```
+NODES_EXCLUDE=["n8n-nodes-base.localFileTrigger"]
+```
+
+This is n8n's own officially documented opt-back-in mechanism (setting
+`NODES_EXCLUDE` to any value at all overrides the built-in default list).
+The scoping is deliberate: it re-enables **only** Execute Command, and
+**keeps Local File Trigger excluded** — the workflow has no use for it, so
+there is no reason to widen the re-enablement beyond what I013 actually
+needs. No other node-level or instance-level security setting was changed,
+and the workflow is not exposed externally — it has no webhook or public
+trigger, only a manual trigger.
+
+### What the workflow does
+
+Four nodes, linear chain, manual trigger only — no schedule, no webhook:
+
+```mermaid
+flowchart LR
+    ST[Start - Manual Trigger] --> BWI[Build Workflow Input - Set]
+    BWI --> EC[Run I012 Production Workflow - Execute Command]
+    EC --> PWR[Parse Workflow Result - Set]
+```
+
+1. **Start** — Manual Trigger. The workflow has no automatic trigger of
+   any kind.
+2. **Build Workflow Input** — Set node (raw JSON) that assembles the same
+   `{ requestId, topicPackageData }` shape the n8n Adapter (DC-003-I011)
+   already expects, embedding the repository's own approved example topic
+   package (`tests/fixtures/topic-package.example.json`) with a
+   timestamp-derived `requestId`.
+3. **Run I012 Production Workflow (Mock)** — Execute Command, per the
+   invocation mechanism above.
+4. **Parse Workflow Result** — Set node (raw JSON,
+   `JSON.parse($json.stdout)`) that turns the CLI's captured stdout back
+   into the same structured `{ invocationResponse, finishedCarousel,
+   executionId, requestId, summary }` object I012's `run()` itself returns.
+
+### Verified mock-only execution result
+
+Run manually once the workflow was complete (n8n execution ID `130`):
+every node succeeded, `summary.status` was `"completed"`, and a full
+6-slide Finished Carousel Object came back with `provider: "mock-transport"`
+on every slide, `warningCount: 0`, `hasError: false`. No live Templated
+request was made — mock rendering only, matching I012's own CLI default.
+
+### Exported workflow (`workflows/dc003-i013-production-workflow.json`)
+
+A structural export of the live n8n workflow (id `88i2P5SDvRly6SRs`, name
+"DC-003 - Production Workflow (Mock, Manual Trigger)"), verified
+node-for-node and connection-for-connection identical to the live workflow
+at export time. No node in this workflow references any n8n credential —
+there is nothing to redact. Re-importing this file into any n8n instance
+with the same `NODES_EXCLUDE` configuration and the same repo bind mount
+reproduces the workflow exactly.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -2565,7 +2669,8 @@ error class, no new schema, no new abstraction.
 | Workflow output persistence | Done (DC-003-I012) — `persistWorkflowOutput()`, pretty-printed JSON to disk |
 | Workflow summary generation | Done (DC-003-I012) — status/executionId/requestId/duration/completedAt/warningCount/hasError |
 | Production Workflow CLI check | Done (DC-003-I012) — `npm run workflow`, no network, no production services |
-| Unit test suite | Done — 407 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012) |
+| n8n Workflow (real n8n instance, manual trigger, Execute Command) | Done (DC-003-I013) — `workflows/dc003-i013-production-workflow.json`; see "n8n Workflow (DC-003-I013)"; verified mock-only execution, `summary.status: "completed"` |
+| Unit test suite | Done — 407 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |

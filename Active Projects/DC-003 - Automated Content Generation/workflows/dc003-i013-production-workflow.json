@@ -1,0 +1,84 @@
+{
+  "id": "88i2P5SDvRly6SRs",
+  "name": "DC-003 - Production Workflow (Mock, Manual Trigger)",
+  "description": "DC-003-I013: manual-trigger n8n workflow that runs I012's production-workflow.mjs CLI (mock rendering) against the DC-003 repo, read-only bind-mounted at /data/dc003-repo.",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "fd816928-5441-4a19-94a5-de394f9e1f84",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 304]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"requestId\": \"run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}\",\n  \"topicPackageData\": {\"topic_id\":\"topic_01J9X8QZ3K\",\"working_title\":\"Your database is your cheapest lead source\",\"audience\":\"Owner-operators running 10-50 staff service businesses\",\"primary_goal\":\"Book a database audit call\",\"funnel_stage\":\"consideration\",\"core_message\":\"Past enquiries that never converted are still recoverable revenue.\",\"supporting_points\":[\"Every unconverted lead already raised its hand once\",\"Automated re-engagement costs nothing new in ad spend\",\"Segmented follow-up outperforms a single blast\"],\"cta\":\"Book your audit\",\"keywords\":[\"database reactivation\",\"lead follow-up\"],\"brand_voice\":\"confident-direct\",\"status\":\"approved\",\"created_date\":\"2026-07-20T09:14:00Z\",\"updated_date\":\"2026-07-28T11:02:00Z\",\"version\":2,\"schema_version\":\"1.0\",\"source\":\"manual\",\"backlog_reference_id\":null,\"content_pillar\":\"database reactivation\",\"tags\":[\"evergreen\"],\"priority\":null,\"related_topic_ids\":[],\"locale\":\"en\",\"owner\":\"chris@digitallyconnected.net\",\"notes\":null}\n}",
+        "options": {}
+      },
+      "id": "fe145cb3-4839-4164-96be-5aa7b8431a93",
+      "name": "Build Workflow Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [544, 304]
+    },
+    {
+      "id": "ae808b18-d9a1-4437-989b-e6b725053ca2",
+      "name": "Run I012 Production Workflow (Mock)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [840, 304],
+      "parameters": {
+        "executeOnce": true,
+        "command": "=RUN_DIR=/tmp/dc003-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}\nmkdir -p \"$RUN_DIR\"\ncat > \"$RUN_DIR/input.json\" << 'INPUT_EOF'\n{{ JSON.stringify($json) }}\nINPUT_EOF\ncd /data/dc003-repo\nnode tests/validation/production-workflow.mjs \"$RUN_DIR/input.json\" \"$RUN_DIR/ledger.jsonl\" \"$RUN_DIR/output.json\" > \"$RUN_DIR/run.log\" 2>&1 || true\ncat \"$RUN_DIR/output.json\""
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.parse($json.stdout) }}",
+        "options": {}
+      },
+      "id": "7204220d-e5ba-4cd1-a414-fc0e99dd27a9",
+      "name": "Parse Workflow Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1360, 304]
+    },
+    {
+      "parameters": {
+        "content": "## DC-003-I013 - Production Workflow (Mock)\n\nManual Trigger -> Build Workflow Input (embeds the approved example topic package) -> Run I012 Production Workflow (Mock) -> Parse Workflow Result.\n\nExecute Command was blocked by n8n's v2 default (NODES_EXCLUDE includes executeCommand by default for security). Re-enabled deliberately via NODES_EXCLUDE=[\"n8n-nodes-base.localFileTrigger\"] on the n8n-test container (LocalFileTrigger stays excluded). See DC-003 project memory for the full diagnosis.\n\nThe Execute Command node runs I012's unmodified CLI (tests/validation/production-workflow.mjs) against the DC-003 repo, read-only bind-mounted at /data/dc003-repo. Mock rendering only - no live services, no env vars required.",
+        "height": 420,
+        "width": 460,
+        "color": 5
+      },
+      "id": "b0ead361-3c14-4ba0-a8ee-4a3893de1370",
+      "name": "Sticky Note a6c3bd88",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [800, 256]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{ "node": "Build Workflow Input", "type": "main", "index": 0 }]]
+    },
+    "Build Workflow Input": {
+      "main": [[{ "node": "Run I012 Production Workflow (Mock)", "type": "main", "index": 0 }]]
+    },
+    "Run I012 Production Workflow (Mock)": {
+      "main": [[{ "node": "Parse Workflow Result", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": [],
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  }
+}
