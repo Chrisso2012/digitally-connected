@@ -113,6 +113,95 @@ test("does not create any file outside the given store directory", () => {
   });
 });
 
+// --- DC-003-I017 addition: --json mode ------------------------------------
+
+test("--json prints exactly one line of valid JSON matching the Content Request Result shape on success", () => {
+  withTempDir((storeDir) => {
+    const result = runCli("Create 6 designs based on article GS01", storeDir, "--json");
+    assert.equal(result.status, 0, result.stderr);
+
+    const lines = result.stdout.trim().split("\n");
+    assert.equal(lines.length, 1, `expected exactly one stdout line, got: ${JSON.stringify(lines)}`);
+
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.success, true);
+    assert.match(parsed.requestId, /^req_/);
+    assert.equal(parsed.sourceReference, "GS01");
+    assert.match(parsed.executionId, /^exec_/);
+    assert.match(parsed.carouselId, /^car_/);
+    assert.equal(parsed.status, "completed");
+    assert.equal(parsed.stored, true);
+    assert.match(parsed.storeReference, /^local-json-carousel-store:car_/);
+    assert.deepEqual(parsed.warnings, []);
+    assert.equal(parsed.error, null);
+  });
+});
+
+test("--json prints exactly one line of valid JSON on a safe (non-throwing) failure", () => {
+  withTempDir((storeDir) => {
+    const result = runCli("Create 6 designs based on article DOES_NOT_EXIST", storeDir, "--json");
+    assert.notEqual(result.status, 0);
+
+    const lines = result.stdout.trim().split("\n");
+    assert.equal(lines.length, 1);
+
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.success, false);
+    assert.equal(parsed.stored, false);
+    assert.equal(parsed.status, "rejected");
+    assert.equal(parsed.error.code, "UnknownSourceReferenceError");
+  });
+});
+
+test("--json prints exactly one line of valid JSON even for a thrown ambiguous-command error", () => {
+  const result = runCli("Please make me some designs", "/does/not/matter", "--json");
+  assert.notEqual(result.status, 0);
+
+  const lines = result.stdout.trim().split("\n");
+  assert.equal(lines.length, 1);
+
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.success, false);
+  assert.equal(parsed.requestId, null);
+  assert.equal(parsed.sourceReference, null);
+  assert.equal(parsed.error.code, "AmbiguousContentRequestError");
+});
+
+test("--json prints exactly one line of valid JSON even for a thrown unsupported-design-count error", () => {
+  withTempDir((storeDir) => {
+    const result = runCli("Create 3 designs based on article GS01", storeDir, "--json");
+    assert.notEqual(result.status, 0);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.error.code, "UnsupportedDesignCountError");
+  });
+});
+
+test("--json output never contains a host path or stack trace marker", () => {
+  withTempDir((storeDir) => {
+    const result = runCli("Create 6 designs based on article DOES_NOT_EXIST", storeDir, "--json");
+    assert.doesNotMatch(result.stdout, /at file:\/\//);
+    assert.doesNotMatch(result.stdout, new RegExp(storeDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+});
+
+test("--json can appear in any argument position", () => {
+  withTempDir((storeDir) => {
+    const result = runCli("--json", "Create 6 designs based on article GS01", storeDir);
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.equal(parsed.success, true);
+  });
+});
+
+test("without --json, default human-readable output is unchanged", () => {
+  withTempDir((storeDir) => {
+    const result = runCli("Create 6 designs based on article GS01", storeDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Content Request complete/);
+    assert.throws(() => JSON.parse(result.stdout));
+  });
+});
+
 test("running the same command twice against the same store directory succeeds both times (each production run gets its own carousel_id), and both land in the I015 store", () => {
   withTempDir((storeDir) => {
     const first = runCli("Create 6 designs based on article GS01", storeDir);

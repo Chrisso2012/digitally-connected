@@ -1,0 +1,121 @@
+{
+  "id": "00Qh0qFIzE5swDUP",
+  "name": "DC-003 - Content Request Workflow (Mock, Manual Trigger)",
+  "description": "DC-003-I017: manual-trigger n8n workflow invoking I016's Content Request Command CLI unchanged (mock production path) against the repo at /data/dc003-repo, persisting via I015 to /home/node/.n8n/dc003/finished-carousels. Does not modify or replace the I013 workflow.",
+  "active": false,
+  "nodes": [
+    {
+      "id": "254d19c0-e12a-44b8-a5ed-39b0dc803d30",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": {}
+    },
+    {
+      "id": "00a5ea85-77a2-4c85-9813-fb1b4202fbd7",
+      "name": "Build Content Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [520, 300],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { command: \"Create 6 designs based on article GS01\" } }}"
+      }
+    },
+    {
+      "id": "b11f9de9-e4f5-464c-9264-fbaadcc3526d",
+      "name": "Run I016 Content Request Command",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [800, 300],
+      "parameters": {
+        "executeOnce": true,
+        "command": "=RUN_DIR=/tmp/dc003-i017-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}\nmkdir -p \"$RUN_DIR\"\ncat > \"$RUN_DIR/command.txt\" << 'COMMAND_EOF'\n{{ $json.command }}\nCOMMAND_EOF\nSTORE_DIR=/home/node/.n8n/dc003/finished-carousels\nmkdir -p \"$STORE_DIR\"\ncd /data/dc003-repo\nCOMMAND_TEXT=$(cat \"$RUN_DIR/command.txt\")\nnode tests/validation/content-request.mjs \"$COMMAND_TEXT\" \"$STORE_DIR\" --json > \"$RUN_DIR/output.json\" 2> \"$RUN_DIR/run.log\" || true\ncat \"$RUN_DIR/output.json\""
+      }
+    },
+    {
+      "id": "762e89ae-a53c-4ae4-bd79-90a4985178a3",
+      "name": "Parse Content Request Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1080, 300],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.parse($json.stdout) }}"
+      }
+    },
+    {
+      "id": "eb593348-4fed-42e4-a02d-9972a625eac0",
+      "name": "Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1360, 300],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "leftValue": "={{ $json.success }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      }
+    },
+    {
+      "id": "b57b6719-baef-4dd9-af48-e5f053f970ce",
+      "name": "Prepare Success Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1640, 180],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { success: $json.success, status: $json.status, requestId: $json.requestId, sourceReference: $json.sourceReference, executionId: $json.executionId, carouselId: $json.carouselId, stored: $json.stored, storeReference: $json.storeReference, warnings: $json.warnings, message: \"Six-design carousel generated and stored successfully.\" } }}"
+      }
+    },
+    {
+      "id": "7ababbeb-58c0-4b99-9344-7cb0bd995f7e",
+      "name": "Prepare Failure Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1640, 420],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { success: $json.success, status: $json.status, requestId: $json.requestId, sourceReference: $json.sourceReference, error: $json.error, warnings: $json.warnings } }}"
+      }
+    },
+    {
+      "id": "3eacde1e-ad82-4e15-8cc7-4736e916cac0",
+      "name": "Sticky Note a5ff094f",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [470, 250],
+      "parameters": {
+        "content": "## DC-003-I017 - Content Request Workflow (Mock)\n\nManual Trigger -> Build Content Request -> Run I016 Content Request Command -> Parse Content Request Result -> Success? -> Prepare Success/Failure Output.\n\nInvokes DC-003-I016's CLI unchanged (npm run content:request, run as `node tests/validation/content-request.mjs \"<command>\" <storeDirectory> --json`) against the repo read-only bind-mounted at /data/dc003-repo. No parsing, source resolution, generation, rendering, or persistence logic is duplicated here - I016 owns all of it.\n\nPersistent storage: /home/node/.n8n/dc003/finished-carousels (inside the durable n8n_data volume, survives container recreation, outside the read-only repo mount, never committed to Git).\n\nMock rendering only - no live Templated calls, no credentials. GS01 resolves only against an approved fixture Topic Package (tests/fixtures/topic-packages/backlog-gs01.approved.json) - not a real article source yet. See DC-003 README \"Content Request Command - current limitations\".",
+        "color": 5,
+        "width": 640,
+        "height": 280
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Build Content Request", "type": "main", "index": 0 }]] },
+    "Build Content Request": { "main": [[{ "node": "Run I016 Content Request Command", "type": "main", "index": 0 }]] },
+    "Run I016 Content Request Command": { "main": [[{ "node": "Parse Content Request Result", "type": "main", "index": 0 }]] },
+    "Parse Content Request Result": { "main": [[{ "node": "Success?", "type": "main", "index": 0 }]] },
+    "Success?": {
+      "main": [
+        [{ "node": "Prepare Success Output", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Failure Output", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": [],
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  }
+}

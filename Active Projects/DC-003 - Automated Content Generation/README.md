@@ -45,7 +45,13 @@ unmodified DC-003-I015 Finished Carousel Store into a single reliable
 "content request in, stored six-slide carousel out" operation — no
 general-purpose language understanding, no new generation/orchestration/
 rendering/approval/persistence logic of its own; see "Content Request
-Command" below.
+Command" below — and the n8n Content Request Workflow added in
+DC-003-I017, the operational bridge between that command and a real n8n
+instance: a second, independent manual-trigger workflow (alongside, not
+replacing, DC-003-I013's) that invokes DC-003-I016's CLI unchanged and
+persists through DC-003-I015 into a directory inside the durable
+`n8n_data` volume; see "n8n Content Request Workflow (DC-003-I017)"
+below.
 
 Lives at `Active Projects/DC-003 - Automated Content Generation/` inside the
 `digitally-connected` repository.
@@ -164,7 +170,7 @@ DC-003 - Automated Content Generation/
 │       ├── production-workflow.mjs   # DC-003-I012 — full end-to-end production run + output persistence
 │       ├── approve-carousel.mjs      # DC-003-I014 — apply one approve/reject/publish decision
 │       ├── carousel-store.mjs        # DC-003-I015 — save/get/list/replace against local JSON storage
-│       └── content-request.mjs       # DC-003-I016 — see "Content Request Command"
+│       └── content-request.mjs       # DC-003-I016 — see "Content Request Command" (DC-003-I017 added --json)
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
@@ -174,9 +180,11 @@ DC-003 - Automated Content Generation/
 
 `prompts/` is still empty (via `.gitkeep`) — the architecture in
 DC-003-T001 names it as the future home for the LLM prompt, out of scope
-for every task so far. `workflows/` now contains the DC-003-I013 export,
-`dc003-i013-production-workflow.json` — see "n8n Workflow (DC-003-I013)"
-below.
+for every task so far. `workflows/` contains two independent workflow
+exports: `dc003-i013-production-workflow.json` (see "n8n Workflow
+(DC-003-I013)") and `dc003-i017-content-request-workflow.json` (see "n8n
+Content Request Workflow (DC-003-I017)") — I017 does not replace or
+modify I013's.
 
 ## Configuration
 
@@ -2868,7 +2876,7 @@ a partial or failed carousel.
 ### CLI (`tests/validation/content-request.mjs`, `npm run content:request`)
 
 ```bash
-npm run content:request -- "Create 6 designs based on article GS01" <storeDirectory> [topicPackagesDir]
+npm run content:request -- "Create 6 designs based on article GS01" <storeDirectory> [topicPackagesDir] [--json]
 ```
 
 `storeDirectory` is required, exactly like `npm run store`.
@@ -2882,6 +2890,16 @@ Execution Ledger's durable audit trail is a separate DC-003-I008 concern
 this narrow command doesn't expose or manage). No live Templated call —
 mock rendering only, the same default every other CLI in this codebase
 uses.
+
+**`--json`** (added in DC-003-I017, order-independent among the CLI's
+arguments): prints exactly one line — the Content Request Result as
+JSON — instead of the default human-readable summary, for both a normal
+result and a thrown request-validation error (unified into the same
+result shape). Calls no different code path; a pure stdout-formatting
+choice for a downstream parser, first needed by the DC-003-I017 n8n
+workflow's own `JSON.parse($json.stdout)` step — see "n8n Content
+Request Workflow (DC-003-I017)" below. The default (no `--json`) mode is
+completely unchanged from DC-003-I016.
 
 ### Current limitations
 
@@ -2899,6 +2917,184 @@ uses.
   never silently replaced.
 - **No real article/source registry** — `GS01` is a fixture stand-in; see
   "Source resolution" above.
+
+## n8n Content Request Workflow (DC-003-I017)
+
+DC-003-I017 is the operational bridge between a simple operator command
+and the complete DC-003 platform, running inside the same real n8n
+instance DC-003-I013 first connected. It does not modify or replace the
+I013 workflow — both exist independently side by side. The workflow does
+only three things: **accept the command, invoke I016, report the
+result.** No parsing, source resolution, generation, rendering, or
+persistence logic is duplicated inside n8n — every one of those stays
+owned by the existing platform (I003, I006, I007, I012, I015, I016).
+
+### Architecture
+
+```mermaid
+flowchart LR
+    MT[Manual Trigger] --> BCR[Build Content Request]
+    BCR --> RUN[Run I016 Content Request Command]
+    RUN --> PCR[Parse Content Request Result]
+    PCR --> SC{Success?}
+    SC -->|true| SO[Prepare Success Output]
+    SC -->|false| FO[Prepare Failure Output]
+```
+
+### Command input
+
+```json
+{ "command": "Create 6 designs based on article GS01" }
+```
+
+Built once, by the **Build Content Request** node, and passed unchanged
+into DC-003-I016 — n8n performs no validation of its own on the command
+string; that's entirely I016's job (`parseContentRequestCommand()`,
+`UnsupportedDesignCountError`, etc.), reused exactly as-is.
+
+### I016 invocation mechanism
+
+The **Run I016 Content Request Command** node is an Execute Command node
+(the same node type, and the same overall pattern, DC-003-I013 already
+proved out — see "n8n Workflow (DC-003-I013)" above for why it's
+available at all: `NODES_EXCLUDE=["n8n-nodes-base.localFileTrigger"]` on
+the `n8n-test` container, deliberately scoped to leave Execute Command
+enabled). It runs, inside the container:
+
+```
+RUN_DIR=/tmp/dc003-i017-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}
+mkdir -p "$RUN_DIR"
+cat > "$RUN_DIR/command.txt" << 'COMMAND_EOF'
+{{ $json.command }}
+COMMAND_EOF
+STORE_DIR=/home/node/.n8n/dc003/finished-carousels
+mkdir -p "$STORE_DIR"
+cd /data/dc003-repo
+COMMAND_TEXT=$(cat "$RUN_DIR/command.txt")
+node tests/validation/content-request.mjs "$COMMAND_TEXT" "$STORE_DIR" --json > "$RUN_DIR/output.json" 2> "$RUN_DIR/run.log" || true
+cat "$RUN_DIR/output.json"
+```
+
+`/tmp/dc003-i017-run-*` is used only for the transient per-execution
+command/output/log files — never for anything the platform needs to keep.
+stdout and stderr are captured to separate files and only stdout is ever
+`cat`'d back to n8n, so nothing on stderr (including an unexpected raw
+error) can leak into the workflow's own data. `$RUN_DIR` and its contents
+are not cleaned up automatically (mirroring DC-003-I013's own CLI
+invocation pattern) — they're ordinary container-local `/tmp` files, not
+part of any persisted store.
+
+**`--json` — a small, additive DC-003-I016 CLI change made for this
+milestone.** The CLI's existing human-readable summary mode is
+unchanged and still the default; `--json` (order-independent among the
+CLI's arguments) makes it print exactly one line — the Content Request
+Result as JSON — for both a normal result and a thrown request-validation
+error (unified into the same result shape, `success: false`, `status:
+"rejected"`, `error: { code, message }`). This calls no different code
+path inside `executeContentRequest()` itself — it's a stdout-formatting
+choice only, so the workflow's own **Parse Content Request Result** node
+can `JSON.parse($json.stdout)` reliably regardless of which failure mode
+occurred, the same convention DC-003-I013 already established for I012's
+own CLI.
+
+### Persistent store location
+
+```
+/home/node/.n8n/dc003/finished-carousels/
+```
+
+Confirmed via container evidence before implementation: this path is
+inside the `n8n_data` named volume (mounted read-write at
+`/home/node/.n8n`, the same volume the n8n installation's own SQLite
+database already lives in and has already survived every prior container
+recreation), outside the read-only DC-003 repo mount at
+`/data/dc003-repo`, and owned/writable by the container's own `node`
+user — verified directly with a live write test before this milestone's
+implementation began. It contains only DC-003-I015 Finished Carousel
+Store data (one JSON file per `carousel_id`) and is never committed to
+Git — it exists only inside the Docker volume, not in this repository.
+
+### Success and failure outputs
+
+Success (`Prepare Success Output`):
+
+```json
+{
+  "success": true,
+  "status": "completed",
+  "requestId": "req_...",
+  "sourceReference": "GS01",
+  "executionId": "exec_...",
+  "carouselId": "car_...",
+  "stored": true,
+  "storeReference": "local-json-carousel-store:car_...",
+  "warnings": [],
+  "message": "Six-design carousel generated and stored successfully."
+}
+```
+
+Failure (`Prepare Failure Output`) — deliberately narrower, per the
+approved brief:
+
+```json
+{
+  "success": false,
+  "status": "rejected",
+  "requestId": "req_...",
+  "sourceReference": "DOES_NOT_EXIST",
+  "error": { "code": "UnknownSourceReferenceError", "message": "..." },
+  "warnings": []
+}
+```
+
+Both are built with a single `{{ {...} }}` expression referencing only
+named upstream fields — never the raw stdout, never a raw Node error
+object, never a host path. Nothing internal reaches either output:
+`executionId`/`carouselId`/`stored`/`storeReference` are deliberately
+absent from the failure shape, matching the brief's own field-by-field
+whitelist rather than a general "trim what looks sensitive" pass.
+
+### Manual execution
+
+Open the workflow in n8n and click **Execute Workflow** (or use
+`execute_workflow` via the n8n MCP tools). The workflow has no trigger
+other than the Manual Trigger — no schedule, webhook, or form exists, and
+none should be added; it stays inactive except when manually run.
+
+### Mock-only status
+
+No live Templated call is possible: the invoked CLI (`content-request.mjs`
+→ `executeContentRequest()` → DC-003-I012's Production Workflow) has no
+`--live` mode and needs no `TEMPLATED_API_KEY` — mock rendering is the
+only path, exactly as it already was for DC-003-I013 and every CLI in
+this repository.
+
+### GS01 fixture limitation
+
+Unchanged from DC-003-I016: `GS01` resolves only against the approved
+fixture Topic Package at
+`tests/fixtures/topic-packages/backlog-gs01.approved.json` — not a real
+article source. **I017 proves the operational command path end to end
+through a real n8n instance; it does not implement article ingestion or
+replace the fixture with production content.** A real article/source
+registry remains an open operational dependency (see "Content Request
+Command — current limitations" above).
+
+### Security
+
+- Execute Command's shell script never echoes an environment variable,
+  never accepts external/network input, and reads no credential — the
+  invoked CLI needs none.
+- `/tmp/dc003-i017-run-*` and the persistent store are both inside the
+  container only — neither is ever committed to Git, and the persistent
+  store is outside the read-only repo mount so nothing running inside it
+  can ever modify repository source.
+- stderr is captured separately from stdout and never reaches the
+  workflow's own parsed data, closing off the one path a raw stack trace
+  or host path could otherwise leak through.
+- The workflow remains manual-trigger-only, synchronous, one request per
+  execution — no schedule, webhook, form, or other autonomous trigger
+  exists.
 
 ## Running tests
 
@@ -3216,8 +3412,9 @@ error class, no new schema, no new abstraction.
 | Carousel Store CLI check | Done (DC-003-I015) — `npm run store`, no network, no ledger writes |
 | Content Request parser, domain object, source resolver, workflow mapper | Done (DC-003-I016) — `src/content-request-parser.mjs`, `src/content-request.mjs`, `src/content-request-source-resolver.mjs`, `src/content-request-workflow-mapper.mjs`; see "Content Request Command" |
 | Content Request Service (compose I012 + I015 into one command) | Done (DC-003-I016) — `src/content-request-service.mjs`; never throws from source resolution onward, matching I012's own contract; no persistence on a failed/partial execution |
-| Content Request CLI check | Done (DC-003-I016) — `npm run content:request`, no network, no live rendering |
-| Unit test suite | Done — 563 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016); DC-003-I013 added no new repository unit tests (it's an n8n-side workflow, not a `src/` module) |
+| Content Request CLI check | Done (DC-003-I016) — `npm run content:request`, no network, no live rendering; `--json` mode added (DC-003-I017) |
+| n8n Content Request Workflow (real n8n instance, invokes I016 unchanged) | Done (DC-003-I017) — `workflows/dc003-i017-content-request-workflow.json`; see "n8n Content Request Workflow (DC-003-I017)"; verified success path (execution 131, `car_7b97c6df70a84b61`) and controlled failure path (execution 132, unknown source), no carousel persisted for the failed run |
+| Unit test suite | Done — 570 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Real LLM provider (OpenAI/Anthropic/local) | Not started — mock only |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
@@ -3229,9 +3426,10 @@ error class, no new schema, no new abstraction.
 | General-purpose natural-language understanding for content requests | Not started — explicitly out of scope for I016; one deterministic command shape only |
 | Multiple Content Request types / batch requests / scheduling | Not started — explicitly out of scope for I016 |
 | Publishing or approval UI reachable via the Content Request command | Not started — explicitly out of scope for I016; DC-003-I014's approve/reject/publish functions exist but this command doesn't call them |
-| Real article/source registry | Not started — operational dependency flagged by DC-003-I016; `GS01` resolves only against an approved fixture Topic Package (`tests/fixtures/topic-packages/backlog-gs01.approved.json`), not a real source |
+| Real article/source registry | Not started — operational dependency flagged by DC-003-I016, confirmed still open by DC-003-I017; `GS01` resolves only against an approved fixture Topic Package (`tests/fixtures/topic-packages/backlog-gs01.approved.json`), not a real source, through either the CLI or the n8n workflow |
+| Article ingestion tooling | Not started — explicitly out of scope for I017; I017 proves the operational command path, it doesn't implement ingestion or replace the GS01 fixture |
 | REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
-| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, I015, and I016 |
+| Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, I015, I016, and I017 |
 | Asynchronous execution | Not started — DC-003-I010/I011/I012 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |
 | Error handling / retries (pipeline-level, beyond generation and rendering) | Not started — no retry-policy changes since DC-003-I009 |
 

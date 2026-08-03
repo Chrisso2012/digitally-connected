@@ -4,9 +4,9 @@
 // mock rendering only, matching every other CLI in this codebase.
 //
 // Usage:
-//   node tests/validation/content-request.mjs "<command>" <storeDirectory> [topicPackagesDir]
+//   node tests/validation/content-request.mjs "<command>" <storeDirectory> [topicPackagesDir] [--json]
 //
-//   or: npm run content:request -- "<command>" <storeDirectory> [topicPackagesDir]
+//   or: npm run content:request -- "<command>" <storeDirectory> [topicPackagesDir] [--json]
 //
 // topicPackagesDir defaults to tests/fixtures/topic-packages/ — this
 // repository has no real article/source registry yet (see README
@@ -14,6 +14,17 @@
 // resolves against the same approved fixture Topic Packages this
 // milestone's own tests use. Pass an explicit third argument to resolve
 // against a different directory.
+//
+// --json (DC-003-I017 addition): prints exactly one line — the Content
+// Request Result as JSON — instead of the human-readable summary below,
+// and does the same for a thrown request-validation error (a JSON object
+// in the same shape, `success: false`, `error: { code, message }`, every
+// other field null/empty). Purely a stdout-formatting choice for a
+// downstream parser (e.g. an n8n workflow's own Set node doing
+// `JSON.parse($json.stdout)`, the same convention DC-003-I013 already
+// established) — it calls no different code path, and changes no
+// existing default-mode behavior; every DC-003-I016 test still exercises
+// the unchanged human-readable mode.
 //
 // This CLI builds the same ledger -> orchestrator -> invocation adapter
 // -> n8n adapter -> production workflow stack every other production-path
@@ -42,15 +53,36 @@ import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOPIC_PACKAGES_DIR = path.join(__dirname, "..", "fixtures", "topic-packages");
 
-const [command, storeDirectory, topicPackagesDirArg] = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const jsonMode = rawArgs.includes("--json");
+const [command, storeDirectory, topicPackagesDirArg] = rawArgs.filter((arg) => arg !== "--json");
 
 function usageAndExit() {
-  console.error('Usage: node tests/validation/content-request.mjs "<command>" <storeDirectory> [topicPackagesDir]');
+  console.error('Usage: node tests/validation/content-request.mjs "<command>" <storeDirectory> [topicPackagesDir] [--json]');
   console.error('Example: node tests/validation/content-request.mjs "Create 6 designs based on article GS01" ./output/finished-carousels');
   process.exit(1);
 }
 
 if (!command || !storeDirectory) usageAndExit();
+
+function safeErrorShape(error) {
+  return { code: error.name, message: error.message };
+}
+
+function jsonFailureResult(error) {
+  return {
+    success: false,
+    requestId: null,
+    sourceReference: null,
+    executionId: null,
+    carouselId: null,
+    status: "rejected",
+    stored: false,
+    storeReference: null,
+    warnings: [],
+    error: safeErrorShape(error),
+  };
+}
 
 // A minimal, ephemeral Ledger Store scoped to this one CLI invocation —
 // see the file header for why this command doesn't manage a durable
@@ -88,21 +120,25 @@ try {
     topicPackagesDir,
   });
 
-  console.log(result.success ? "Content Request complete" : "Content Request did not complete successfully");
-  console.log(`  request ID:      ${result.requestId}`);
-  console.log(`  source:          ${result.sourceReference}`);
-  console.log(`  execution ID:    ${result.executionId}`);
-  console.log(`  carousel ID:     ${result.carouselId}`);
-  console.log(`  status:          ${result.status}`);
-  console.log(`  stored:          ${result.stored}`);
-  console.log(`  store reference: ${result.storeReference}`);
-  if (result.warnings.length > 0) {
-    console.log(`  warnings:        ${result.warnings.length}`);
-    for (const warning of result.warnings) console.log(`    - ${warning}`);
-  }
-  if (result.error) {
-    console.log(`  error code:      ${result.error.code}`);
-    console.log(`  error:           ${result.error.message}`);
+  if (jsonMode) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log(result.success ? "Content Request complete" : "Content Request did not complete successfully");
+    console.log(`  request ID:      ${result.requestId}`);
+    console.log(`  source:          ${result.sourceReference}`);
+    console.log(`  execution ID:    ${result.executionId}`);
+    console.log(`  carousel ID:     ${result.carouselId}`);
+    console.log(`  status:          ${result.status}`);
+    console.log(`  stored:          ${result.stored}`);
+    console.log(`  store reference: ${result.storeReference}`);
+    if (result.warnings.length > 0) {
+      console.log(`  warnings:        ${result.warnings.length}`);
+      for (const warning of result.warnings) console.log(`    - ${warning}`);
+    }
+    if (result.error) {
+      console.log(`  error code:      ${result.error.code}`);
+      console.log(`  error:           ${result.error.message}`);
+    }
   }
 
   process.exit(result.success ? 0 : 1);
@@ -113,8 +149,12 @@ try {
     error instanceof ContentRequestValidationError ||
     error instanceof PipelineConfigurationError
   ) {
-    console.error(`FAIL  ${error.name}`);
-    console.error(`  ${error.message}`);
+    if (jsonMode) {
+      console.log(JSON.stringify(jsonFailureResult(error)));
+    } else {
+      console.error(`FAIL  ${error.name}`);
+      console.error(`  ${error.message}`);
+    }
   } else {
     // Genuinely unexpected — a stack trace is warranted here.
     throw error;
