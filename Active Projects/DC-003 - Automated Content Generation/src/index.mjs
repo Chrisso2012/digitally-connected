@@ -263,3 +263,14 @@ export {
   CorruptedMetricsRecordError,
   MetricsPersistenceError,
 } from "./production-metrics-errors.mjs";
+
+// DC-003-I024 — Production Control Centre: the first operational,
+// read-only console over the existing pipeline — system health, dashboard
+// totals, recent jobs, recent activity, and per-carousel job detail,
+// assembled entirely from the Finished Carousel Store (I015), the
+// Production Metrics Store (I023), and (optionally) the Production Asset
+// Export (I021) directory convention. Never owns, mutates, or persists
+// anything; no network calls. See "Production Control Centre
+// (DC-003-I024)" in the README.
+export { createControlCentreService } from "./control-centre-service.mjs";
+export { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "./control-centre-errors.mjs";

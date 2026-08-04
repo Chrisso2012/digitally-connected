@@ -28,6 +28,7 @@ const APPROVED_FIXTURES = [
   ["contentRequest", "content-request.example.json"],
   ["contentAsset", "content-asset.example.json"],
   ["productionMetrics", "production-metrics.example.json"],
+  ["controlCentre", "control-centre.example.json"],
 ];
 
 const validator = createValidator();

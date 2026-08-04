@@ -1,0 +1,73 @@
+{
+  "kind": "overview",
+  "generated_at": "2026-08-04T12:05:00Z",
+  "health": {
+    "anthropic": { "status": "ok", "detail": "LLM_API_KEY is set", "last_success_at": "2026-08-03T23:38:12Z" },
+    "templated": { "status": "ok", "detail": "TEMPLATED_API_KEY is set", "last_success_at": "2026-08-03T23:38:12Z" },
+    "export": { "status": "ok", "detail": "exports root directory is readable", "last_success_at": "2026-08-03T23:39:01Z" },
+    "google_drive": { "status": "warning", "detail": "GOOGLE_DRIVE_REFRESH_TOKEN is not set", "last_success_at": null },
+    "finished_carousel_store": { "status": "ok", "detail": "store directory is readable (3 record(s))", "last_success_at": null },
+    "production_metrics_store": { "status": "ok", "detail": "store directory is readable (1 record(s))", "last_success_at": null },
+    "overall": "warning"
+  },
+  "dashboard": {
+    "completed": 2,
+    "failed": 1,
+    "partial": 0,
+    "awaiting_approval": 1,
+    "approved": 1,
+    "rejected": 0,
+    "exported": 1,
+    "published": 0,
+    "today": {
+      "produced_count": 1,
+      "estimated_cost": { "currency": "USD", "amount": 0.3234, "records_counted": 1 }
+    },
+    "estimated_cost": { "currency": "USD", "amount": 0.3234, "records_counted": 1 },
+    "average_duration": { "average_ms": 33734, "records_counted": 1 }
+  },
+  "recent_jobs": [
+    {
+      "carousel_id": "car_9c026a104e3745c3",
+      "topic_id": "topic_gs01",
+      "execution_id": "exec_20260803_f828624ad5c6",
+      "overall_status": "completed",
+      "completed_at": "2026-08-03T23:38:12Z",
+      "approval_status": "approved",
+      "export_status": "exported",
+      "published": false,
+      "estimated_cost": { "amount": 0.3234, "currency": "USD" },
+      "duration_ms": 33734
+    }
+  ],
+  "recent_activity": [
+    {
+      "timestamp": "2026-08-03T23:39:01Z",
+      "event": "exported",
+      "carousel_id": "car_9c026a104e3745c3",
+      "topic_id": "topic_gs01",
+      "detail": "asset_package_id=pkg_4f1e2a7b9c3d5e6f"
+    },
+    {
+      "timestamp": "2026-08-03T23:38:45Z",
+      "event": "approved",
+      "carousel_id": "car_9c026a104e3745c3",
+      "topic_id": "topic_gs01",
+      "detail": "approved_by=strategy-office"
+    },
+    {
+      "timestamp": "2026-08-03T23:38:12Z",
+      "event": "rendered",
+      "carousel_id": "car_9c026a104e3745c3",
+      "topic_id": "topic_gs01",
+      "detail": "provider=templated-http"
+    },
+    {
+      "timestamp": "2026-08-03T23:38:12Z",
+      "event": "generated",
+      "carousel_id": "car_9c026a104e3745c3",
+      "topic_id": "topic_gs01",
+      "detail": null
+    }
+  ]
+}

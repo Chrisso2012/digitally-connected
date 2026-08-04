@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/control-centre.schema.json",
+  "title": "Control Centre Read Model",
+  "description": "DC-003-I024 — the in-memory operational read model assembled by control-centre-service.mjs from existing stores (Finished Carousel Store I015, Production Metrics Store I023, and, when supplied, the Production Asset Export I021 directory convention). Never persisted — rebuilt fresh on every call. Two shapes, discriminated by `kind`: an `overview` (system health + dashboard totals + recent jobs + recent activity, what the CLI's `dashboard`/`jobs`/`activity`/`health` subcommands slice into) and a `job_detail` (one carousel's full generation/rendering/approval/export/publishing/metrics picture, what `job <carouselId>` returns).",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "overview" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "health": { "$ref": "#/$defs/healthReport" },
+        "dashboard": { "$ref": "#/$defs/dashboardSummary" },
+        "recent_jobs": { "type": "array", "items": { "$ref": "#/$defs/jobSummary" } },
+        "recent_activity": { "type": "array", "items": { "$ref": "#/$defs/activityEntry" } }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["kind", "generated_at", "job"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "job_detail" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "job": { "$ref": "#/$defs/jobDetail" }
+      }
+    }
+  ],
+  "$defs": {
+    "healthCheck": {
+      "type": "object",
+      "description": "One repository-evidence-only health signal. `status` is never derived from a network call or provider ping.",
+      "required": ["status", "detail", "last_success_at"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "warning", "unknown"] },
+        "detail": { "type": "string" },
+        "last_success_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "healthReport": {
+      "type": "object",
+      "required": [
+        "anthropic",
+        "templated",
+        "export",
+        "google_drive",
+        "finished_carousel_store",
+        "production_metrics_store",
+        "overall"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "anthropic": { "$ref": "#/$defs/healthCheck" },
+        "templated": { "$ref": "#/$defs/healthCheck" },
+        "export": { "$ref": "#/$defs/healthCheck" },
+        "google_drive": { "$ref": "#/$defs/healthCheck" },
+        "finished_carousel_store": { "$ref": "#/$defs/healthCheck" },
+        "production_metrics_store": { "$ref": "#/$defs/healthCheck" },
+        "overall": { "type": "string", "enum": ["healthy", "warning", "attention_required"] }
+      }
+    },
+    "costSummary": {
+      "type": "object",
+      "description": "An aggregate estimated cost across zero or more Production Metrics Records. `records_counted: 0` distinguishes \"no metrics recorded yet\" from a genuine zero cost.",
+      "required": ["currency", "amount", "records_counted"],
+      "additionalProperties": false,
+      "properties": {
+        "currency": { "type": ["string", "null"] },
+        "amount": { "type": "number", "minimum": 0 },
+        "records_counted": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "durationSummary": {
+      "type": "object",
+      "required": ["average_ms", "records_counted"],
+      "additionalProperties": false,
+      "properties": {
+        "average_ms": { "type": ["number", "null"] },
+        "records_counted": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "dashboardSummary": {
+      "type": "object",
+      "required": [
+        "completed",
+        "failed",
+        "partial",
+        "awaiting_approval",
+        "approved",
+        "rejected",
+        "exported",
+        "published",
+        "today",
+        "estimated_cost",
+        "average_duration"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "partial": { "type": "integer", "minimum": 0 },
+        "awaiting_approval": { "type": "integer", "minimum": 0 },
+        "approved": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "integer", "minimum": 0 },
+        "exported": {
+          "description": "null when no exportsRootDir was supplied to the Control Centre — export status was never checked, not zero.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "published": { "type": "integer", "minimum": 0 },
+        "today": {
+          "type": "object",
+          "required": ["produced_count", "estimated_cost"],
+          "additionalProperties": false,
+          "properties": {
+            "produced_count": { "type": "integer", "minimum": 0 },
+            "estimated_cost": { "$ref": "#/$defs/costSummary" }
+          }
+        },
+        "estimated_cost": { "$ref": "#/$defs/costSummary" },
+        "average_duration": { "$ref": "#/$defs/durationSummary" }
+      }
+    },
+    "jobSummary": {
+      "type": "object",
+      "required": [
+        "carousel_id",
+        "topic_id",
+        "execution_id",
+        "overall_status",
+        "completed_at",
+        "approval_status",
+        "export_status",
+        "published",
+        "estimated_cost",
+        "duration_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
+        "topic_id": { "type": "string" },
+        "execution_id": { "type": "string" },
+        "overall_status": { "type": "string", "enum": ["completed", "partial", "failed"] },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "approval_status": { "type": "string", "enum": ["awaiting_approval", "approved", "rejected"] },
+        "export_status": { "type": "string", "enum": ["exported", "not_exported", "unknown"] },
+        "published": { "type": "boolean" },
+        "estimated_cost": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["amount", "currency"],
+              "additionalProperties": false,
+              "properties": {
+                "amount": { "type": "number", "minimum": 0 },
+                "currency": { "type": "string" }
+              }
+            }
+          ]
+        },
+        "duration_ms": { "type": ["number", "null"] }
+      }
+    },
+    "activityEntry": {
+      "type": "object",
+      "required": ["timestamp", "event", "carousel_id", "topic_id", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "event": { "type": "string", "enum": ["generated", "rendered", "approved", "exported", "published"] },
+        "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
+        "topic_id": { "type": "string" },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "jobExport": {
+      "oneOf": [
+        {
+          "type": "null",
+          "description": "No exportsRootDir was supplied to the Control Centre — export status was never checked."
+        },
+        {
+          "type": "object",
+          "required": ["exported", "export_path", "asset_package_id", "export_timestamp"],
+          "additionalProperties": false,
+          "properties": {
+            "exported": { "type": "boolean" },
+            "export_path": { "type": ["string", "null"] },
+            "asset_package_id": { "type": ["string", "null"] },
+            "export_timestamp": { "type": ["string", "null"], "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "jobPublishing": {
+      "type": "object",
+      "description": "Reflects the DC-003-I014 approval-lifecycle publish transition (finished-carousel.schema.json's own approval.published/published_at) — not automatic confirmation of a completed Google Drive upload (DC-003-I022). No field in this repository currently links a Finished Carousel to a Google Drive publish event; see README.",
+      "required": ["published", "published_at", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "published": { "type": "boolean" },
+        "published_at": { "type": ["string", "null"], "format": "date-time" },
+        "note": { "type": "string" }
+      }
+    },
+    "jobDetail": {
+      "type": "object",
+      "required": ["carousel_id", "topic_id", "finished_carousel", "metrics", "export", "publishing"],
+      "additionalProperties": false,
+      "properties": {
+        "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
+        "topic_id": { "type": "string" },
+        "finished_carousel": { "$ref": "https://digitallyconnected.net/schemas/dc-003/finished-carousel.schema.json" },
+        "metrics": {
+          "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/production-metrics.schema.json" }]
+        },
+        "export": { "$ref": "#/$defs/jobExport" },
+        "publishing": { "$ref": "#/$defs/jobPublishing" }
+      }
+    }
+  }
+}

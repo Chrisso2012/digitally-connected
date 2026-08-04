@@ -4665,6 +4665,194 @@ fetching, cost forecasting, cost-based workflow blocking, n8n workflow
 changes, publishing automation, Content Lineage, and Google Sheets
 reporting.
 
+## Production Control Centre (DC-003-I024)
+
+DC-003-I023 named the gap itself: "no graphical interface... exists yet;
+that's explicitly out of scope here." I024 is the first answer to it — not
+a graphical dashboard, but a read-only terminal console: the first
+genuinely operational interface for DC-003, meant for Strategy Office to
+actually run day to day, answering one question — "what is my AI
+workforce doing?" — without opening a single JSON file by hand.
+
+### Architecture
+
+```
+Finished Carousel Store (I015)
+Production Metrics Store (I023)          ─┐
+Production Asset Export (I021, optional)  ├──▶  Control Centre Service  ──▶  Terminal Control Centre (CLI)
+Google Drive Publisher (I022, no local evidence — see below)
+```
+
+`src/control-centre-service.mjs` is the only module responsible for
+assembling operational information. It observes; it never owns, mutates,
+or persists anything. Every value in its read model already exists
+somewhere else in the repository — `getOverview()`/`getJobDetail()` never
+call `save()`/`replace()`/`write()` on either store, and make no network
+requests of any kind (health "configured" checks read
+`loadLlmProviderConfig()`/`loadRendererConfig()`/
+`loadGoogleDrivePublisherConfig()` — the same env-derived config objects
+the live CLIs already use — never a `fetch()`). `schemas/control-centre.schema.json`
+defines the read model's shape (`oneOf` an `overview` or a `job_detail`,
+discriminated by `kind`) and is assembled in memory only; it is never
+written to disk.
+
+### Repository investigation findings (checked before writing any code, per the I024 brief)
+
+- **Four stores/conventions exist, not four uniform query APIs.** Finished
+  Carousel Store (I015) and Production Metrics Store (I023) both expose a
+  real `list()`/`get()` query surface — Metrics also exposes
+  `findByExecutionId()`, built in I023 for exactly this kind of join, and
+  reused here unmodified rather than adding a second index. Production
+  Asset Export (I021) has **no store or query API at all** — it's a
+  directory-per-carousel convention on disk (`<destination>/<carousel_id>/metadata.json`)
+  with no fixed default location anywhere in config; every
+  `npm run export:assets` invocation supplies its own destination by hand.
+  Google Drive Publisher (I022) has **no local persistence whatsoever** —
+  uploads go straight to Drive; nothing is written to this repository.
+- **The join key is `carousel_id`, secondarily `execution_id`.**
+  `carousel_id` is the Finished Carousel Store's own key and the export
+  directory name. `execution_id` (present on both the Finished Carousel's
+  `execution_metadata` and the Production Metrics Record) is what
+  `findByExecutionId()` joins on.
+- **Not every completed production run can be reconstructed today, and
+  this is a genuine, pre-existing gap, not something I024 invents around:**
+  1. **Export status is only knowable when the caller supplies an
+     `exportsRootDir`.** No fixed default export location exists anywhere
+     in `config/env.example` or `config/constants.json` — I021 was built
+     that way deliberately (see "Production Asset Export (DC-003-I021)").
+     Without one, every export signal in the read model is honestly
+     `"unknown"`, never a guessed `"not exported"`.
+  2. **Google Drive publish status has no independent repository evidence
+     anywhere.** The only "published" signal in the entire schema set is
+     `finished-carousel.schema.json`'s own `approval.published`/
+     `approved_at` — DC-003-I014's approval-lifecycle transition, a
+     distinct, manually-triggered concept (`npm run approve -- publish`)
+     that **no code in this repository ever wires to a completed I022
+     Google Drive upload.** The Control Centre surfaces `approval.published`
+     as-is (it's the only field there is) and prints an explicit note on
+     every Job Detail's `publishing` block saying so, rather than implying
+     the two are connected.
+  3. **Anthropic vs. mock generation cannot be distinguished on a stored
+     Finished Carousel** — it carries no `llm_model`/provider field for
+     generation (the same gap backlog item B001 already named). Templated
+     rendering **can** be distinguished reliably: `execution_metadata.provider`
+     is stamped `"templated-http"` for a real render and `"mock-transport"`
+     for a mock one, so Templated health's `last_success_at` only counts
+     genuine renders.
+- **No additional indexing was built.** Aggregate dashboard counts use
+  each store's own `list()` (cheap summaries already produced by I015/
+  I023). Anything needing a full record (recent activity's real
+  timestamps, per-provider render health, per-job cost/duration) is only
+  fetched for a bounded "recent" window (`recentJobsLimit`/
+  `recentActivityLimit`, default 10/20) — never the whole store, mirroring
+  I023's own `findByExecutionId()` full-scan justification. Duration
+  averaging fetches every metrics record individually since `list()`
+  summaries carry `total_cost` but not `durations_ms` — acceptable at this
+  store's expected scale, same reasoning I023 already applied to itself.
+
+### System Health
+
+Six repository-evidence-only checks, each `ok` / `warning` / `unknown`,
+rolled up into one `overall`: `healthy`, `warning`, or `attention_required`.
+`attention_required` fires only when the Finished Carousel Store or
+Production Metrics Store itself is unreadable (a broken store never
+throws through to the CLI — it degrades that store's own health check and
+every dependent section falls back to empty, safely). `unknown` is
+reserved for "genuinely never checked" (Export health with no
+`exportsRootDir` supplied) — it does not, by itself, degrade `overall`.
+
+| Check | Evidence used |
+|---|---|
+| Anthropic | `LLM_API_KEY` presence (config only, no network); `last_success_at` = most recent Finished Carousel `generated_at` in the recent window (any provider — see gap above) |
+| Templated | `TEMPLATED_API_KEY` presence; `last_success_at` = most recent `execution_metadata.rendered_at` among recent-window carousels with `provider: "templated-http"` |
+| Export | `unknown` with no `exportsRootDir`; otherwise whether the directory is readable, plus the newest export timestamp found in the recent window |
+| Google Drive | Client ID/secret/refresh token/root folder ID all present; `last_success_at` is always `null` — no local evidence of a completed upload exists anywhere (see gap above) |
+| Finished Carousel Store | `list()` succeeds |
+| Production Metrics Store | `list()` succeeds |
+
+### Dashboard, Recent Jobs, Recent Activity, Job Detail
+
+- **Dashboard** — completed/failed/partial/awaiting-approval/approved/
+  rejected/published counts (from Finished Carousel Store summaries);
+  `exported` count is `null` (not zero) when no `exportsRootDir` was
+  supplied; today's production count and estimated cost, all-time
+  estimated cost, and average duration (all from Production Metrics Store
+  summaries/records) — every cost/duration figure carries its own
+  `records_counted` so "no metrics recorded yet" is never confused with a
+  genuine zero.
+- **Recent Jobs** — the most-recently-generated carousels, each showing
+  `carousel_id`, `topic_id`, status, completion time, approval status,
+  export status (`exported` / `not_exported` / `unknown`), published flag,
+  estimated cost, and duration — cost/duration are `null` per-job when no
+  Production Metrics Record exists for that execution, never a guessed
+  zero.
+- **Recent Activity** — a chronological feed built only from timestamps
+  already stored: `generated_at`, `execution_metadata.rendered_at`,
+  `approval.approved_at`, `approval.published_at`, and (when
+  `exportsRootDir` is supplied) an export's own `export_timestamp` from
+  its `metadata.json`. Rejection produces **no** activity entry —
+  `finished-carousel.schema.json` has a `rejection_reason` but no
+  `rejected_at` field, so no rejection timestamp exists anywhere to use;
+  inventing one was rejected in favor of simply not emitting that event.
+- **Job Detail** — one carousel's full picture in a single call, no
+  further repository queries needed: the complete Finished Carousel
+  Object (generation, rendering, approval, all embedded and re-validated
+  against `finished-carousel.schema.json`), the matching Production
+  Metrics Record if one exists (else `null`), export status, and a
+  `publishing` block that always carries the Google Drive gap note
+  described above.
+
+### CLI (primary deliverable)
+
+```bash
+npm run control-centre -- dashboard <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
+npm run control-centre -- health    <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
+npm run control-centre -- jobs      <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
+npm run control-centre -- activity  <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
+npm run control-centre -- job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
+```
+
+Plain text only — no ANSI colour codes, per the brief. `[OK ]`/`[!  ]`/
+`[?  ]` markers substitute for colour. `exportsRootDir` is always the
+optional third (or fourth, for `job`) argument; every other
+storage-directory argument is required and explicit, matching every other
+storage-directory-taking CLI in this repository (no default, no env var).
+Errors from the underlying stores (`CarouselNotFoundError`,
+`InvalidCarouselIdentifierError`, etc.) print a name and message only,
+never a stack trace.
+
+### Read-only discipline
+
+The Control Centre never generates, renders, approves, exports, publishes,
+deletes, modifies, or persists anything. Verified two ways: unit tests
+construct guarded store stand-ins whose `save()`/`replace()` throw if ever
+called (they never are), and CLI tests run every subcommand against a
+populated store directory and assert the stored files' bytes are
+byte-for-byte unchanged afterward.
+
+### Existing modules confirmed unchanged
+
+Execution Ledger, Pipeline Orchestrator, Invocation Adapter, Production
+Workflow, Finished Carousel Store, Production Metrics Store, Production
+Asset Export, Google Drive Publisher, and the Approval workflow — none
+received any code changes for I024. The only pre-existing files touched
+are the standard schema-registration touchpoints (`schema-registry.mjs`,
+`config/versions.json`, `src/integrity-checks.mjs`,
+`tests/validation/validate.mjs`, `tests/unit/validator.test.mjs`) every
+new schema in this codebase already requires, plus `src/index.mjs` and
+`package.json` (barrel export and `npm run control-centre` script).
+
+### Relationship to future graphical interfaces
+
+I024 is deliberately terminal-only — explicitly out of scope: a web
+browser, React/Vue/Next.js, Electron, a desktop or mobile UI, charts,
+authentication, live refresh/polling/WebSockets, and any editing/
+publishing/approval control surface (this remains strictly observe-only).
+`control-centre-service.mjs`'s `getOverview()`/`getJobDetail()` return the
+same immutable, schema-validated read model regardless of caller — a
+future graphical Strategy Office dashboard is expected to call this same
+service, not re-derive its own aggregation logic.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -4673,7 +4861,7 @@ through DC-003-I006 either:
 
 ```bash
 npm test       # unit tests: tests/unit/*.test.mjs
-npm run validate  # CLI summary: all 6 approved fixtures against their schemas
+npm run validate  # CLI summary: all 12 approved fixtures against their schemas
 npm run check:topic -- <path>  # CLI check of one Topic Package file
 npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
 npm run generate:live -- [assetId] [--live]  # CLI generate a carousel from a Content Asset; mock by default, real Anthropic only with --live
@@ -4685,6 +4873,8 @@ npm run pipeline -- <topicPackagePath> <ledgerPath>  # CLI: run the full orchest
 npm run invoke -- <invocationRequestPath> <ledgerPath>  # CLI: run one request through the External Invocation Adapter
 npm run n8n -- <workflowInputPath> <ledgerPath>  # CLI: run one n8n-style workflow input through the n8n Adapter
 npm run workflow -- <workflowInputPath> <ledgerPath> <outputPath>  # CLI: run and persist one full production workflow
+npm run control-centre -- dashboard|health|jobs|activity <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]  # CLI: read-only operational console (DC-003-I024)
+npm run control-centre -- job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -5034,7 +5224,8 @@ milestone).
 | Production Asset Export (local PNG + metadata.json export, provider-independent adapter) | Done (DC-003-I021) — `src/production-asset-export-service.mjs`, `src/local-production-asset-export-adapter.mjs`, `src/production-asset-export-adapter.mjs`, CLI `npm run export:assets`; see "Production Asset Export (DC-003-I021)"; live-verified against a real rendered carousel (real PNG downloads, real idempotent re-export); Google Drive/Dropbox/OneDrive/S3 explicitly not implemented |
 | Google Drive Publisher (uploads an I021 package to Drive, provider-independent adapter) | Done (DC-003-I022) — `src/production-asset-publisher-service.mjs`, `src/google-drive-publisher-adapter.mjs`, `src/production-asset-publisher-adapter.mjs`, `src/production-asset-publisher-mock-adapter.mjs`, `src/google-drive-publisher-config.mjs`, CLI `npm run publish:assets`; see "Google Drive Publisher (DC-003-I022)"; I021 unchanged; mock remains the default without `--live`; **not yet exercised live — pending fresh Strategy Office approval**; Dropbox/OneDrive/S3 explicitly not implemented |
 | Production Metrics & Cost Accounting (telemetry + estimated cost per production run) | Done (DC-003-I023) — `src/production-metrics.mjs`, `src/production-metrics-collector.mjs`, `src/production-cost-calculator.mjs`, `src/production-cost-config.mjs`, `src/production-metrics-store.mjs` + adapter files, CLI `npm run metrics`; see "Production Metrics & Cost Accounting (DC-003-I023)"; I021/I022 unchanged; Anthropic usage now preserved via `onUsage` hook (I019 additive change, no public contract altered); live-verified against the real I020 production run's own historical data; no dashboard, no real provider billing integration |
-| Unit test suite | Done — 891 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files)); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Production Control Centre (read-only operational console: system health, dashboard, recent jobs, recent activity, job detail) | Done (DC-003-I024) — `src/control-centre-service.mjs`, `schemas/control-centre.schema.json`, CLI `npm run control-centre`; see "Production Control Centre (DC-003-I024)"; I015/I021/I022/I023 all unchanged; no persistence, no workflow logic, no new business rules, no network requests; terminal-only, no GUI |
+| Unit test suite | Done — 923 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest)); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

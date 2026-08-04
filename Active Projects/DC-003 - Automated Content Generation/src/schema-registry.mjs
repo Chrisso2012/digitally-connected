@@ -1,14 +1,21 @@
 // DC-003 — schema registry.
 //
-// Loads the ten approved JSON Schemas (five from DC-003-T002, plus
+// Loads the approved JSON Schemas (five from DC-003-T002, plus
 // DC-003-I008's execution-record.schema.json, DC-003-I010's
 // invocation-request.schema.json / invocation-response.schema.json,
-// DC-003-I016's content-request.schema.json, and DC-003-I018's
-// content-asset.schema.json — none part of the original T002 five) and
-// exposes them behind stable, camelCase identifiers (matching the
-// JS-side naming convention documented in DC-003-T002 §8) so later
-// modules never need to know a schema's filesystem path — only its
+// DC-003-I016's content-request.schema.json, DC-003-I018's
+// content-asset.schema.json, DC-003-I023's production-metrics.schema.json,
+// and DC-003-I024's control-centre.schema.json — none part of the original
+// T002 five) and exposes them behind stable, camelCase identifiers
+// (matching the JS-side naming convention documented in DC-003-T002 §8) so
+// later modules never need to know a schema's filesystem path — only its
 // identifier.
+//
+// Compile order matters: object key insertion order here is the order
+// validator.mjs calls ajv.compile() in, and control-centre.schema.json
+// $refs finished-carousel/production-metrics by $id, so both must already
+// be registered with Ajv (i.e. appear earlier in this object) before
+// controlCentre is compiled.
 
 import { readJsonFileSync } from "./read-json-file.mjs";
 import { resolveFromRoot } from "./paths.mjs";
@@ -35,6 +42,10 @@ const SCHEMA_FILES = {
   contentAsset: "content-asset.schema.json",
   // DC-003-I023 — the production cost-accounting/telemetry record.
   productionMetrics: "production-metrics.schema.json",
+  // DC-003-I024 — the Control Centre's in-memory read model. Must be
+  // compiled AFTER finishedCarousel/productionMetrics above (object key
+  // order = compile order in validator.mjs) since it $refs both by $id.
+  controlCentre: "control-centre.schema.json",
 };
 
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
