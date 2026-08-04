@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://digitallyconnected.net/schemas/dc-003/control-centre.schema.json",
   "title": "Control Centre Read Model",
-  "description": "DC-003-I024 — the in-memory operational read model assembled by control-centre-service.mjs from existing stores (Finished Carousel Store I015, Production Metrics Store I023, and, when supplied, the Production Asset Export I021 directory convention). Never persisted — rebuilt fresh on every call. Two shapes, discriminated by `kind`: an `overview` (system health + dashboard totals + recent jobs + recent activity, what the CLI's `dashboard`/`jobs`/`activity`/`health` subcommands slice into) and a `job_detail` (one carousel's full generation/rendering/approval/export/publishing/metrics picture, what `job <carouselId>` returns).",
+  "description": "DC-003-I024, extended by DC-003-I025 — the in-memory operational read model assembled by control-centre-service.mjs from existing stores (Finished Carousel Store I015, Production Metrics Store I023, Publisher Result Store I025, and, when supplied, the Production Asset Export I021 directory convention). Never persisted — rebuilt fresh on every call. Two shapes, discriminated by `kind`: an `overview` (system health + dashboard totals + recent jobs + recent activity, what the CLI's `dashboard`/`jobs`/`activity`/`health` subcommands slice into) and a `job_detail` (one carousel's full generation/rendering/approval/export/publishing/metrics picture, what `job <carouselId>` returns). As of I025, `published`/`publishing` are reported from the Publisher Result Store (repository evidence of an actual completed publish), not the disconnected DC-003-I014 approval-lifecycle field I024 originally had to fall back on.",
   "type": "object",
   "oneOf": [
     {
@@ -50,6 +50,7 @@
         "google_drive",
         "finished_carousel_store",
         "production_metrics_store",
+        "publisher_result_store",
         "overall"
       ],
       "additionalProperties": false,
@@ -60,6 +61,7 @@
         "google_drive": { "$ref": "#/$defs/healthCheck" },
         "finished_carousel_store": { "$ref": "#/$defs/healthCheck" },
         "production_metrics_store": { "$ref": "#/$defs/healthCheck" },
+        "publisher_result_store": { "$ref": "#/$defs/healthCheck" },
         "overall": { "type": "string", "enum": ["healthy", "warning", "attention_required"] }
       }
     },
@@ -199,13 +201,15 @@
     },
     "jobPublishing": {
       "type": "object",
-      "description": "Reflects the DC-003-I014 approval-lifecycle publish transition (finished-carousel.schema.json's own approval.published/published_at) — not automatic confirmation of a completed Google Drive upload (DC-003-I022). No field in this repository currently links a Finished Carousel to a Google Drive publish event; see README.",
-      "required": ["published", "published_at", "note"],
+      "description": "DC-003-I025 — sourced entirely from the Publisher Result Store, the repository's authoritative record of successful publications. `published` is true only when at least one Publisher Result exists for this carousel_id; `publisher_results` lists every one found (ordered oldest to newest — a carousel can legitimately be re-published, or published to more than one provider once a non-Drive publisher exists), each embedded whole and re-validated against publisher-result.schema.json. No heuristics, no provider queries — only repository evidence, per the I025 brief.",
+      "required": ["published", "publisher_results"],
       "additionalProperties": false,
       "properties": {
         "published": { "type": "boolean" },
-        "published_at": { "type": ["string", "null"], "format": "date-time" },
-        "note": { "type": "string" }
+        "publisher_results": {
+          "type": "array",
+          "items": { "$ref": "https://digitallyconnected.net/schemas/dc-003/publisher-result.schema.json" }
+        }
       }
     },
     "jobDetail": {

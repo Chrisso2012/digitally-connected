@@ -36,6 +36,7 @@ const REQUIRED_SCHEMA_VERSION_KEYS = [
   "content_asset",
   "production_metrics",
   "control_centre",
+  "publisher_result",
 ];
 // Deliberately loose substring match — this is a safety net against obvious
 // mistakes (pasting a real key into config), not a secrets scanner.

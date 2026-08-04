@@ -7,6 +7,8 @@ import path from "node:path";
 import { createFinishedCarouselStore } from "../../src/finished-carousel-store.mjs";
 import { createProductionMetricsStore } from "../../src/production-metrics-store.mjs";
 import { createProductionMetrics } from "../../src/production-metrics.mjs";
+import { createPublisherResultStore } from "../../src/publisher-result-store.mjs";
+import { createPublisherResult } from "../../src/publisher-result.mjs";
 import { approveCarousel, rejectCarousel, publishCarousel } from "../../src/carousel-approval.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError } from "../../src/control-centre-errors.mjs";
@@ -20,34 +22,10 @@ const FIXTURE_PATH = path.join(__dirname, "..", "fixtures", "finished-carousel.e
 // lets a test simulate a broken store on demand (see the "safe handling
 // of missing/broken records" tests below). ---------------------------------
 
-function createInMemoryCarouselAdapter() {
+function createInMemoryAdapter(name) {
   const files = new Map();
   return {
-    name: "in-memory-carousel-adapter",
-    write(identifier, content) {
-      files.set(identifier, content);
-    },
-    read(identifier) {
-      if (!files.has(identifier)) {
-        const err = new Error(`ENOENT: no such file, open '/fake/${identifier}.json'`);
-        err.code = "ENOENT";
-        throw err;
-      }
-      return files.get(identifier);
-    },
-    list() {
-      return [...files.keys()];
-    },
-    exists(identifier) {
-      return files.has(identifier);
-    },
-  };
-}
-
-function createInMemoryMetricsAdapter() {
-  const files = new Map();
-  return {
-    name: "in-memory-metrics-adapter",
+    name,
     write(identifier, content) {
       files.set(identifier, content);
     },
@@ -93,10 +71,23 @@ function buildMetrics(overrides = {}) {
   }, { now: overrides.now });
 }
 
+function buildPublisherResult(overrides = {}) {
+  return createPublisherResult({
+    carouselId: overrides.carouselId ?? "car_01J9X9C7",
+    assetPackageId: overrides.assetPackageId ?? "pkg_test0000000001",
+    executionId: overrides.executionId ?? "exec_20260731_9f3a2e1c8b4d",
+    provider: overrides.provider ?? "google-drive",
+    destination: overrides.destination ?? "https://drive.google.com/drive/folders/test",
+    providerReference: overrides.providerReference ?? "folder_test",
+    metadata: overrides.metadata ?? { files_uploaded: 7 },
+  }, { now: overrides.now });
+}
+
 function buildStores() {
-  const finishedCarouselStore = createFinishedCarouselStore({ adapter: createInMemoryCarouselAdapter() });
-  const productionMetricsStore = createProductionMetricsStore({ adapter: createInMemoryMetricsAdapter() });
-  return { finishedCarouselStore, productionMetricsStore };
+  const finishedCarouselStore = createFinishedCarouselStore({ adapter: createInMemoryAdapter("in-memory-carousel-adapter") });
+  const productionMetricsStore = createProductionMetricsStore({ adapter: createInMemoryAdapter("in-memory-metrics-adapter") });
+  const publisherResultStore = createPublisherResultStore({ adapter: createInMemoryAdapter("in-memory-publisher-result-adapter") });
+  return { finishedCarouselStore, productionMetricsStore, publisherResultStore };
 }
 
 function withTempDir(fn) {
@@ -111,17 +102,25 @@ function withTempDir(fn) {
 // --- constructor / dependency guard ---------------------------------------
 
 test("throws InvalidControlCentreDependenciesError for a missing finishedCarouselStore", () => {
-  const { productionMetricsStore } = buildStores();
+  const { productionMetricsStore, publisherResultStore } = buildStores();
   assert.throws(
-    () => createControlCentreService({ productionMetricsStore }),
+    () => createControlCentreService({ productionMetricsStore, publisherResultStore }),
     InvalidControlCentreDependenciesError
   );
 });
 
 test("throws InvalidControlCentreDependenciesError for a missing productionMetricsStore", () => {
-  const { finishedCarouselStore } = buildStores();
+  const { finishedCarouselStore, publisherResultStore } = buildStores();
   assert.throws(
-    () => createControlCentreService({ finishedCarouselStore }),
+    () => createControlCentreService({ finishedCarouselStore, publisherResultStore }),
+    InvalidControlCentreDependenciesError
+  );
+});
+
+test("throws InvalidControlCentreDependenciesError for a missing publisherResultStore", () => {
+  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  assert.throws(
+    () => createControlCentreService({ finishedCarouselStore, productionMetricsStore }),
     InvalidControlCentreDependenciesError
   );
 });
@@ -129,7 +128,7 @@ test("throws InvalidControlCentreDependenciesError for a missing productionMetri
 // --- dashboard assembly / completed / failed / cost / duration aggregation
 
 test("dashboard assembly: counts completed and failed production correctly", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_completed0000001" }));
   finishedCarouselStore.save(
     loadFreshCarousel({
@@ -146,7 +145,7 @@ test("dashboard assembly: counts completed and failed production correctly", () 
     })
   );
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const { dashboard } = service.getOverview();
 
   assert.equal(dashboard.completed, 1);
@@ -156,8 +155,8 @@ test("dashboard assembly: counts completed and failed production correctly", () 
 });
 
 test("cost aggregation: sums estimated cost across metrics records, and reports 0 records honestly when none exist", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
 
   const emptyDashboard = service.getOverview().dashboard;
   assert.equal(emptyDashboard.estimated_cost.records_counted, 0);
@@ -174,11 +173,11 @@ test("cost aggregation: sums estimated cost across metrics records, and reports 
 });
 
 test("duration aggregation: averages durations_ms.total across metrics records", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   productionMetricsStore.save(buildMetrics({ requestId: "req_a", executionId: "exec_20260801_aaaaaaaaaaaa", durationsMs: { generation: null, render: 1000, export: null, publish: null, total: 10000 } }));
   productionMetricsStore.save(buildMetrics({ requestId: "req_b", executionId: "exec_20260801_bbbbbbbbbbbb", durationsMs: { generation: null, render: 1000, export: null, publish: null, total: 20000 } }));
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const { dashboard } = service.getOverview();
 
   assert.equal(dashboard.average_duration.records_counted, 2);
@@ -186,11 +185,11 @@ test("duration aggregation: averages durations_ms.total across metrics records",
 });
 
 test("today's production and cost only include records recorded today", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   productionMetricsStore.save(buildMetrics({ requestId: "req_old", executionId: "exec_20260801_oldoldoldoldo" })); // recorded_at defaults to real now()
 
   const service = createControlCentreService(
-    { finishedCarouselStore, productionMetricsStore },
+    { finishedCarouselStore, productionMetricsStore, publisherResultStore },
     { now: () => "2099-01-01T00:00:00.000Z" }
   );
   const { dashboard } = service.getOverview();
@@ -198,10 +197,32 @@ test("today's production and cost only include records recorded today", () => {
   assert.equal(dashboard.today.estimated_cost.records_counted, 0);
 });
 
+// --- published dashboard count (DC-003-I025) --------------------------------
+
+test("dashboard.published counts distinct carousels with at least one Publisher Result, not approval.published", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  // Approved AND approval-lifecycle-"published" via I014 — but no Publisher
+  // Result exists for it. Must NOT count as published.
+  const legacyPublished = publishCarousel({
+    finishedCarousel: approveCarousel({ finishedCarousel: loadFreshCarousel({ carousel_id: "car_legacy0000000001" }), approvedBy: "tester" }),
+  });
+  finishedCarouselStore.save(legacyPublished);
+
+  // A genuinely published carousel: a real Publisher Result exists, but
+  // approval.published was never set (I022 never calls I014).
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_real0000000002" }));
+  publisherResultStore.save(buildPublisherResult({ carouselId: "car_real0000000002" }));
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const { dashboard } = service.getOverview();
+
+  assert.equal(dashboard.published, 1, "only the carousel with a real Publisher Result counts");
+});
+
 // --- recent jobs -----------------------------------------------------------
 
 test("recent jobs are sorted by generated_at descending and joined to their metrics record via execution_id", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_older0000000001", generated_at: "2026-01-01T00:00:00Z" }));
   finishedCarouselStore.save(
     loadFreshCarousel({
@@ -212,7 +233,7 @@ test("recent jobs are sorted by generated_at descending and joined to their metr
   );
   productionMetricsStore.save(buildMetrics({ requestId: "req_newer", executionId: "exec_20260601_newerrunnerx1", carouselId: "car_newer0000000002" }));
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const { recent_jobs: jobs } = service.getOverview();
 
   assert.equal(jobs.length, 2);
@@ -223,14 +244,14 @@ test("recent jobs are sorted by generated_at descending and joined to their metr
 });
 
 test("approval_status reflects approve/reject/awaiting_approval correctly", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   const approved = approveCarousel({ finishedCarousel: loadFreshCarousel({ carousel_id: "car_appr0000000001" }), approvedBy: "tester" });
   finishedCarouselStore.save(approved);
   const rejected = rejectCarousel({ finishedCarousel: loadFreshCarousel({ carousel_id: "car_rej00000000002" }), reason: "not good" });
   finishedCarouselStore.save(rejected);
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_pend0000000003" }));
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const jobsByCarouselId = Object.fromEntries(service.getOverview().recent_jobs.map((j) => [j.carousel_id, j]));
 
   assert.equal(jobsByCarouselId["car_appr0000000001"].approval_status, "approved");
@@ -238,12 +259,30 @@ test("approval_status reflects approve/reject/awaiting_approval correctly", () =
   assert.equal(jobsByCarouselId["car_pend0000000003"].approval_status, "awaiting_approval");
 });
 
-// --- missing export / missing publish ---------------------------------------
+test("recent job's published flag reflects the Publisher Result Store, not approval.published", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_jobpub0000000001" }));
+  publisherResultStore.save(buildPublisherResult({ carouselId: "car_jobpub0000000001" }));
+  finishedCarouselStore.save(
+    loadFreshCarousel({
+      carousel_id: "car_jobpub0000000002",
+      execution_metadata: { execution_id: "exec_20260731_jobpub00002a", rendered_at: "2026-07-31T02:11:12Z", provider: "templated-http", render_duration_ms: 1 },
+    })
+  );
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const jobsByCarouselId = Object.fromEntries(service.getOverview().recent_jobs.map((j) => [j.carousel_id, j]));
+
+  assert.equal(jobsByCarouselId["car_jobpub0000000001"].published, true);
+  assert.equal(jobsByCarouselId["car_jobpub0000000002"].published, false);
+});
+
+// --- missing export -----------------------------------------------------------
 
 test("export_status is 'unknown' when no exportsRootDir is supplied", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_noexportdir00001" }));
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const [job] = service.getOverview().recent_jobs;
   assert.equal(job.export_status, "unknown");
   assert.equal(service.getJobDetail("car_noexportdir00001").job.export, null);
@@ -251,9 +290,9 @@ test("export_status is 'unknown' when no exportsRootDir is supplied", () => {
 
 test("export_status is 'not_exported' when exportsRootDir is supplied but no matching export exists, and 'exported' once one does", () => {
   withTempDir((exportsRootDir) => {
-    const { finishedCarouselStore, productionMetricsStore } = buildStores();
+    const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
     finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_exportme0000001" }));
-    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, exportsRootDir });
+    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, exportsRootDir });
 
     const beforeJob = service.getOverview().recent_jobs[0];
     assert.equal(beforeJob.export_status, "not_exported");
@@ -273,33 +312,67 @@ test("export_status is 'not_exported' when exportsRootDir is supplied but no mat
   });
 });
 
-test("publishing block always documents the Google Drive gap, and reflects approval.published when set", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
-  const published = publishCarousel({
-    finishedCarousel: approveCarousel({ finishedCarousel: loadFreshCarousel({ carousel_id: "car_pub00000000001" }), approvedBy: "tester" }),
-  });
-  finishedCarouselStore.save(published);
-  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_notpub0000000002" }));
+// --- publishing (DC-003-I025) -------------------------------------------------
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+test("job detail's publishing block is sourced from the Publisher Result Store, not approval.published", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+
+  // Real evidence: approval was never touched, but a genuine Publisher
+  // Result exists.
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_pub00000000001" }));
+  const result = buildPublisherResult({ carouselId: "car_pub00000000001", now: () => "2026-08-04T01:00:00.000Z" });
+  publisherResultStore.save(result);
+
+  // Legacy signal only: I014's own publish transition was applied, but no
+  // Publisher Result was ever recorded for it (I022 never calls I014).
+  const legacyPublished = publishCarousel({
+    finishedCarousel: approveCarousel({ finishedCarousel: loadFreshCarousel({ carousel_id: "car_legacyonly0000002" }), approvedBy: "tester" }),
+  });
+  finishedCarouselStore.save(legacyPublished);
+
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_notpub0000000003" }));
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
 
   const publishedDetail = service.getJobDetail("car_pub00000000001").job.publishing;
   assert.equal(publishedDetail.published, true);
-  assert.match(publishedDetail.note, /Google Drive/);
+  assert.equal(publishedDetail.publisher_results.length, 1);
+  assert.equal(publishedDetail.publisher_results[0].publisher_result_id, result.publisher_result_id);
 
-  const notPublishedDetail = service.getJobDetail("car_notpub0000000002").job.publishing;
+  const legacyOnlyDetail = service.getJobDetail("car_legacyonly0000002").job.publishing;
+  assert.equal(legacyOnlyDetail.published, false, "approval.published alone must not count as published");
+  assert.deepEqual(legacyOnlyDetail.publisher_results, []);
+
+  const notPublishedDetail = service.getJobDetail("car_notpub0000000003").job.publishing;
   assert.equal(notPublishedDetail.published, false);
-  assert.equal(notPublishedDetail.published_at, null);
+  assert.deepEqual(notPublishedDetail.publisher_results, []);
+});
+
+test("a carousel published more than once (re-publish) shows every Publisher Result, ordered oldest to newest", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_republish00001" }));
+  const first = buildPublisherResult({ carouselId: "car_republish00001", now: () => "2026-08-01T00:00:00.000Z" });
+  const second = buildPublisherResult({ carouselId: "car_republish00001", now: () => "2026-08-02T00:00:00.000Z" });
+  publisherResultStore.save(first);
+  publisherResultStore.save(second);
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const detail = service.getJobDetail("car_republish00001").job.publishing;
+
+  assert.equal(detail.published, true);
+  assert.equal(detail.publisher_results.length, 2);
+  assert.equal(detail.publisher_results[0].publisher_result_id, first.publisher_result_id);
+  assert.equal(detail.publisher_results[1].publisher_result_id, second.publisher_result_id);
 });
 
 // --- recent activity ---------------------------------------------------------
 
 test("recent activity only includes events with a real stored timestamp, sorted newest first", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   const approved = approveCarousel({ finishedCarousel: loadFreshCarousel({ carousel_id: "car_activity0000001" }), approvedBy: "tester" });
   finishedCarouselStore.save(approved);
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const { recent_activity: activity } = service.getOverview();
 
   const events = activity.map((e) => e.event);
@@ -312,20 +385,36 @@ test("recent activity only includes events with a real stored timestamp, sorted 
   }
 });
 
+test("recent activity includes one 'published' entry per real Publisher Result, never from approval.published", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_activitypub0001" }));
+  publisherResultStore.save(
+    buildPublisherResult({ carouselId: "car_activitypub0001", provider: "google-drive", now: () => "2026-08-04T02:00:00.000Z" })
+  );
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const publishedEntries = service.getOverview().recent_activity.filter((e) => e.event === "published");
+
+  assert.equal(publishedEntries.length, 1);
+  assert.equal(publishedEntries[0].carousel_id, "car_activitypub0001");
+  assert.equal(publishedEntries[0].timestamp, "2026-08-04T02:00:00.000Z");
+  assert.match(publishedEntries[0].detail, /provider=google-drive/);
+});
+
 // --- job detail --------------------------------------------------------------
 
 test("getJobDetail propagates CarouselNotFoundError for an unknown carousel_id", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   assert.throws(() => service.getJobDetail("car_doesnotexist0000"), CarouselNotFoundError);
 });
 
 test("getJobDetail embeds the full finished carousel and, when present, the full metrics record", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_full0000000001" }));
   productionMetricsStore.save(buildMetrics({ requestId: "req_full", executionId: "exec_20260731_9f3a2e1c8b4d", carouselId: "car_full0000000001" }));
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const detail = service.getJobDetail("car_full0000000001");
 
   assert.equal(detail.kind, "job_detail");
@@ -338,8 +427,8 @@ test("getJobDetail embeds the full finished carousel and, when present, the full
 // --- system health -------------------------------------------------------
 
 test("health: anthropic/templated/google_drive report 'warning' when unconfigured, 'ok' when configured", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
-  const unconfigured = createControlCentreService({ finishedCarouselStore, productionMetricsStore }, { env: {} });
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const unconfigured = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore }, { env: {} });
   const unconfiguredHealth = unconfigured.getOverview().health;
   assert.equal(unconfiguredHealth.anthropic.status, "warning");
   assert.equal(unconfiguredHealth.templated.status, "warning");
@@ -347,7 +436,7 @@ test("health: anthropic/templated/google_drive report 'warning' when unconfigure
   assert.equal(unconfiguredHealth.overall, "warning");
 
   const configured = createControlCentreService(
-    { finishedCarouselStore, productionMetricsStore },
+    { finishedCarouselStore, productionMetricsStore, publisherResultStore },
     {
       env: {
         LLM_API_KEY: "sk-fake",
@@ -366,29 +455,68 @@ test("health: anthropic/templated/google_drive report 'warning' when unconfigure
   assert.equal(configuredHealth.overall, "healthy");
 });
 
+test("health: google_drive.last_success_at is sourced from real Publisher Results (DC-003-I025), never null once one exists", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_ghealth0000001" }));
+
+  const noResultsService = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  assert.equal(noResultsService.getOverview().health.google_drive.last_success_at, null);
+
+  publisherResultStore.save(
+    buildPublisherResult({ carouselId: "car_ghealth0000001", provider: "google-drive", now: () => "2026-08-04T03:00:00.000Z" })
+  );
+  const withResultsService = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  assert.equal(withResultsService.getOverview().health.google_drive.last_success_at, "2026-08-04T03:00:00.000Z");
+});
+
 test("health: templated last_success_at only counts real templated-http renders, never mock-transport", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(
     loadFreshCarousel({
       carousel_id: "car_mockrender00001",
       execution_metadata: { execution_id: "exec_20260731_mockrunneraa1", rendered_at: "2026-07-31T02:11:12Z", provider: "mock-transport", render_duration_ms: 1 },
     })
   );
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore }, { env: { TEMPLATED_API_KEY: "tk-fake" } });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore }, { env: { TEMPLATED_API_KEY: "tk-fake" } });
   const health = service.getOverview().health;
   assert.equal(health.templated.status, "ok"); // configured
   assert.equal(health.templated.last_success_at, null); // but no real render ever happened
 });
 
 test("health: export status is 'unknown' when no exportsRootDir supplied, 'ok' when the directory is readable", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
-  const noDirService = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const noDirService = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   assert.equal(noDirService.getOverview().health.export.status, "unknown");
 
   withTempDir((exportsRootDir) => {
-    const withDirService = createControlCentreService({ finishedCarouselStore, productionMetricsStore, exportsRootDir });
+    const withDirService = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, exportsRootDir });
     assert.equal(withDirService.getOverview().health.export.status, "ok");
   });
+});
+
+test("health: publisher_result_store reports readable, and a warning when it isn't", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  publisherResultStore.save(buildPublisherResult());
+  const okService = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  assert.equal(okService.getOverview().health.publisher_result_store.status, "ok");
+  assert.match(okService.getOverview().health.publisher_result_store.detail, /1 record/);
+
+  const brokenAdapter = {
+    name: "broken-publisher-result-adapter",
+    write() {},
+    read() {},
+    list() {
+      throw new Error("disk fell off");
+    },
+    exists() {
+      return false;
+    },
+  };
+  const brokenPublisherResultStore = createPublisherResultStore({ adapter: brokenAdapter });
+  const brokenService = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore: brokenPublisherResultStore });
+  const overview = brokenService.getOverview(); // must not throw
+  assert.equal(overview.health.publisher_result_store.status, "warning");
+  assert.equal(overview.health.overall, "attention_required");
 });
 
 test("health: overall is 'attention_required' when a core store is unreadable, safely (no throw)", () => {
@@ -404,9 +532,9 @@ test("health: overall is 'attention_required' when a core store is unreadable, s
     },
   };
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: brokenAdapter });
-  const { productionMetricsStore } = buildStores();
+  const { productionMetricsStore, publisherResultStore } = buildStores();
 
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const overview = service.getOverview(); // must not throw
   assert.equal(overview.health.finished_carousel_store.status, "warning");
   assert.equal(overview.health.overall, "attention_required");
@@ -416,9 +544,9 @@ test("health: overall is 'attention_required' when a core store is unreadable, s
 // --- immutability / read-only guarantees ------------------------------------
 
 test("getOverview() returns a deep-frozen object", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_frozen00000001" }));
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const overview = service.getOverview();
 
   assert.ok(Object.isFrozen(overview));
@@ -432,13 +560,14 @@ test("getOverview() returns a deep-frozen object", () => {
 });
 
 test("getJobDetail() returns a deep-frozen object, and never mutates the store's own returned carousel", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_frozen00000002" }));
-  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore });
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
   const detail = service.getJobDetail("car_frozen00000002");
 
   assert.ok(Object.isFrozen(detail));
   assert.ok(Object.isFrozen(detail.job.finished_carousel));
+  assert.ok(Object.isFrozen(detail.job.publishing.publisher_results));
 
   // The service must never call save()/replace() on either store.
   const original = finishedCarouselStore.get("car_frozen00000002");
@@ -446,8 +575,9 @@ test("getJobDetail() returns a deep-frozen object, and never mutates the store's
 });
 
 test("the service never calls a mutating store method (save/replace) — read-only by construction", () => {
-  const { finishedCarouselStore, productionMetricsStore } = buildStores();
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
   finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_readonly0000001" }));
+  publisherResultStore.save(buildPublisherResult({ carouselId: "car_readonly0000001" }));
 
   const guardedFinishedCarouselStore = {
     ...finishedCarouselStore,
@@ -464,8 +594,18 @@ test("the service never calls a mutating store method (save/replace) — read-on
       throw new Error("must not be called");
     },
   };
+  const guardedPublisherResultStore = {
+    ...publisherResultStore,
+    save() {
+      throw new Error("must not be called");
+    },
+  };
 
-  const service = createControlCentreService({ finishedCarouselStore: guardedFinishedCarouselStore, productionMetricsStore: guardedProductionMetricsStore });
+  const service = createControlCentreService({
+    finishedCarouselStore: guardedFinishedCarouselStore,
+    productionMetricsStore: guardedProductionMetricsStore,
+    publisherResultStore: guardedPublisherResultStore,
+  });
   service.getOverview();
   service.getJobDetail("car_readonly0000001");
   // No assertion needed beyond "did not throw" — the guarded methods would

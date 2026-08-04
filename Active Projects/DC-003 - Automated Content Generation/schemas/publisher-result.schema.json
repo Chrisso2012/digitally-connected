@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/publisher-result.schema.json",
+  "title": "Publisher Result",
+  "description": "DC-003-I025 — the authoritative local record of one successful publication. Written after a Publisher Adapter (google-drive-publisher-adapter.mjs is the first and, as of I025, only implementation) completes an upload — never before, never for a failed attempt. Deliberately provider-neutral: `provider`/`destination`/`provider_reference`/`metadata` carry whatever a given publisher's own result shape produces, so a future non-Drive publisher (out of scope for I025 itself) can populate this same schema without a schema change. The publisher performs work; this object records the outcome — it is the source of truth for \"has this been published,\" the publisher itself is not.",
+  "type": "object",
+  "required": ["publisher_result_id", "carousel_id", "asset_package_id", "execution_id", "provider", "destination", "published_at", "status", "provider_reference", "metadata"],
+  "additionalProperties": false,
+  "properties": {
+    "publisher_result_id": { "type": "string", "pattern": "^pub_[A-Za-z0-9]+$" },
+    "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
+    "asset_package_id": { "type": "string", "pattern": "^pkg_[A-Za-z0-9]+$" },
+    "execution_id": { "type": "string", "pattern": "^exec_[0-9]{8}_[A-Za-z0-9]+$" },
+    "provider": { "type": "string", "minLength": 1, "description": "e.g. \"google-drive\" — the publisher adapter's own `.name`/result `publisher` field, passed through verbatim, never re-derived." },
+    "destination": { "type": "string", "minLength": 1, "description": "A human-navigable location for the published package, e.g. a Drive folder URL." },
+    "published_at": { "type": "string", "format": "date-time" },
+    "status": { "const": "completed", "description": "This schema represents one successful publication only — a failed publish attempt never produces a Publisher Result (out of scope: retries/queueing/failure-tracking belong to a future publisher-analytics milestone)." },
+    "provider_reference": { "type": "string", "minLength": 1, "description": "An opaque provider-specific identifier for the published location, e.g. a Drive folder ID — never a credential or access token." },
+    "metadata": {
+      "type": "object",
+      "description": "Provider-specific extra evidence that doesn't fit the fields above (e.g. Google Drive's own files-uploaded count). Deliberately not `additionalProperties: false` — unlike every other schema in this repository — since its whole purpose is to vary by publisher without requiring a schema change; still always present, `{}` when a provider has nothing extra to add, never omitted."
+    }
+  }
+}

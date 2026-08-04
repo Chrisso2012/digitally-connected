@@ -137,3 +137,49 @@ test("no credential value is ever leaked into stdout/stderr when credentials are
     assert.doesNotMatch(result.stdout, /fake-present/);
     assert.doesNotMatch(result.stderr, /fake-present/);
   }));
+
+// --- DC-003-I025: optional Publisher Result recording ----------------------
+
+test("without a publisherResultStoreDirectory argument, no Publisher Result is recorded (unchanged pre-I025 behaviour)", () =>
+  withTempDir((dir) => {
+    seedPackage(dir);
+    const result = runCli([dir]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /publisher result: not recorded \(no publisherResultStoreDirectory supplied\)/);
+  }));
+
+test("supplying a publisherResultStoreDirectory records exactly one Publisher Result on disk", () =>
+  withTempDir((dir) => {
+    withTempDir((publisherResultDir) => {
+      seedPackage(dir);
+      const result = runCli([dir, publisherResultDir]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, new RegExp(`publisher result: recorded at ${publisherResultDir.replace(/\\/g, "\\\\")}`));
+
+      const listResult = spawnSync(
+        process.execPath,
+        [path.join(PROJECT_ROOT, "tests", "validation", "publisher-results.mjs"), "carousel", "car_publishcli0001", publisherResultDir],
+        { encoding: "utf-8" }
+      );
+      assert.equal(listResult.status, 0, listResult.stderr);
+      assert.match(listResult.stdout, /1 publisher result\(s\) for carousel "car_publishcli0001"/);
+      assert.match(listResult.stdout, /provider:\s*mock-publisher/);
+    });
+  }));
+
+test("a re-publish with --replace against the same publisherResultStoreDirectory records a second, independent result", () =>
+  withTempDir((dir) => {
+    withTempDir((publisherResultDir) => {
+      seedPackage(dir);
+      runCli([dir, publisherResultDir]);
+      const second = runCli([dir, publisherResultDir, "--replace"]);
+      assert.equal(second.status, 0, second.stderr);
+
+      const listResult = spawnSync(
+        process.execPath,
+        [path.join(PROJECT_ROOT, "tests", "validation", "publisher-results.mjs"), "list", publisherResultDir],
+        { encoding: "utf-8" }
+      );
+      assert.match(listResult.stdout, /^2 publisher result\(s\)/);
+    });
+  }));

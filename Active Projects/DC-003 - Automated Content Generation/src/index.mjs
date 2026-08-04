@@ -274,3 +274,27 @@ export {
 // (DC-003-I024)" in the README.
 export { createControlCentreService } from "./control-centre-service.mjs";
 export { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "./control-centre-errors.mjs";
+
+// DC-003-I025 — Publisher Result Store: the authoritative local record of
+// every successful publish. Closes the DC-003-I024 gap where a completed
+// Google Drive upload left no repository evidence — I022's publisher
+// service now persists one Publisher Result after every successful
+// upload (upload behaviour itself unchanged), and the Control Centre
+// reports "published" from this store instead of the disconnected
+// approval-lifecycle field. Provider-neutral: Google Drive is only the
+// first implementation. See "Publisher Result Store (DC-003-I025)" in the
+// README.
+export { createPublisherResult } from "./publisher-result.mjs";
+export { assertValidPublisherResultStoreAdapter } from "./publisher-result-store-adapter.mjs";
+export { createLocalJsonPublisherResultStoreAdapter } from "./local-json-publisher-result-store-adapter.mjs";
+export { createPublisherResultStore } from "./publisher-result-store.mjs";
+export {
+  InvalidPublisherResultInputError,
+  PublisherResultValidationError,
+  InvalidPublisherResultStoreAdapterError,
+  InvalidPublisherResultIdentifierError,
+  PublisherResultAlreadyExistsError,
+  PublisherResultNotFoundError,
+  CorruptedPublisherResultError,
+  PublisherResultPersistenceError,
+} from "./publisher-result-errors.mjs";

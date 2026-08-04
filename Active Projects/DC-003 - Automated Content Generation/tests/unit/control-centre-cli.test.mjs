@@ -38,16 +38,17 @@ function withTempDirs(fn) {
   const base = mkdtempSync(path.join(tmpdir(), "dc003-control-centre-cli-"));
   const carouselDir = path.join(base, "carousels");
   const metricsDir = path.join(base, "metrics");
+  const publisherResultDir = path.join(base, "publisher-results");
   try {
-    return fn({ base, carouselDir, metricsDir });
+    return fn({ base, carouselDir, metricsDir, publisherResultDir });
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
 }
 
-test("dashboard on an empty pair of stores prints a clean, plain-text overview with no ANSI codes", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
-    const result = runCli("dashboard", carouselDir, metricsDir);
+test("dashboard on an empty set of stores prints a clean, plain-text overview with no ANSI codes", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /DC-003 CONTROL CENTRE/);
     assert.match(result.stdout, /System Health/);
@@ -60,22 +61,23 @@ test("dashboard on an empty pair of stores prints a clean, plain-text overview w
 });
 
 test("dashboard reflects a real saved carousel via the CLI, end to end", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
     const saveResult = runCarouselCli("save", FIXTURE_PATH, carouselDir);
     assert.equal(saveResult.status, 0, saveResult.stderr);
 
-    const dashboardResult = runCli("dashboard", carouselDir, metricsDir);
+    const dashboardResult = runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
     assert.equal(dashboardResult.status, 0, dashboardResult.stderr);
     assert.match(dashboardResult.stdout, /Completed\s+1/);
     assert.match(dashboardResult.stdout, /car_01J9X9C7/);
   });
 });
 
-test("health subcommand prints only the System Health section", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
-    const result = runCli("health", carouselDir, metricsDir);
+test("health subcommand prints only the System Health section, including Publisher Results", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("health", carouselDir, metricsDir, publisherResultDir);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /System Health/);
+    assert.match(result.stdout, /Publisher Results/);
     assert.match(result.stdout, /Overall:/);
     assert.doesNotMatch(result.stdout, /DC-003 CONTROL CENTRE/);
     assert.doesNotMatch(result.stdout, /Recent Jobs/);
@@ -83,8 +85,8 @@ test("health subcommand prints only the System Health section", () => {
 });
 
 test("jobs subcommand prints only Recent Jobs", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
-    const result = runCli("jobs", carouselDir, metricsDir);
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("jobs", carouselDir, metricsDir, publisherResultDir);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Recent Jobs \(0\)/);
     assert.doesNotMatch(result.stdout, /System Health/);
@@ -92,32 +94,77 @@ test("jobs subcommand prints only Recent Jobs", () => {
 });
 
 test("activity subcommand prints only Recent Activity", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
-    const result = runCli("activity", carouselDir, metricsDir);
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("activity", carouselDir, metricsDir, publisherResultDir);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Recent Activity \(0\)/);
     assert.doesNotMatch(result.stdout, /System Health/);
   });
 });
 
-test("job <carouselId> prints full job detail for a real saved carousel", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
+test("job <carouselId> prints full job detail for a real saved carousel, with no Publisher Result recorded", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
     runCarouselCli("save", FIXTURE_PATH, carouselDir);
-    const result = runCli("job", "car_01J9X9C7", carouselDir, metricsDir);
+    const result = runCli("job", "car_01J9X9C7", carouselDir, metricsDir, publisherResultDir);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /JOB DETAIL — car_01J9X9C7/);
     assert.match(result.stdout, /Generation & Rendering/);
     assert.match(result.stdout, /Approval/);
     assert.match(result.stdout, /Export/);
     assert.match(result.stdout, /Publishing/);
+    assert.match(result.stdout, /published {2}false/);
+    assert.match(result.stdout, /no Publisher Result found for this carousel/);
     assert.match(result.stdout, /Metrics/);
-    assert.match(result.stdout, /Google Drive/); // the documented publishing gap note
+  });
+});
+
+test("job <carouselId> shows a real Publisher Result once one is recorded", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    runCarouselCli("save", FIXTURE_PATH, carouselDir);
+    const publishResult = spawnSync(
+      process.execPath,
+      [
+        path.join(PROJECT_ROOT, "tests", "validation", "publisher-results.mjs"),
+        "list",
+        publisherResultDir,
+      ],
+      { encoding: "utf-8", env: CLEAN_ENV }
+    );
+    assert.equal(publishResult.status, 0, publishResult.stderr);
+    assert.match(publishResult.stdout, /^0 publisher result/);
+
+    // Record one directly via the Publisher Result Store CLI's own sibling
+    // module — production-asset-publisher-service.mjs is I022's own
+    // integration point (tested separately); this test only needs a real
+    // stored record to confirm the Control Centre reads it back correctly.
+    const recordScript = `
+      import { createLocalJsonPublisherResultStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-publisher-result-store-adapter.mjs"))};
+      import { createPublisherResultStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "publisher-result-store.mjs"))};
+      import { createPublisherResult } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "publisher-result.mjs"))};
+      const store = createPublisherResultStore({ adapter: createLocalJsonPublisherResultStoreAdapter({ storageDir: ${JSON.stringify(publisherResultDir)} }) });
+      store.save(createPublisherResult({
+        carouselId: "car_01J9X9C7",
+        assetPackageId: "pkg_test0000000001",
+        executionId: "exec_20260731_9f3a2e1c8b4d",
+        provider: "google-drive",
+        destination: "https://drive.google.com/drive/folders/test",
+        providerReference: "folder_test",
+      }));
+    `;
+    const seed = spawnSync(process.execPath, ["--input-type=module", "-e", recordScript], { encoding: "utf-8", env: CLEAN_ENV });
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const result = runCli("job", "car_01J9X9C7", carouselDir, metricsDir, publisherResultDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /published {2}true/);
+    assert.match(result.stdout, /provider=google-drive/);
+    assert.match(result.stdout, /destination=https:\/\/drive\.google\.com/);
   });
 });
 
 test("job <carouselId> fails with CarouselNotFoundError, not a stack trace, for an unknown carousel", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
-    const result = runCli("job", "car_doesnotexist0000", carouselDir, metricsDir);
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("job", "car_doesnotexist0000", carouselDir, metricsDir, publisherResultDir);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /CarouselNotFoundError/);
     assert.doesNotMatch(result.stderr, /at file:\/\//);
@@ -125,8 +172,18 @@ test("job <carouselId> fails with CarouselNotFoundError, not a stack trace, for 
 });
 
 test("missing arguments print usage and exit non-zero, for every subcommand", () => {
-  withTempDirs(({ carouselDir }) => {
-    for (const args of [["dashboard"], ["dashboard", carouselDir], ["health"], ["jobs"], ["activity"], ["job"], ["job", "car_x"]]) {
+  withTempDirs(({ carouselDir, metricsDir }) => {
+    for (const args of [
+      ["dashboard"],
+      ["dashboard", carouselDir],
+      ["dashboard", carouselDir, metricsDir],
+      ["health"],
+      ["jobs"],
+      ["activity"],
+      ["job"],
+      ["job", "car_x"],
+      ["job", "car_x", carouselDir, metricsDir],
+    ]) {
       const result = runCli(...args);
       assert.notEqual(result.status, 0, `expected non-zero exit for args: ${JSON.stringify(args)}`);
       assert.match(result.stderr, /Usage:/);
@@ -135,8 +192,8 @@ test("missing arguments print usage and exit non-zero, for every subcommand", ()
 });
 
 test("an unknown subcommand prints usage and exits non-zero", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
-    const result = runCli("not-a-real-command", carouselDir, metricsDir);
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("not-a-real-command", carouselDir, metricsDir, publisherResultDir);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Usage:/);
   });
@@ -144,17 +201,17 @@ test("an unknown subcommand prints usage and exits non-zero", () => {
 
 // --- read-only guarantees at the CLI level ----------------------------------
 
-test("running every subcommand never modifies the carousel or metrics store directories on disk", () => {
-  withTempDirs(({ carouselDir, metricsDir }) => {
+test("running every subcommand never modifies the carousel, metrics, or publisher-result store directories on disk", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
     runCarouselCli("save", FIXTURE_PATH, carouselDir);
     const beforeFiles = readdirSync(carouselDir).sort();
     const beforeContent = readFileSync(path.join(carouselDir, beforeFiles[0]), "utf-8");
 
-    runCli("dashboard", carouselDir, metricsDir);
-    runCli("health", carouselDir, metricsDir);
-    runCli("jobs", carouselDir, metricsDir);
-    runCli("activity", carouselDir, metricsDir);
-    runCli("job", "car_01J9X9C7", carouselDir, metricsDir);
+    runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
+    runCli("health", carouselDir, metricsDir, publisherResultDir);
+    runCli("jobs", carouselDir, metricsDir, publisherResultDir);
+    runCli("activity", carouselDir, metricsDir, publisherResultDir);
+    runCli("job", "car_01J9X9C7", carouselDir, metricsDir, publisherResultDir);
 
     const afterFiles = readdirSync(carouselDir).sort();
     const afterContent = readFileSync(path.join(carouselDir, afterFiles[0]), "utf-8");
@@ -162,5 +219,6 @@ test("running every subcommand never modifies the carousel or metrics store dire
     assert.deepEqual(afterFiles, beforeFiles, "no files were created or removed by any Control Centre subcommand");
     assert.equal(afterContent, beforeContent, "the stored carousel's bytes are unchanged");
     assert.equal(existsSync(metricsDir), false, "metrics store directory was never created since it was never written to");
+    assert.equal(existsSync(publisherResultDir), false, "publisher result store directory was never created since it was never written to");
   });
 });

@@ -15,7 +15,8 @@
     "content_request": "1.0",
     "content_asset": "1.0",
     "production_metrics": "1.0",
-    "control_centre": "1.0"
+    "control_centre": "1.0",
+    "publisher_result": "1.0"
   },
   "prompt_version": "carousel-copy.v1"
 }

@@ -42,9 +42,15 @@ const SCHEMA_FILES = {
   contentAsset: "content-asset.schema.json",
   // DC-003-I023 — the production cost-accounting/telemetry record.
   productionMetrics: "production-metrics.schema.json",
+  // DC-003-I025 — the authoritative local record of one successful
+  // publish. Must be registered BEFORE controlCentre below, since
+  // control-centre.schema.json $refs it by $id (DC-003-I025 extends the
+  // Control Centre's own jobDetail.publishing to embed it).
+  publisherResult: "publisher-result.schema.json",
   // DC-003-I024 — the Control Centre's in-memory read model. Must be
-  // compiled AFTER finishedCarousel/productionMetrics above (object key
-  // order = compile order in validator.mjs) since it $refs both by $id.
+  // compiled AFTER finishedCarousel/productionMetrics/publisherResult
+  // above (object key order = compile order in validator.mjs) since it
+  // $refs all three by $id.
   controlCentre: "control-centre.schema.json",
 };
 

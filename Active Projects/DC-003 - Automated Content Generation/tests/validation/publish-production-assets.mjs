@@ -3,11 +3,17 @@
 // (no network, no credentials needed) — pass --live to publish for real.
 //
 // Usage:
-//   node tests/validation/publish-production-assets.mjs <assetPackagePath> [--live] [--replace] [--live-max-attempts=N]
-//   or: npm run publish:assets -- <assetPackagePath> [--live] [--replace]
+//   node tests/validation/publish-production-assets.mjs <assetPackagePath> [publisherResultStoreDirectory] [--live] [--replace] [--live-max-attempts=N]
+//   or: npm run publish:assets -- <assetPackagePath> [publisherResultStoreDirectory] [--live] [--replace]
 //
 // I022 does not generate assets and does not call I021 — assetPackagePath
 // must already exist (the output of a prior `npm run export:assets` run).
+//
+// DC-003-I025 — `publisherResultStoreDirectory` is optional and additive.
+// When supplied, one Publisher Result is recorded there immediately after
+// a successful publish (see publisher-result-store.mjs) — the upload
+// itself behaves identically either way. Omit it to preserve this CLI's
+// original pre-I025 behaviour exactly.
 //
 // --live requires GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET,
 // GOOGLE_DRIVE_REFRESH_TOKEN, and GOOGLE_DRIVE_ROOT_FOLDER_ID to be set in
@@ -44,18 +50,29 @@ import {
   DuplicatePackageError,
   PublisherUploadError,
 } from "../../src/production-asset-publisher-errors.mjs";
+import { createLocalJsonPublisherResultStoreAdapter } from "../../src/local-json-publisher-result-store-adapter.mjs";
+import { createPublisherResultStore } from "../../src/publisher-result-store.mjs";
+import {
+  InvalidPublisherResultStoreAdapterError,
+  InvalidPublisherResultInputError,
+  PublisherResultValidationError,
+  PublisherResultAlreadyExistsError,
+  CorruptedPublisherResultError,
+  PublisherResultPersistenceError,
+} from "../../src/publisher-result-errors.mjs";
 
 const rawArgs = process.argv.slice(2);
 const isLive = rawArgs.includes("--live");
 const replace = rawArgs.includes("--replace");
 const liveMaxAttemptsArg = rawArgs.find((arg) => arg.startsWith("--live-max-attempts="));
 const liveMaxAttemptsValue = liveMaxAttemptsArg ? liveMaxAttemptsArg.split("=")[1] : undefined;
-const [assetPackagePath] = rawArgs.filter((arg) => !arg.startsWith("--"));
+const [assetPackagePath, publisherResultStoreDirectory] = rawArgs.filter((arg) => !arg.startsWith("--"));
 
 function usageAndExit() {
-  console.error("Usage: node tests/validation/publish-production-assets.mjs <assetPackagePath> [--live] [--replace] [--live-max-attempts=N]");
+  console.error("Usage: node tests/validation/publish-production-assets.mjs <assetPackagePath> [publisherResultStoreDirectory] [--live] [--replace] [--live-max-attempts=N]");
   console.error("Example (mock, safe anytime): node tests/validation/publish-production-assets.mjs /exports/car_9c026a104e3745c3");
-  console.error("Example (LIVE):                node tests/validation/publish-production-assets.mjs /exports/car_9c026a104e3745c3 --live");
+  console.error("Example (mock, recording a Publisher Result): node tests/validation/publish-production-assets.mjs /exports/car_9c026a104e3745c3 /publisher-results");
+  console.error("Example (LIVE):                node tests/validation/publish-production-assets.mjs /exports/car_9c026a104e3745c3 /publisher-results --live");
   process.exit(1);
 }
 
@@ -90,7 +107,11 @@ try {
     adapter = createMockPublisherAdapter();
   }
 
-  const result = await executeProductionAssetPublish(assetPackagePath, { adapter, replace, maxAttempts });
+  const publisherResultStore = publisherResultStoreDirectory
+    ? createPublisherResultStore({ adapter: createLocalJsonPublisherResultStoreAdapter({ storageDir: publisherResultStoreDirectory }) })
+    : undefined;
+
+  const result = await executeProductionAssetPublish(assetPackagePath, { adapter, replace, maxAttempts, publisherResultStore });
 
   console.log("Publish complete");
   console.log(`  status:          ${result.status}`);
@@ -99,6 +120,11 @@ try {
   console.log(`  folder ID:       ${result.folderId}`);
   console.log(`  folder URL:      ${result.folderUrl}`);
   console.log(`  files uploaded:  ${result.filesUploaded}`);
+  console.log(
+    publisherResultStoreDirectory
+      ? `  publisher result: recorded at ${publisherResultStoreDirectory}`
+      : "  publisher result: not recorded (no publisherResultStoreDirectory supplied)"
+  );
 
   process.exit(0);
 } catch (error) {
@@ -111,7 +137,13 @@ try {
     error instanceof PublisherTimeoutError ||
     error instanceof PublisherRateLimitError ||
     error instanceof DuplicatePackageError ||
-    error instanceof PublisherUploadError
+    error instanceof PublisherUploadError ||
+    error instanceof InvalidPublisherResultStoreAdapterError ||
+    error instanceof InvalidPublisherResultInputError ||
+    error instanceof PublisherResultValidationError ||
+    error instanceof PublisherResultAlreadyExistsError ||
+    error instanceof CorruptedPublisherResultError ||
+    error instanceof PublisherResultPersistenceError
   ) {
     console.error(`FAIL  ${error.name}`);
     console.error(`  ${error.message}`);

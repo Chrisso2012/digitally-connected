@@ -1,22 +1,27 @@
-// DC-003-I024 — CLI for the Production Control Centre. The primary
-// deliverable of this milestone: a read-only terminal console answering
-// "what is my AI workforce doing?" by assembling information already
-// stored by the Finished Carousel Store (I015) and Production Metrics
-// Store (I023), plus (optionally) the Production Asset Export (I021)
-// directory convention. No network calls, no writes of any kind — every
-// subcommand below only ever calls createControlCentreService()'s own
-// read-only getOverview()/getJobDetail().
+// DC-003-I024, extended by DC-003-I025 — CLI for the Production Control
+// Centre. The primary deliverable of I024: a read-only terminal console
+// answering "what is my AI workforce doing?" by assembling information
+// already stored by the Finished Carousel Store (I015), Production
+// Metrics Store (I023), and Publisher Result Store (I025), plus
+// (optionally) the Production Asset Export (I021) directory convention.
+// No network calls, no writes of any kind — every subcommand below only
+// ever calls createControlCentreService()'s own read-only
+// getOverview()/getJobDetail().
 //
 // Usage:
-//   node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
-//   node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
-//   node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
-//   node tests/validation/control-centre.mjs activity  <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
-//   node tests/validation/control-centre.mjs job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
+//   node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
+//   node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
+//   node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
+//   node tests/validation/control-centre.mjs activity  <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
+//   node tests/validation/control-centre.mjs job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
 //
-//   or: npm run control-centre -- dashboard <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]
+//   or: npm run control-centre -- dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
 //
-// `exportsRootDir` is always optional — when omitted, every export signal
+// DC-003-I025 — `publisherResultStoreDirectory` is now a required
+// argument (a breaking change from I024's own original 2-argument
+// signature, made deliberately: publication evidence is this milestone's
+// whole purpose, so unlike `exportsRootDir` it is never optional).
+// `exportsRootDir` remains optional — when omitted, every export signal
 // is honestly reported as "unknown" rather than guessed (see README
 // "Production Control Centre (DC-003-I024)" for why no fixed default
 // export location exists anywhere in this repository's config).
@@ -36,6 +41,13 @@ import {
 import { createLocalJsonProductionMetricsStoreAdapter } from "../../src/local-json-production-metrics-store-adapter.mjs";
 import { createProductionMetricsStore } from "../../src/production-metrics-store.mjs";
 import { InvalidMetricsStoreAdapterError, MetricsPersistenceError, CorruptedMetricsRecordError } from "../../src/production-metrics-errors.mjs";
+import { createLocalJsonPublisherResultStoreAdapter } from "../../src/local-json-publisher-result-store-adapter.mjs";
+import { createPublisherResultStore } from "../../src/publisher-result-store.mjs";
+import {
+  InvalidPublisherResultStoreAdapterError,
+  CorruptedPublisherResultError,
+  PublisherResultPersistenceError,
+} from "../../src/publisher-result-errors.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "../../src/control-centre-errors.mjs";
 
@@ -48,6 +60,9 @@ const KNOWN_ERRORS = [
   InvalidMetricsStoreAdapterError,
   MetricsPersistenceError,
   CorruptedMetricsRecordError,
+  InvalidPublisherResultStoreAdapterError,
+  CorruptedPublisherResultError,
+  PublisherResultPersistenceError,
   InvalidControlCentreDependenciesError,
   ControlCentreAssemblyError,
 ];
@@ -56,11 +71,11 @@ const RULE = "=".repeat(50);
 
 function usageAndExit() {
   console.error("Usage:");
-  console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]");
-  console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]");
-  console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]");
-  console.error("  node tests/validation/control-centre.mjs activity  <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]");
-  console.error("  node tests/validation/control-centre.mjs job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> [exportsRootDir]");
+  console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
+  console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
+  console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
+  console.error("  node tests/validation/control-centre.mjs activity  <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
+  console.error("  node tests/validation/control-centre.mjs job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   process.exit(1);
 }
 
@@ -81,12 +96,13 @@ function formatDuration(duration) {
 function printHealthSection(health) {
   console.log("System Health");
   console.log();
-  console.log(`  [${marker(health.anthropic.status)}] Anthropic       ${health.anthropic.detail}`);
-  console.log(`  [${marker(health.templated.status)}] Templated       ${health.templated.detail}`);
-  console.log(`  [${marker(health.export.status)}] Export          ${health.export.detail}`);
-  console.log(`  [${marker(health.google_drive.status)}] Google Drive    ${health.google_drive.detail}`);
-  console.log(`  [${marker(health.finished_carousel_store.status)}] Carousel Store  ${health.finished_carousel_store.detail}`);
-  console.log(`  [${marker(health.production_metrics_store.status)}] Metrics Store   ${health.production_metrics_store.detail}`);
+  console.log(`  [${marker(health.anthropic.status)}] Anthropic          ${health.anthropic.detail}`);
+  console.log(`  [${marker(health.templated.status)}] Templated          ${health.templated.detail}`);
+  console.log(`  [${marker(health.export.status)}] Export             ${health.export.detail}`);
+  console.log(`  [${marker(health.google_drive.status)}] Google Drive       ${health.google_drive.detail}`);
+  console.log(`  [${marker(health.finished_carousel_store.status)}] Carousel Store     ${health.finished_carousel_store.detail}`);
+  console.log(`  [${marker(health.production_metrics_store.status)}] Metrics Store      ${health.production_metrics_store.detail}`);
+  console.log(`  [${marker(health.publisher_result_store.status)}] Publisher Results  ${health.publisher_result_store.detail}`);
   console.log();
   console.log(`  Overall: ${health.overall.replace("_", " ").toUpperCase()}`);
 }
@@ -191,9 +207,14 @@ function printJobDetail(detail) {
   }
   console.log();
   console.log("Publishing");
-  console.log(`  published     ${job.publishing.published}`);
-  console.log(`  published_at  ${job.publishing.published_at ?? "n/a"}`);
-  console.log(`  note          ${job.publishing.note}`);
+  console.log(`  published  ${job.publishing.published}`);
+  if (job.publishing.publisher_results.length === 0) {
+    console.log("  no Publisher Result found for this carousel");
+  } else {
+    for (const result of job.publishing.publisher_results) {
+      console.log(`  - [${result.publisher_result_id}] provider=${result.provider} destination=${result.destination} published_at=${result.published_at}`);
+    }
+  }
   console.log();
   console.log("Metrics");
   if (!job.metrics) {
@@ -214,10 +235,11 @@ function printJobDetail(detail) {
   }
 }
 
-function buildService(carouselStoreDirectory, metricsStoreDirectory, exportsRootDir) {
+function buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir) {
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir: carouselStoreDirectory }) });
   const productionMetricsStore = createProductionMetricsStore({ adapter: createLocalJsonProductionMetricsStoreAdapter({ storageDir: metricsStoreDirectory }) });
-  return createControlCentreService({ finishedCarouselStore, productionMetricsStore, exportsRootDir: exportsRootDir ?? null });
+  const publisherResultStore = createPublisherResultStore({ adapter: createLocalJsonPublisherResultStoreAdapter({ storageDir: publisherResultStoreDirectory }) });
+  return createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, exportsRootDir: exportsRootDir ?? null });
 }
 
 const [subcommand, ...rest] = process.argv.slice(2);
@@ -225,29 +247,29 @@ if (!subcommand) usageAndExit();
 
 try {
   if (subcommand === "dashboard") {
-    const [carouselStoreDirectory, metricsStoreDirectory, exportsRootDir] = rest;
-    if (!carouselStoreDirectory || !metricsStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, exportsRootDir);
+    const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
+    if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
     printDashboard(service.getOverview());
   } else if (subcommand === "health") {
-    const [carouselStoreDirectory, metricsStoreDirectory, exportsRootDir] = rest;
-    if (!carouselStoreDirectory || !metricsStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, exportsRootDir);
+    const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
+    if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
     printHealthSection(service.getOverview().health);
   } else if (subcommand === "jobs") {
-    const [carouselStoreDirectory, metricsStoreDirectory, exportsRootDir] = rest;
-    if (!carouselStoreDirectory || !metricsStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, exportsRootDir);
+    const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
+    if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
     printRecentJobsSection(service.getOverview().recent_jobs);
   } else if (subcommand === "activity") {
-    const [carouselStoreDirectory, metricsStoreDirectory, exportsRootDir] = rest;
-    if (!carouselStoreDirectory || !metricsStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, exportsRootDir);
+    const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
+    if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
     printRecentActivitySection(service.getOverview().recent_activity);
   } else if (subcommand === "job") {
-    const [carouselId, carouselStoreDirectory, metricsStoreDirectory, exportsRootDir] = rest;
-    if (!carouselId || !carouselStoreDirectory || !metricsStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, exportsRootDir);
+    const [carouselId, carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
+    if (!carouselId || !carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
     printJobDetail(service.getJobDetail(carouselId));
   } else {
     usageAndExit();

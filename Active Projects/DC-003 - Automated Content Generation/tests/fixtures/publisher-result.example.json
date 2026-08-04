@@ -1,0 +1,12 @@
+{
+  "publisher_result_id": "pub_9c026a104e3745c3",
+  "carousel_id": "car_9c026a104e3745c3",
+  "asset_package_id": "pkg_0574c6f7c7674e50",
+  "execution_id": "exec_20260803_f828624ad5c6",
+  "provider": "google-drive",
+  "destination": "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz",
+  "published_at": "2026-08-04T01:29:37.107Z",
+  "status": "completed",
+  "provider_reference": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
+  "metadata": { "files_uploaded": 7 }
+}

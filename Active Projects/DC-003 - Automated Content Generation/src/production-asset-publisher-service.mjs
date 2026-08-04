@@ -24,11 +24,28 @@
 //      established for writing one; this service reuses that same
 //      identification rule for reading one back, rather than inventing a
 //      second concept of "package completeness."
+//
+// DC-003-I025 — Publisher Result recording (additive, optional). When
+// `dependencies.publisherResultStore` is supplied, this service builds and
+// persists one Publisher Result (see publisher-result.mjs) immediately
+// after `adapter.publishPackage()` succeeds — never before, never for a
+// failed publish. Upload behaviour itself is completely unchanged: the
+// adapter call, its arguments, and its returned result are identical
+// whether or not a store is supplied. When no store is supplied (the
+// default — matches every pre-I025 caller of this function exactly),
+// nothing is recorded, matching the I025 brief's own "do not alter upload
+// behaviour" instruction. `metadata.asset_package_id`/`execution_id` (both
+// already present on every I021-produced metadata.json — see
+// local-production-asset-export-adapter.mjs's own buildMetadata()) are
+// only required when a store is actually supplied — a caller who never
+// asked for Publisher Result recording sees no new validation failure
+// mode.
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { assertValidPublisherAdapter } from "./production-asset-publisher-adapter.mjs";
 import { InvalidAssetPackageError } from "./production-asset-publisher-errors.mjs";
+import { createPublisherResult } from "./publisher-result.mjs";
 
 const METADATA_FILENAME = "metadata.json";
 
@@ -49,18 +66,30 @@ const METADATA_FILENAME = "metadata.json";
  *   header comment for what it controls).
  * dependencies.maxAttempts — forwarded to the adapter's own
  *   publishPackage() call unchanged.
+ * dependencies.publisherResultStore — optional (DC-003-I025), a Publisher
+ *   Result Store (see publisher-result-store.mjs). When supplied, one
+ *   Publisher Result is built and saved immediately after a successful
+ *   publish — see this file's own header comment. Omitted entirely
+ *   preserves this function's pre-I025 behaviour exactly.
+ * dependencies.now / idGenerator / validator — forwarded to
+ *   createPublisherResult() unchanged, for deterministic tests. Only
+ *   meaningful when publisherResultStore is also supplied.
  *
  * Throws InvalidPublisherAdapterError immediately for a malformed
  * adapter. Throws InvalidAssetPackageError if `assetPackagePath` doesn't
  * exist, or its metadata.json is missing, unparseable, or has no
- * `carousel_id`.
+ * `carousel_id` — and, only when `publisherResultStore` is supplied, no
+ * `asset_package_id`/`execution_id` either (both always present on a
+ * genuine I021 export; this only ever fires against a malformed/hand-built
+ * metadata.json). If a Publisher Result store is supplied and its own
+ * `save()` fails, that error propagates too — the upload already
+ * genuinely succeeded, but this service does not silently swallow a lost
+ * evidence write; see this file's own header comment.
  *
  * Returns { status: "completed", publisher, packageId, folderId,
  * folderUrl, filesUploaded } — exactly the adapter's own result, passed
- * through; this service adds no fields of its own (unlike I020/I021's
- * services, which observe extra fields their own adapters don't return —
- * the Publisher Adapter interface already returns everything I022's own
- * result needs).
+ * through unchanged; recording a Publisher Result never adds a field to
+ * this return value.
  */
 export async function executeProductionAssetPublish(assetPackagePath, dependencies = {}) {
   assertValidPublisherAdapter(dependencies.adapter);
@@ -85,10 +114,35 @@ export async function executeProductionAssetPublish(assetPackagePath, dependenci
     throw new InvalidAssetPackageError(assetPackagePath, "metadata.json has no carousel_id");
   }
 
+  if (dependencies.publisherResultStore) {
+    if (typeof metadata.asset_package_id !== "string" || metadata.asset_package_id.trim() === "") {
+      throw new InvalidAssetPackageError(assetPackagePath, "metadata.json has no asset_package_id (required to record a Publisher Result)");
+    }
+    if (typeof metadata.execution_id !== "string" || metadata.execution_id.trim() === "") {
+      throw new InvalidAssetPackageError(assetPackagePath, "metadata.json has no execution_id (required to record a Publisher Result)");
+    }
+  }
+
   const result = await dependencies.adapter.publishPackage(assetPackagePath, {
     replace: dependencies.replace === true,
     maxAttempts: dependencies.maxAttempts,
   });
+
+  if (dependencies.publisherResultStore) {
+    const publisherResult = createPublisherResult(
+      {
+        carouselId: metadata.carousel_id,
+        assetPackageId: metadata.asset_package_id,
+        executionId: metadata.execution_id,
+        provider: result.publisher,
+        destination: result.folderUrl,
+        providerReference: result.folderId,
+        metadata: { files_uploaded: result.filesUploaded },
+      },
+      { now: dependencies.now, idGenerator: dependencies.idGenerator, validator: dependencies.validator, rootDir: dependencies.rootDir }
+    );
+    dependencies.publisherResultStore.save(publisherResult);
+  }
 
   return {
     status: result.status,

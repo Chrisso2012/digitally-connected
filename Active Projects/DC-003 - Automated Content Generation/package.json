@@ -27,6 +27,7 @@
     "publish:assets": "node tests/validation/publish-production-assets.mjs",
     "metrics": "node tests/validation/production-metrics.mjs",
     "control-centre": "node tests/validation/control-centre.mjs",
+    "publisher-results": "node tests/validation/publisher-results.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

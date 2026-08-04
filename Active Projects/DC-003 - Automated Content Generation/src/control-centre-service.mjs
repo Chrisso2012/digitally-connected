@@ -1,43 +1,46 @@
-// DC-003-I024 — Production Control Centre Service: the only module
-// responsible for assembling operational information. Observes the
-// existing Finished Carousel Store (I015), Production Metrics Store
-// (I023), and — only when a caller supplies one — the Production Asset
-// Export (I021) directory convention on disk. Never owns, never mutates,
-// never persists anything; every value in the returned read model already
-// exists somewhere else in the system. No network calls, no provider
-// pings — "configured" health signals read env-derived config objects
-// only (loadLlmProviderConfig/loadRendererConfig/loadGoogleDrivePublisherConfig),
+// DC-003-I024, extended by DC-003-I025 — Production Control Centre
+// Service: the only module responsible for assembling operational
+// information. Observes the existing Finished Carousel Store (I015),
+// Production Metrics Store (I023), Publisher Result Store (I025), and —
+// only when a caller supplies one — the Production Asset Export (I021)
+// directory convention on disk. Never owns, never mutates, never persists
+// anything; every value in the returned read model already exists
+// somewhere else in the system. No network calls, no provider pings —
+// "configured" health signals read env-derived config objects only
+// (loadLlmProviderConfig/loadRendererConfig/loadGoogleDrivePublisherConfig),
 // exactly the same config loaders the live CLIs already use, never a
 // fetch().
 //
-// Two genuine repository gaps this module does NOT invent around (see
-// README "Production Control Centre (DC-003-I024)" for the full account):
+// One genuine repository gap this module does NOT invent around (see
+// README "Production Control Centre (DC-003-I024)"/"Publisher Result
+// Store (DC-003-I025)" for the full account): Production Asset Export
+// (I021) has no store/query API and no fixed default destination
+// anywhere in config — every `npm run export:assets` invocation supplies
+// its own destination directory by hand. This service can only report
+// export status when the caller explicitly supplies `exportsRootDir`;
+// otherwise every export signal is honestly "unknown", never a
+// guessed/assumed "not exported".
 //
-//   1. Production Asset Export (I021) has no store/query API and no fixed
-//      default destination anywhere in config — every `npm run
-//      export:assets` invocation supplies its own destination directory by
-//      hand. This service can only report export status when the caller
-//      explicitly supplies `exportsRootDir`; otherwise every export signal
-//      is honestly "unknown", never a guessed/assumed "not exported".
-//   2. Google Drive Publisher (I022) writes no local artifact at all —
-//      uploads go straight to Drive, nothing is persisted in this
-//      repository. The only "published" signal anywhere in the schema is
-//      finished-carousel.schema.json's own `approval.published`
-//      (DC-003-I014's approval-lifecycle transition), which is a distinct,
-//      manually-triggered concept that no code in this repository ever
-//      wires to a completed I022 upload. This service surfaces that field
-//      as-is and documents the gap on every Job Detail's own `publishing`
-//      block, rather than pretending the two are connected.
+// The equivalent I024-era "published" gap is now CLOSED by I025: every
+// `published`/`publishing` value below is sourced from the Publisher
+// Result Store — the repository's own authoritative record of a
+// successful publish, written by production-asset-publisher-service.mjs
+// immediately after each real upload — never from
+// finished-carousel.schema.json's disconnected `approval.published`
+// field (that DC-003-I014 approval-lifecycle field is a distinct,
+// manually-triggered concept and is no longer consulted by this module).
 //
 // Bounded reads, not a new index: aggregate dashboard counts are computed
 // from each store's own list() (cheap summaries, already produced by
-// I015/I023). Anything that needs a FULL record (recent activity's real
-// timestamps, per-provider render health, per-job cost/duration) is only
-// fetched for a bounded "recent" window, never the whole store — the same
-// "full scan is proportional to this milestone's own scope" reasoning
-// production-metrics-store.mjs's own findByExecutionId() already applies
-// to itself. Export-directory reads reuse the exact "metadata.json
-// present + parseable + carousel_id matches" identification rule
+// I015/I023/I025). Anything that needs a FULL record (recent activity's
+// real timestamps, per-provider render health, per-job cost/duration,
+// per-job publisher results) is only fetched for a bounded "recent"
+// window, never the whole store — the same "full scan is proportional to
+// this milestone's own scope" reasoning production-metrics-store.mjs's
+// own findByExecutionId() already applies to itself (and
+// publisher-result-store.mjs's own findByCarousel()/findByExecution() now
+// mirror). Export-directory reads reuse the exact "metadata.json present
+// + parseable + carousel_id matches" identification rule
 // production-asset-publisher-service.mjs (I022) already established for
 // reading a completed export package back — not a new convention.
 
@@ -68,7 +71,7 @@ function mostRecentIso(isoStrings) {
   return present.reduce((latest, current) => (current > latest ? current : latest));
 }
 
-function assertDependencies({ finishedCarouselStore, productionMetricsStore }) {
+function assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore }) {
   if (
     !finishedCarouselStore ||
     typeof finishedCarouselStore.list !== "function" ||
@@ -86,6 +89,15 @@ function assertDependencies({ finishedCarouselStore, productionMetricsStore }) {
   ) {
     throw new InvalidControlCentreDependenciesError(
       "fields.productionMetricsStore must be a Production Metrics Store — see createProductionMetricsStore() in production-metrics-store.mjs"
+    );
+  }
+  if (
+    !publisherResultStore ||
+    typeof publisherResultStore.list !== "function" ||
+    typeof publisherResultStore.findByCarousel !== "function"
+  ) {
+    throw new InvalidControlCentreDependenciesError(
+      "fields.publisherResultStore must be a Publisher Result Store — see createPublisherResultStore() in publisher-result-store.mjs"
     );
   }
 }
@@ -137,6 +149,10 @@ function sumCost(metricsSummaries) {
  *   instance.
  * fields.productionMetricsStore — required, an I023 Production Metrics
  *   Store instance.
+ * fields.publisherResultStore — required (DC-003-I025), a Publisher
+ *   Result Store instance — see publisher-result-store.mjs. The
+ *   authoritative source for every `published`/`publishing` value this
+ *   service returns.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -154,8 +170,8 @@ function sumCost(metricsSummaries) {
  * Returns { getOverview, getJobDetail }.
  */
 export function createControlCentreService(fields = {}, options = {}) {
-  const { finishedCarouselStore, productionMetricsStore, exportsRootDir = null } = fields;
-  assertDependencies({ finishedCarouselStore, productionMetricsStore });
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore, exportsRootDir = null } = fields;
+  assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
 
   const now = options.now ?? (() => new Date().toISOString());
   const env = options.env ?? process.env;
@@ -180,6 +196,14 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  function readPublisherResultStore() {
+    try {
+      return { ok: true, summaries: publisherResultStore.list() };
+    } catch (cause) {
+      return { ok: false, summaries: [], error: cause };
+    }
+  }
+
   function findMetricsForExecution(executionId) {
     if (!isNonEmptyString(executionId)) return null;
     try {
@@ -190,12 +214,30 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  // Best-effort, mirroring findMetricsForExecution()'s own "tolerate a
+  // secondary store's own failure, never let it crash the whole read
+  // model" discipline — a Publisher Result Store hiccup degrades to "no
+  // publisher results found" rather than throwing.
+  function findPublisherResultsForCarousel(carouselId) {
+    try {
+      return publisherResultStore.findByCarousel(carouselId);
+    } catch {
+      return [];
+    }
+  }
+
   // Assembles everything both getOverview() and its own sub-sections need,
   // in one pass — a single read of each store, plus full records for a
   // bounded "recent" window only (see header comment).
   function assembleCore() {
     const carouselRead = readCarouselStore();
     const metricsRead = readMetricsStore();
+    const publisherResultRead = readPublisherResultStore();
+    // One cheap list() scan builds a membership set for O(1) "has this
+    // carousel_id been published" lookups in the dashboard/job-summary
+    // aggregations below — no per-carousel findByCarousel() call, no
+    // second index invented.
+    const publishedCarouselIds = new Set(publisherResultRead.summaries.map((s) => s.carousel_id));
 
     const sortedSummaries = [...carouselRead.summaries].sort((a, b) =>
       a.generated_at < b.generated_at ? 1 : a.generated_at > b.generated_at ? -1 : 0
@@ -224,7 +266,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       })
       .filter(Boolean);
 
-    return { carouselRead, metricsRead, sortedSummaries, recentSummaries, recentFull, metricsFull };
+    return { carouselRead, metricsRead, publisherResultRead, publishedCarouselIds, sortedSummaries, recentSummaries, recentFull, metricsFull };
   }
 
   function checkExportHealth(recentFull) {
@@ -278,27 +320,35 @@ export function createControlCentreService(fields = {}, options = {}) {
     };
   }
 
-  function checkGoogleDriveHealth() {
+  function checkGoogleDriveHealth(publisherResultSummaries) {
     const config = loadGoogleDrivePublisherConfig(env);
     const configured =
       isNonEmptyString(config.clientId) &&
       isNonEmptyString(config.clientSecret) &&
       isNonEmptyString(config.refreshToken) &&
       isNonEmptyString(config.rootFolderId);
+    // DC-003-I025 closed the gap I024 left here: `last_success_at` is now
+    // the newest Publisher Result timestamp for provider "google-drive" —
+    // real repository evidence of a completed upload, not a permanent
+    // null. Scans all Publisher Result summaries (cheap — provider/
+    // published_at are both already on the summary), not just the recent
+    // window, since this store's own list() is already a single scan.
+    const driveResults = publisherResultSummaries.filter((s) => s.provider === "google-drive");
     return {
       status: configured ? "ok" : "warning",
       detail: configured
         ? "Google Drive credentials and root folder are configured"
         : "Google Drive is not fully configured (client ID/secret, refresh token, or root folder ID missing)",
-      // No local repository evidence of a completed Drive upload exists
-      // anywhere (see module header comment, gap 2) — always null, never
-      // guessed from approval.published.
-      last_success_at: null,
+      last_success_at: mostRecentIso(driveResults.map((s) => s.published_at)),
     };
   }
 
-  function rollupOverallHealth({ finishedCarouselStoreHealth, productionMetricsStoreHealth, ...rest }) {
-    if (finishedCarouselStoreHealth.status === "warning" || productionMetricsStoreHealth.status === "warning") {
+  function rollupOverallHealth({ finishedCarouselStoreHealth, productionMetricsStoreHealth, publisherResultStoreHealth, ...rest }) {
+    if (
+      finishedCarouselStoreHealth.status === "warning" ||
+      productionMetricsStoreHealth.status === "warning" ||
+      publisherResultStoreHealth.status === "warning"
+    ) {
       return "attention_required";
     }
     if (Object.values(rest).some((check) => check.status === "warning")) {
@@ -307,7 +357,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     return "healthy";
   }
 
-  function computeHealth({ carouselRead, metricsRead, recentFull }) {
+  function computeHealth({ carouselRead, metricsRead, publisherResultRead, recentFull }) {
     const finishedCarouselStoreHealth = carouselRead.ok
       ? { status: "ok", detail: `store directory is readable (${carouselRead.summaries.length} record(s))`, last_success_at: null }
       : { status: "warning", detail: `store is not readable (${carouselRead.error.code ?? "error"})`, last_success_at: null };
@@ -316,10 +366,14 @@ export function createControlCentreService(fields = {}, options = {}) {
       ? { status: "ok", detail: `store directory is readable (${metricsRead.summaries.length} record(s))`, last_success_at: null }
       : { status: "warning", detail: `store is not readable (${metricsRead.error.code ?? "error"})`, last_success_at: null };
 
+    const publisherResultStoreHealth = publisherResultRead.ok
+      ? { status: "ok", detail: `store directory is readable (${publisherResultRead.summaries.length} record(s))`, last_success_at: null }
+      : { status: "warning", detail: `store is not readable (${publisherResultRead.error.code ?? "error"})`, last_success_at: null };
+
     const anthropic = checkAnthropicHealth(recentFull);
     const templated = checkTemplatedHealth(recentFull);
     const exportHealth = checkExportHealth(recentFull);
-    const googleDrive = checkGoogleDriveHealth();
+    const googleDrive = checkGoogleDriveHealth(publisherResultRead.summaries);
 
     return {
       anthropic,
@@ -328,18 +382,31 @@ export function createControlCentreService(fields = {}, options = {}) {
       google_drive: googleDrive,
       finished_carousel_store: finishedCarouselStoreHealth,
       production_metrics_store: productionMetricsStoreHealth,
-      overall: rollupOverallHealth({ finishedCarouselStoreHealth, productionMetricsStoreHealth, anthropic, templated, export: exportHealth, googleDrive }),
+      publisher_result_store: publisherResultStoreHealth,
+      overall: rollupOverallHealth({
+        finishedCarouselStoreHealth,
+        productionMetricsStoreHealth,
+        publisherResultStoreHealth,
+        anthropic,
+        templated,
+        export: exportHealth,
+        googleDrive,
+      }),
     };
   }
 
-  function computeDashboard({ carouselRead, metricsRead, metricsFull }) {
+  function computeDashboard({ carouselRead, metricsRead, metricsFull, publishedCarouselIds }) {
     const summaries = carouselRead.summaries;
     const completed = summaries.filter((s) => s.overall_status === "completed").length;
     const failed = summaries.filter((s) => s.overall_status === "failed").length;
     const partial = summaries.filter((s) => s.overall_status === "partial").length;
     const approved = summaries.filter((s) => s.approved === true).length;
     const rejected = summaries.filter((s) => s.rejected === true).length;
-    const published = summaries.filter((s) => s.published === true).length;
+    // DC-003-I025 — "published" now means "at least one Publisher Result
+    // exists for this carousel_id," not the disconnected
+    // approval.published summary field (still present on the summary but
+    // no longer consulted here).
+    const published = summaries.filter((s) => publishedCarouselIds.has(s.carousel_id)).length;
     const awaitingApproval = summaries.filter(
       (s) => s.overall_status === "completed" && s.approved !== true && s.rejected !== true
     ).length;
@@ -375,7 +442,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     };
   }
 
-  function computeJobSummary(summary) {
+  function computeJobSummary(summary, publishedCarouselIds) {
     const metrics = findMetricsForExecution(summary.execution_id);
     const exportInfo = readExportStatus(exportsRootDir, summary.carousel_id);
     const approvalStatus = summary.rejected ? "rejected" : summary.approved ? "approved" : "awaiting_approval";
@@ -388,7 +455,9 @@ export function createControlCentreService(fields = {}, options = {}) {
       completed_at: summary.generated_at,
       approval_status: approvalStatus,
       export_status: exportInfo === null ? "unknown" : exportInfo.exported ? "exported" : "not_exported",
-      published: summary.published === true,
+      // DC-003-I025 — sourced from the Publisher Result Store, not the
+      // disconnected approval.published summary field.
+      published: publishedCarouselIds.has(summary.carousel_id),
       estimated_cost: metrics ? { amount: metrics.costs.total, currency: metrics.costs.currency } : null,
       duration_ms: metrics ? metrics.durations_ms.total : null,
     };
@@ -422,13 +491,18 @@ export function createControlCentreService(fields = {}, options = {}) {
           detail: carousel.approval.approved_by ? `approved_by=${carousel.approval.approved_by}` : null,
         });
       }
-      if (carousel.approval?.published && carousel.approval.published_at) {
+      // DC-003-I025 — one activity entry per real Publisher Result found
+      // (a carousel can legitimately be published more than once, e.g.
+      // re-published, or to more than one provider once a non-Drive
+      // publisher exists) — sourced from the Publisher Result Store, not
+      // the disconnected approval.published field.
+      for (const publisherResult of findPublisherResultsForCarousel(carousel.carousel_id)) {
         entries.push({
-          timestamp: carousel.approval.published_at,
+          timestamp: publisherResult.published_at,
           event: "published",
           carousel_id: carousel.carousel_id,
           topic_id: carousel.topic_id,
-          detail: null,
+          detail: `provider=${publisherResult.provider}`,
         });
       }
       const exportInfo = readExportStatus(exportsRootDir, carousel.carousel_id);
@@ -471,7 +545,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       generated_at: now(),
       health: computeHealth(core),
       dashboard: computeDashboard(core),
-      recent_jobs: core.recentSummaries.slice(0, recentJobsLimit).map(computeJobSummary),
+      recent_jobs: core.recentSummaries.slice(0, recentJobsLimit).map((summary) => computeJobSummary(summary, core.publishedCarouselIds)),
       recent_activity: computeActivity(core.recentFull),
     };
 
@@ -482,9 +556,9 @@ export function createControlCentreService(fields = {}, options = {}) {
    * Assembles one carousel's full operational picture — generation,
    * rendering, and approval (embedded whole as `finished_carousel`, itself
    * re-validated against finished-carousel.schema.json), metrics (embedded
-   * whole when a matching record exists, else null), export status, and a
-   * publishing summary that explicitly documents the Google Drive gap
-   * described in this module's own header comment.
+   * whole when a matching record exists, else null), export status, and
+   * publishing (DC-003-I025 — every Publisher Result found for this
+   * carousel_id, embedded whole).
    *
    * Propagates whatever error finishedCarouselStore.get(carouselId) itself
    * throws (InvalidCarouselIdentifierError, CarouselNotFoundError,
@@ -495,6 +569,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     const finishedCarousel = finishedCarouselStore.get(carouselId);
     const metrics = findMetricsForExecution(finishedCarousel.execution_metadata.execution_id);
     const exportInfo = readExportStatus(exportsRootDir, carouselId);
+    const publisherResults = findPublisherResultsForCarousel(carouselId);
 
     const detail = {
       kind: "job_detail",
@@ -506,11 +581,8 @@ export function createControlCentreService(fields = {}, options = {}) {
         metrics,
         export: exportInfo,
         publishing: {
-          published: finishedCarousel.approval?.published === true,
-          published_at: finishedCarousel.approval?.published_at ?? null,
-          note:
-            "Reflects the DC-003-I014 approval-lifecycle publish transition, not automatic confirmation of a completed " +
-            "Google Drive upload (DC-003-I022) — no repository field currently links a Finished Carousel to a Drive publish event.",
+          published: publisherResults.length > 0,
+          publisher_results: publisherResults,
         },
       },
     };

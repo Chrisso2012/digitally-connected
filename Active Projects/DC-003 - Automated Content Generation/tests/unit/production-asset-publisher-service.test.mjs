@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { executeProductionAssetPublish } from "../../src/production-asset-publisher-service.mjs";
 import { InvalidPublisherAdapterError, InvalidAssetPackageError } from "../../src/production-asset-publisher-errors.mjs";
+import { createPublisherResultStore } from "../../src/publisher-result-store.mjs";
 
 async function withTempDir(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "dc003-publisher-service-"));
@@ -152,4 +153,111 @@ test("a truthy but non-boolean replace value is normalised to a strict boolean",
     const adapter = createFakeAdapter();
     await executeProductionAssetPublish(dir, { adapter, replace: "yes" });
     assert.equal(adapter.seen()[0].options.replace, false, "only a literal true enables replace — never a truthy string");
+  }));
+
+// --- DC-003-I025: Publisher Result recording (additive, optional) --------
+
+function createInMemoryPublisherResultAdapter() {
+  const files = new Map();
+  return {
+    name: "in-memory-publisher-result-adapter",
+    write(identifier, content) {
+      files.set(identifier, content);
+    },
+    read(identifier) {
+      if (!files.has(identifier)) {
+        const err = new Error(`ENOENT: no such file, open '/fake/${identifier}.json'`);
+        err.code = "ENOENT";
+        throw err;
+      }
+      return files.get(identifier);
+    },
+    list() {
+      return [...files.keys()];
+    },
+    exists(identifier) {
+      return files.has(identifier);
+    },
+  };
+}
+
+test("omitting publisherResultStore records nothing and behaves exactly as before I025", () =>
+  withTempDir(async (dir) => {
+    seedPackage(dir);
+    const adapter = createFakeAdapter();
+    const result = await executeProductionAssetPublish(dir, { adapter });
+    assert.deepEqual(result, {
+      status: "completed",
+      publisher: "fake-publisher",
+      packageId: "car_svctest0000001",
+      folderId: "folder_faketest0001",
+      folderUrl: "https://drive.google.com/drive/folders/folder_faketest0001",
+      filesUploaded: 7,
+    });
+  }));
+
+test("supplying publisherResultStore persists exactly one Publisher Result after a successful publish, sourced from metadata.json + the adapter's own result", () =>
+  withTempDir(async (dir) => {
+    seedPackage(dir);
+    const adapter = createFakeAdapter();
+    const publisherResultStore = createPublisherResultStore({ adapter: createInMemoryPublisherResultAdapter() });
+
+    const result = await executeProductionAssetPublish(dir, { adapter, publisherResultStore });
+
+    const stored = publisherResultStore.list();
+    assert.equal(stored.length, 1);
+    const full = publisherResultStore.get(stored[0].publisher_result_id);
+    assert.equal(full.carousel_id, "car_svctest0000001"); // from metadata.json, NOT the adapter's own packageId
+    assert.equal(full.asset_package_id, "pkg_svctest0000001");
+    assert.equal(full.execution_id, "exec_20260804_deadbeefcafe");
+    assert.equal(full.provider, "fake-publisher"); // the adapter's own result.publisher
+    assert.equal(full.destination, "https://drive.google.com/drive/folders/folder_faketest0001");
+    assert.equal(full.provider_reference, "folder_faketest0001");
+    assert.equal(full.status, "completed");
+    assert.deepEqual(full.metadata, { files_uploaded: 7 });
+
+    // Recording a Publisher Result never adds a field to the service's own
+    // return value.
+    assert.deepEqual(Object.keys(result).sort(), ["filesUploaded", "folderId", "folderUrl", "packageId", "publisher", "status"].sort());
+  }));
+
+test("a re-publish (adapter called twice) records a SECOND, independent Publisher Result — never an overwrite", () =>
+  withTempDir(async (dir) => {
+    seedPackage(dir);
+    const adapter = createFakeAdapter();
+    const publisherResultStore = createPublisherResultStore({ adapter: createInMemoryPublisherResultAdapter() });
+
+    await executeProductionAssetPublish(dir, { adapter, publisherResultStore, replace: true });
+    await executeProductionAssetPublish(dir, { adapter, publisherResultStore, replace: true });
+
+    assert.equal(publisherResultStore.list().length, 2);
+  }));
+
+test("a failed publish (adapter rejects) records nothing", () =>
+  withTempDir(async (dir) => {
+    seedPackage(dir);
+    const adapter = {
+      name: "failing-adapter",
+      async publishPackage() {
+        throw new Error("upload exploded");
+      },
+    };
+    const publisherResultStore = createPublisherResultStore({ adapter: createInMemoryPublisherResultAdapter() });
+
+    await assert.rejects(() => executeProductionAssetPublish(dir, { adapter, publisherResultStore }));
+    assert.deepEqual(publisherResultStore.list(), []);
+  }));
+
+test("requires asset_package_id/execution_id in metadata.json ONLY when publisherResultStore is supplied", () =>
+  withTempDir(async (dir) => {
+    seedPackage(dir, { asset_package_id: undefined, execution_id: undefined });
+    const adapter = createFakeAdapter();
+
+    // Without a store: the pre-I025 validation is unchanged, this succeeds.
+    const withoutStore = await executeProductionAssetPublish(dir, { adapter });
+    assert.equal(withoutStore.status, "completed");
+
+    // With a store: the new, additive validation fires before any adapter call.
+    const publisherResultStore = createPublisherResultStore({ adapter: createInMemoryPublisherResultAdapter() });
+    await assert.rejects(() => executeProductionAssetPublish(dir, { adapter, publisherResultStore }), InvalidAssetPackageError);
   }));

@@ -5,9 +5,10 @@
     "anthropic": { "status": "ok", "detail": "LLM_API_KEY is set", "last_success_at": "2026-08-03T23:38:12Z" },
     "templated": { "status": "ok", "detail": "TEMPLATED_API_KEY is set", "last_success_at": "2026-08-03T23:38:12Z" },
     "export": { "status": "ok", "detail": "exports root directory is readable", "last_success_at": "2026-08-03T23:39:01Z" },
-    "google_drive": { "status": "warning", "detail": "GOOGLE_DRIVE_REFRESH_TOKEN is not set", "last_success_at": null },
+    "google_drive": { "status": "warning", "detail": "GOOGLE_DRIVE_REFRESH_TOKEN is not set", "last_success_at": "2026-08-04T01:29:37Z" },
     "finished_carousel_store": { "status": "ok", "detail": "store directory is readable (3 record(s))", "last_success_at": null },
     "production_metrics_store": { "status": "ok", "detail": "store directory is readable (1 record(s))", "last_success_at": null },
+    "publisher_result_store": { "status": "ok", "detail": "store directory is readable (1 record(s))", "last_success_at": null },
     "overall": "warning"
   },
   "dashboard": {
@@ -18,7 +19,7 @@
     "approved": 1,
     "rejected": 0,
     "exported": 1,
-    "published": 0,
+    "published": 1,
     "today": {
       "produced_count": 1,
       "estimated_cost": { "currency": "USD", "amount": 0.3234, "records_counted": 1 }
@@ -35,12 +36,19 @@
       "completed_at": "2026-08-03T23:38:12Z",
       "approval_status": "approved",
       "export_status": "exported",
-      "published": false,
+      "published": true,
       "estimated_cost": { "amount": 0.3234, "currency": "USD" },
       "duration_ms": 33734
     }
   ],
   "recent_activity": [
+    {
+      "timestamp": "2026-08-04T01:29:37Z",
+      "event": "published",
+      "carousel_id": "car_9c026a104e3745c3",
+      "topic_id": "topic_gs01",
+      "detail": "provider=google-drive"
+    },
     {
       "timestamp": "2026-08-03T23:39:01Z",
       "event": "exported",
