@@ -215,3 +215,27 @@ export {
   SlideDownloadError,
   ExportPersistenceError,
 } from "./production-asset-export-errors.mjs";
+
+// DC-003-I022 — Production Asset Publisher: publishes an already-completed
+// I021 export package to Google Drive. Provider-independent adapter
+// interface, mirroring the same pattern as the Finished Carousel Store /
+// Renderer / LLM Provider / Production Asset Export — see "Google Drive
+// Publisher (DC-003-I022)" in the README. I022 does not generate assets
+// and does not modify I021.
+export { assertValidPublisherAdapter } from "./production-asset-publisher-adapter.mjs";
+export { createGoogleDrivePublisherAdapter } from "./google-drive-publisher-adapter.mjs";
+export { createMockPublisherAdapter } from "./production-asset-publisher-mock-adapter.mjs";
+export { loadGoogleDrivePublisherConfig, resolveLiveMaxAttempts as resolveGoogleDriveLiveMaxAttempts } from "./google-drive-publisher-config.mjs";
+export { executeProductionAssetPublish } from "./production-asset-publisher-service.mjs";
+export {
+  InvalidPublisherAdapterError,
+  InvalidAssetPackageError,
+  PublisherConfigurationError,
+  PublisherAuthenticationError,
+  PublisherTransportError,
+  PublisherTimeoutError,
+  PublisherClientError,
+  PublisherRateLimitError,
+  DuplicatePackageError,
+  PublisherUploadError,
+} from "./production-asset-publisher-errors.mjs";

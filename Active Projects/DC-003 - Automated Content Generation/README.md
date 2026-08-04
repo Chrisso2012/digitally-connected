@@ -4210,6 +4210,190 @@ reused as a precondition, not reimplemented), metadata editing,
 thumbnails, PDFs, Markdown exports, captions, reel scripts, and ZIP
 archives — PNG export plus `metadata.json` only.
 
+## Google Drive Publisher (DC-003-I022)
+
+Uploads an already-completed I021 export package (six PNGs + a
+`metadata.json`, on the local filesystem) to a configured Google Drive
+folder. **I022 does not generate assets and does not call I021** — it only
+ever publishes what a prior `npm run export:assets` run already produced.
+Built as a provider-independent adapter (mirroring the Finished Carousel
+Store / Renderer / LLM Provider / Production Asset Export pattern), not an
+n8n Google Drive node — the n8n workflow is expected to eventually call
+this module as an external process, the same way I013/I017/I020 already
+call their own CLIs, never containing the publishing logic itself.
+
+### Repository investigation (performed before implementation)
+
+- **How I021 identifies a completed package**: the presence of a
+  parseable `metadata.json` inside the export directory, naming the
+  carousel's own `carousel_id` — written *last*, only after every slide
+  succeeds (see "Atomicity, idempotency" under I021 above). I022 reuses
+  this exact same rule to *read* a package back
+  (`production-asset-publisher-service.mjs` requires `assetPackagePath`
+  to exist and its own `metadata.json` to parse and carry a
+  `carousel_id`), rather than inventing a second "is this package done"
+  concept.
+- **Existing Google Drive integration**: none found, in this repository or
+  in the n8n environment's own credential store. Checked live via the n8n
+  MCP `list_credentials` — two Google-related credentials exist ("Google
+  Sheets account", `googleSheetsOAuth2Api`; "Google Sheets account 2",
+  `googleApi`), neither confirmed to carry Drive-write scope, and neither
+  is what this module reads from regardless — every external credential
+  in this codebase, including this one, is a plain environment variable
+  read by DC-003's own config loader, never n8n's credential vault (see
+  "Configuration" below).
+- **Reusable adapter pattern**: yes — `production-asset-export-adapter.mjs`
+  (I021) was the direct model for `production-asset-publisher-adapter.mjs`:
+  same "interface file has no implementation, `assertValid*Adapter()`
+  runtime guard, one real implementation in its own file" shape.
+- **Does package metadata already identify the destination folder?**
+  Partially. `metadata.json`'s `carousel_id` supplies the *campaign
+  subfolder name* (`<root>/<carousel_id>/`, per Strategy Office's own
+  recommendation), but the Drive *root* folder is necessarily deployment
+  configuration (`GOOGLE_DRIVE_ROOT_FOLDER_ID`), not something a Finished
+  Carousel or its export could ever carry — a root folder is a
+  destination decision, not a fact about the carousel.
+- **Should the export structure be uploaded as-is or transformed?**
+  As-is. The local package is already exactly what should exist in Drive —
+  a flat folder of 6 PNGs + `metadata.json`; this milestone performs no
+  format conversion, renaming, or re-nesting (review criterion 4).
+
+### Architecture
+
+```mermaid
+flowchart LR
+    A[I021 export package\n<destination>/car_.../\n6 PNGs + metadata.json] --> B[Production Asset Publisher Service\nvalidates: package, adapter shape]
+    B --> C{Publisher Adapter\ninterface, provider-independent}
+    C --> D[Google Drive Adapter\nthis milestone's one implementation]
+    C -.future.-> E[Dropbox / OneDrive / S3\nNOT implemented in I022]
+    D --> F[Google Drive\n&lt;root&gt;/&lt;carousel_id&gt;/\n01-cover.png … 06-cta.png, metadata.json]
+```
+
+- **`src/production-asset-publisher-adapter.mjs`** — the interface only:
+  `{ name, publishPackage(assetPackagePath, options) }` plus
+  `assertValidPublisherAdapter()`. No Google-specific (or any
+  provider-specific) code lives here.
+- **`src/google-drive-publisher-adapter.mjs`** — the one implementation
+  this milestone ships: OAuth2 refresh-token authentication, locates or
+  creates the campaign folder, lists existing files for duplicate
+  detection, uploads (or, with `--replace`, updates in place) every file
+  in the package. Uses Node's built-in `fetch` — no `googleapis` SDK, no
+  new dependency, the same choice I006/I019/I021 already made.
+- **`src/production-asset-publisher-mock-adapter.mjs`** — the adapter the
+  CLI's default (non-`--live`) mode and every automated test use; never
+  touches the network or the local filesystem.
+- **`src/production-asset-publisher-service.mjs`** — validates the
+  adapter shape and that `assetPackagePath` is a genuinely completed I021
+  package, then delegates.
+- **`src/google-drive-publisher-config.mjs`** — environment-variable
+  configuration, mirroring `llm-provider-config.mjs`/`renderer-config.mjs`
+  exactly, including their own post-incident
+  `resolveLiveMaxAttempts()` safety primitive — applied here
+  *proactively*, before I022 has ever made a single live call, rather
+  than waiting for its own incident the way I006 originally did.
+
+### Configuration
+
+```bash
+GOOGLE_DRIVE_CLIENT_ID=
+GOOGLE_DRIVE_CLIENT_SECRET=
+GOOGLE_DRIVE_REFRESH_TOKEN=
+GOOGLE_DRIVE_ROOT_FOLDER_ID=
+GOOGLE_DRIVE_API_BASE_URL=https://www.googleapis.com
+GOOGLE_DRIVE_TOKEN_URL=https://oauth2.googleapis.com/token
+GOOGLE_DRIVE_REQUEST_TIMEOUT_MS=15000
+GOOGLE_DRIVE_MAX_ATTEMPTS=3
+```
+
+No folder ID, credential, or account name is hardcoded anywhere in source
+— all eight values are read from the environment by
+`loadGoogleDrivePublisherConfig()`, matching `config/env.example`'s
+existing pattern for `LLM_*`/`TEMPLATED_*`. `--live` fails fast if
+`GOOGLE_DRIVE_CLIENT_ID`/`_CLIENT_SECRET`/`_REFRESH_TOKEN`/`_ROOT_FOLDER_ID`
+are not all set, before any request of any kind is made.
+
+### Duplicate handling
+
+Per Strategy Office's own recommendation ("fail by default unless
+`--replace` is supplied"): before uploading, the adapter lists the
+campaign folder's existing files. If any of the package's own seven
+filenames already exist there, it throws `DuplicatePackageError`
+immediately — no upload of any kind is attempted, and nothing in Drive is
+touched. With `--replace`, a matching existing file is updated **in
+place** (its Drive file ID is reused; content changes, the file is never
+deleted-and-recreated) — never a silent overwrite without the flag, never
+an automatic "(2)" rename.
+
+### Folder structure
+
+```
+<GOOGLE_DRIVE_ROOT_FOLDER_ID>/
+  <carousel_id>/
+    01-cover.png
+    02-content.png
+    03-statistic.png
+    04-quote.png
+    05-infographic.png
+    06-cta.png
+    metadata.json
+```
+
+Matches I021's own local structure exactly — deterministic `carousel_id`
+naming, no human-readable folder names yet. Per the brief's own note: a
+human-readable name (the article title) belongs to a future **Content
+Lineage** enhancement, once Finished Carousel Objects legitimately carry a
+source asset ID and title (see "Article title" under I021 above for why
+that data isn't available today).
+
+### CLI
+
+```bash
+npm run publish:assets -- <assetPackagePath> [--live] [--replace] [--live-max-attempts=N]
+```
+
+Mock by default (no network, no credentials needed) — loads the package
+via `production-asset-publisher-service.mjs`, publishes through
+`production-asset-publisher-mock-adapter.mjs`, prints a concise summary
+(status, publisher, package ID, folder ID, folder URL, files uploaded).
+`--live` switches to the real Google Drive adapter; `--replace` is
+forwarded to whichever adapter is active. Safe, structured errors only on
+failure — a `PublisherClientError`'s diagnostic (status/reason/sanitised
+message, mirroring I019.1's own `LlmClientError.diagnostic`) is the most
+detail ever shown; never a raw response body, an access token, a client
+secret, a refresh token, or a stack trace for an expected failure mode.
+
+### Google Drive Publisher — Live Verification Gate (not yet exercised)
+
+**No live Google Drive request has been made as of this milestone's
+delivery**, per the brief's own closing instruction. Before any `--live`
+run:
+
+1. All automated tests pass (confirmed — 795/795, see "Testing" below).
+2. Fixture validation passes (confirmed — `npm run validate`).
+3. `GOOGLE_DRIVE_CLIENT_ID`/`_CLIENT_SECRET`/`_REFRESH_TOKEN`/`_ROOT_FOLDER_ID`
+   are confirmed present locally, by name only, never by value.
+4. The exact package being published, the target root folder, and the
+   attempt ceiling (always 1 per file, via `resolveLiveMaxAttempts()`) are
+   reported.
+5. Strategy Office provides fresh approval.
+
+Like DC-003-I006's `renderer-transport-http.mjs` before its own first live
+call, the Drive API request/response shapes in
+`google-drive-publisher-adapter.mjs` are built directly from Google's
+published API reference, not yet exercised against a real request — a
+shape mismatch, if one exists, would only surface on that first live
+attempt, exactly as happened for Templated. `PublisherClientError`'s safe
+diagnostic exists specifically so that, unlike I019's own first live
+attempt, a rejection would be diagnosable immediately rather than only
+after a dedicated corrective milestone.
+
+### Explicitly out of scope (I022)
+
+Approval workflow (I014 reused as a precondition only), production
+generation, rendering, metadata editing, Google Docs, Google Sheets, ZIP
+archives, publishing scheduling, social-platform posting, Drive
+permissions management, and cost accounting.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -4577,7 +4761,8 @@ milestone).
 | Safe LLM error diagnostics (HTTP 400/4xx) | Done (DC-003-I019.1) — `src/llm-error-diagnostics.mjs`; see "Safe LLM Error Diagnostics (DC-003-I019.1)"; status/errorType/requestId/sanitised-message only, never the raw body/API key/prompt/tool content/stack trace |
 | Real-provider generation CLI check | Done (DC-003-I019) — `npm run generate:live` (mock by default) / `-- --live` (requires `LLM_API_KEY`, single-attempt by default); rendering stays mock-only always, no `--live-render` flag exists |
 | Production Asset Export (local PNG + metadata.json export, provider-independent adapter) | Done (DC-003-I021) — `src/production-asset-export-service.mjs`, `src/local-production-asset-export-adapter.mjs`, `src/production-asset-export-adapter.mjs`, CLI `npm run export:assets`; see "Production Asset Export (DC-003-I021)"; live-verified against a real rendered carousel (real PNG downloads, real idempotent re-export); Google Drive/Dropbox/OneDrive/S3 explicitly not implemented |
-| Unit test suite | Done — 757 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Google Drive Publisher (uploads an I021 package to Drive, provider-independent adapter) | Done (DC-003-I022) — `src/production-asset-publisher-service.mjs`, `src/google-drive-publisher-adapter.mjs`, `src/production-asset-publisher-adapter.mjs`, `src/production-asset-publisher-mock-adapter.mjs`, `src/google-drive-publisher-config.mjs`, CLI `npm run publish:assets`; see "Google Drive Publisher (DC-003-I022)"; I021 unchanged; mock remains the default without `--live`; **not yet exercised live — pending fresh Strategy Office approval**; Dropbox/OneDrive/S3 explicitly not implemented |
+| Unit test suite | Done — 795 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |
