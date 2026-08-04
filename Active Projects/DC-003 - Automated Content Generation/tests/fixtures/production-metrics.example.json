@@ -1,0 +1,34 @@
+{
+  "metrics_id": "met_01J9X9EXAMPLE001",
+  "request_id": "req_01J9X9EXAMPLE001",
+  "execution_id": "exec_20260804_9f3a2e1c8b4d",
+  "carousel_content_id": "cc_01J9X9A1",
+  "carousel_id": "car_01J9X9C7",
+  "recorded_at": "2026-08-04T12:00:00Z",
+  "status": "completed",
+  "requests": {
+    "anthropic": 1,
+    "templated": 6,
+    "google_drive": 0
+  },
+  "durations_ms": {
+    "generation": null,
+    "render": 20570,
+    "export": null,
+    "publish": null,
+    "total": 33734
+  },
+  "outputs": {
+    "slides_generated": 6,
+    "slides_rendered": 6,
+    "files_exported": 7,
+    "files_published": 0
+  },
+  "costs": {
+    "currency": "USD",
+    "anthropic": { "amount": 0.0234, "calculation_type": "estimated" },
+    "templated": { "amount": 0.3, "calculation_type": "estimated" },
+    "google_drive": { "amount": 0, "calculation_type": "unavailable" },
+    "total": 0.3234
+  }
+}

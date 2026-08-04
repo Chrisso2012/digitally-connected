@@ -35,7 +35,8 @@
     "execution": "exec_",
     "execution_record": "rec_",
     "content_request": "req_",
-    "asset_package": "pkg_"
+    "asset_package": "pkg_",
+    "production_metrics": "met_"
   },
   "content_request_source_types": ["article"],
   "content_request_design_count": 6

@@ -4394,6 +4394,277 @@ generation, rendering, metadata editing, Google Docs, Google Sheets, ZIP
 archives, publishing scheduling, social-platform posting, Drive
 permissions management, and cost accounting.
 
+## Production Metrics & Cost Accounting (DC-003-I023)
+
+The accounting and telemetry layer for production: for each completed (or
+failed) production run, builds one validated, immutable Production
+Metrics Record — which execution ran, how many external requests were
+made, how long it took (where tracked), what it produced, and an
+**estimated** cost. **This is not a dashboard**, and it never claims to
+answer "what did the provider invoice us" — see the brief's own closing
+instruction, quoted directly:
+
+> It must not claim to answer: What did the provider invoice us?
+
+### Architecture
+
+```mermaid
+flowchart LR
+    A[Production Run Result\nI020, required] --> D[Production Metrics Collector\nobserves, never orchestrates]
+    B[Export Result\nI021, optional] --> D
+    C[Publish Result\nI022, optional] --> D
+    E[Anthropic usage\nvia onUsage hook, optional] --> D
+    D --> F[Cost Calculator\npure functions, no HTTP]
+    F --> D
+    D --> G[Production Metrics Record\nschema-validated, immutable]
+    G --> H[Production Metrics Store\nlocal JSON, mirrors I015]
+    H -.future.-> I[Production Dashboard\nNOT built in I023]
+```
+
+The Metrics Collector observes; it does not own generation, rendering,
+exporting, or publishing, and it never calls I004/I006/I019/I021/I022
+itself — it only ever reads already-completed result objects (or the
+equivalent JSON files) a caller supplies. **I021 and I022 are completely
+unchanged** — confirmed by diff: this milestone added no lines to either.
+
+- **`src/production-metrics.mjs`** — the domain object factory: assembles,
+  validates, and deep-freezes one record. No filesystem APIs, no
+  provider-specific SDKs.
+- **`src/production-cost-config.mjs`** — environment-variable pricing
+  rates, mirroring `llm-provider-config.mjs`/`renderer-config.mjs`/
+  `google-drive-publisher-config.mjs` exactly. Pricing is configuration,
+  never hardcoded permanent truth.
+- **`src/production-cost-calculator.mjs`** — pure calculation functions
+  only; no HTTP, no configuration reads once a resolved config is
+  supplied.
+- **`src/production-metrics-collector.mjs`** — assembles one record from
+  already-completed evidence; tolerates optional downstream stages that
+  haven't run yet.
+- **`src/production-metrics-store-adapter.mjs`** /
+  **`src/local-json-production-metrics-store-adapter.mjs`** /
+  **`src/production-metrics-store.mjs`** — the same Storage
+  Adapter/domain-layer split I015's Finished Carousel Store already
+  established, applied to a genuinely separate store for a genuinely
+  separate object; I015's own files are untouched.
+
+### Repository investigation (performed before implementation)
+
+1. **Timing data already available**: `execution_metadata.render_duration_ms`
+   / `metadata.total_duration_ms` on a Finished Carousel Object (render
+   time only); `duration` on I020's own Production Run Result (total
+   wall-clock time for the whole production run — generation + mapping +
+   render + build combined, not broken out per stage). **I021's Export
+   Result and I022's Publish Result carry no timing data of their own at
+   all** — confirmed by inspecting both services directly, not assumed.
+   Carousel Content Object has never tracked its own generation duration
+   either. Net effect: only `durations_ms.total` is populated by default
+   today; `generation`/`render`/`export`/`publish` are `null` unless a
+   caller supplies them explicitly (see "Durations" below).
+2. **Anthropic token usage**: returned by the real API (and already
+   modeled by I019's own mock transport, `usage: { input_tokens: 100,
+   output_tokens: 200 }`) but previously discarded entirely at
+   `llm-response-validator.mjs`'s own normalization boundary — the exact
+   "already returned but discarded at the transport boundary" case the
+   brief asked to check for. See "Anthropic usage capture" below for the
+   fix and why it required no public contract change.
+3. **Templated usage/billing/credit data**: none — confirmed by
+   inspecting `renderer-response-validator.mjs` and both renderer
+   transports directly. Templated cost is always an estimate from render
+   count × a configured rate.
+4. **Request counts from existing records**: derivable, with one
+   documented imprecision — see "Request counts" below.
+5. **Reusable persistence adapter**: yes, I015's own Storage
+   Adapter/domain-layer split, applied verbatim to a new store (not a
+   modification of I015's own files).
+6. **I008 Execution Ledger**: untouched. I023 has its own, completely
+   separate store; it never appends to, reads from, or otherwise touches
+   the Execution Ledger.
+
+### Anthropic usage capture
+
+The smallest safe, provider-isolated change, applied exactly where the
+brief asked: `llm-response-validator.mjs`'s `validateLlmTransportResponse()`
+now returns `{ slidesJson, usage }` instead of just `{ slidesJson }` —
+`usage` is `{ inputTokens, outputTokens, totalTokens }` (normalized from
+Anthropic's own `input_tokens`/`output_tokens`), or `null` when absent/
+malformed. `createAnthropicProvider()` (`llm-provider-anthropic.mjs`)
+gained one new, entirely optional constructor field, `onUsage: (usage) =>
+void` — called once per successful `generateCarousel()`, purely
+observational. **`generateCarousel()`'s own return value — a raw JSON
+string — is completely unchanged**, and so is `CarouselContent`'s own
+schema (`additionalProperties: false`, never touched). This is the same
+"hook, don't change the return value" technique DC-003-I020.1's
+`pipeline-stages-live.mjs` already established (`onGenerated`/
+`onSlideRendered`) to avoid altering a public domain contract — confirmed
+by re-running every existing I019 test unmodified before adding new ones;
+all passed unchanged. **No incompatibility needed to be reported**, since
+a way to preserve the data without touching any public contract existed.
+
+**A known, honestly-documented integration gap**: I020's own live CLI
+(`production-run-live.mjs`) does not yet wire `onUsage` through to persist
+token usage into its own Production Run Result output — that CLI is not
+on I023's file list, and wiring it through was judged a separate,
+narrowly-scoped follow-up rather than something to fold into an
+already-large milestone. Until that follow-up exists, a live run's
+Anthropic cost will read `calculation_type: "unavailable"` unless you
+supply token counts by hand via the metrics CLI's own
+`--anthropic-input-tokens`/`--anthropic-output-tokens` flags (see "CLI"
+below).
+
+### Actual vs. estimated costs
+
+One vocabulary, used consistently everywhere a cost is reported:
+
+| `calculation_type` | Meaning |
+|---|---|
+| `estimated` | Calculated from a configured rate and real usage/count evidence — the only classification this milestone ever produces when a calculation actually happens. |
+| `unavailable` | No usage/count evidence exists to calculate from (amount is always `0`, never a guessed placeholder). |
+| `actual` | Reserved for a future milestone that integrates real provider billing APIs. **I023 never produces this.** |
+
+A Templated or Google Drive cost of `0` from a genuine zero count (e.g.
+generation failed before any render was attempted) is still `estimated` —
+zero is real evidence, not missing evidence. Only a missing/malformed
+count or missing token usage produces `unavailable`.
+
+### Configurable pricing
+
+```bash
+ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS=3.00   # EXAMPLE value, not a current price
+ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS=15.00 # EXAMPLE value, not a current price
+TEMPLATED_COST_PER_RENDER=0.05                 # EXAMPLE value, not a current price
+GOOGLE_DRIVE_COST_PER_UPLOAD=0
+PRODUCTION_COST_CURRENCY=USD
+```
+
+Read by `loadProductionCostConfig()` — never hardcoded in source, never
+read directly by `production-cost-calculator.mjs` itself (every
+calculation function receives an already-resolved config object via an
+explicit parameter). The values above are labelled EXAMPLES precisely
+because pricing changes over time — check each provider's own current
+pricing page before using this for anything resembling a real budget.
+
+### Request counts
+
+Derived by default from the Production Run Result, under the stated
+assumption of a single-attempt live run (I020's own `maxAttempts: 1`
+live-verification rule — no retries, so "N slides rendered" reliably
+means "N Templated requests were made"):
+
+- `anthropic`: `1` if `carouselContentId` is non-null (generation
+  succeeded), else `0`.
+- `templated`: `renderedSlideCount` (correct for both a full success and
+  a partial failure — the count reflects exactly how many slides
+  completed before any failure stopped the run).
+- `google_drive`: the Publish Result's own `filesUploaded`, or `0` if no
+  Publish Result was supplied.
+
+**One documented imprecision**: for a failed generation, the Production
+Run Result cannot distinguish "Anthropic was never called" from
+"Anthropic was called and rejected the request" — both leave
+`carouselContentId` null. The default conservatively reports `0` rather
+than guessing. Supply `requests.anthropic` explicitly to the collector
+when this distinction matters for cost accounting.
+
+### Durations
+
+| Field | Available today? |
+|---|---|
+| `total` | Yes — I020's own `duration` (whole production run, generation through build). |
+| `generation` | No — not tracked in isolation anywhere in the pipeline. |
+| `render` | No — Finished Carousel's own `render_duration_ms` exists but isn't reachable from a Production Run Result alone (a Production Run Result deliberately doesn't embed the whole Finished Carousel object, only its ID). |
+| `export` | No — I021's own result carries no timing. |
+| `publish` | No — I022's own result carries no timing. |
+
+`null` means genuinely untracked — never a guessed or zero-filled value.
+The collector accepts an optional `durationsMs` override for any caller
+that has separately obtained one of these (e.g. by loading the Finished
+Carousel via the unmodified I015 store and reading its own
+`render_duration_ms`).
+
+### Failed-run accounting
+
+A failed production run still produces a record — `status: "failed"`,
+`carousel_content_id`/`carousel_id` both `null` when the run never
+reached that point (the schema's own `oneOf` only requires them for a
+`completed` record), request counts and cost already incurred still
+recorded from whatever evidence exists (e.g. 2 Templated requests and
+their cost, if 2 slides rendered before a 3rd failed), and
+`files_exported`/`files_published` both `0` unless export/publish
+genuinely occurred. **Never a fake zero-cost success record.**
+
+### Storage structure
+
+```
+<metricsStoreDirectory>/
+  <metrics_id>.json
+```
+
+Same atomic-write strategy as I015 (temp file → read-back verify →
+rename), same "storageDir is always an explicit argument, never a
+default" rule, same path-traversal protection (`metrics_id` must match
+`^met_[A-Za-z0-9]+$` before it's ever used to build a file path). No
+`replace()`/`update()` — a Production Metrics Record is a point-in-time
+snapshot, never intentionally revised in place; `save()` rejects a
+duplicate `metrics_id` outright. Generated metrics files are not
+committed to Git.
+
+### CLI
+
+```bash
+npm run metrics -- record <productionResultPath> <metricsStoreDirectory> [--export=<path>] [--publish=<path>] [--anthropic-input-tokens=N] [--anthropic-output-tokens=N]
+npm run metrics -- get <metricsId> <metricsStoreDirectory>
+npm run metrics -- list <metricsStoreDirectory>
+npm run metrics -- find-execution <executionId> <metricsStoreDirectory>
+```
+
+`record` never calls a provider — it only reads already-written JSON
+files (a Production Run Result is required; `--export`/`--publish` are
+optional additional evidence) and writes one metrics record. Safe,
+structured errors only; never a raw filesystem path, stack trace, API
+key, or provider response body.
+
+### Precision and currency
+
+One configured currency per record (`PRODUCTION_COST_CURRENCY`, default
+`USD`). Every per-provider `amount` is rounded to 6 decimal places at the
+moment it's calculated; `total` is the sum of those three already-rounded
+amounts, rounded again to 6 decimals. Six decimal places (a millionth of
+a currency unit) is precise enough that this introduces no practically
+meaningful compounding error — deliberately not the coarser "round to
+cents per line item, then sum" pattern, which would lose real precision
+on sub-cent per-token LLM costs.
+
+### Relationship to the future Production Dashboard
+
+I023 is the data layer a future dashboard would read from — the
+`production-metrics/` directory of validated JSON records, queryable via
+`findByExecutionId()`/`list()`. No graphical interface, no charts, no
+aggregation-over-time reporting exists yet; that's explicitly out of
+scope here, per the brief's own framing: "Build the smallest honest
+metrics system that future dashboards can read."
+
+### Existing modules confirmed unchanged
+
+Execution Ledger, Pipeline Orchestrator, Invocation Adapter, n8n Adapter,
+Production Workflow, Content Request Service, Finished Carousel Store,
+Production Asset Export, Google Drive Publisher, and the Approval
+workflow — none received any code changes for I023. The only pre-existing
+files touched are the two I019 modules for Anthropic usage capture
+(additive only, see above) and the standard schema-registration
+touchpoints (`schema-registry.mjs`, `config/versions.json`,
+`config/constants.json`, `src/integrity-checks.mjs`,
+`tests/validation/validate.mjs`, `tests/unit/validator.test.mjs`) every
+new schema in this codebase already requires.
+
+### Explicitly out of scope (I023)
+
+A dashboard or GUI, provider billing API integration, Anthropic/Templated/
+Google invoice reconciliation, monthly budgets or alerts, client billing,
+profit-margin calculations, multi-currency conversion, exchange-rate
+fetching, cost forecasting, cost-based workflow blocking, n8n workflow
+changes, publishing automation, Content Lineage, and Google Sheets
+reporting.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -4762,7 +5033,8 @@ milestone).
 | Real-provider generation CLI check | Done (DC-003-I019) — `npm run generate:live` (mock by default) / `-- --live` (requires `LLM_API_KEY`, single-attempt by default); rendering stays mock-only always, no `--live-render` flag exists |
 | Production Asset Export (local PNG + metadata.json export, provider-independent adapter) | Done (DC-003-I021) — `src/production-asset-export-service.mjs`, `src/local-production-asset-export-adapter.mjs`, `src/production-asset-export-adapter.mjs`, CLI `npm run export:assets`; see "Production Asset Export (DC-003-I021)"; live-verified against a real rendered carousel (real PNG downloads, real idempotent re-export); Google Drive/Dropbox/OneDrive/S3 explicitly not implemented |
 | Google Drive Publisher (uploads an I021 package to Drive, provider-independent adapter) | Done (DC-003-I022) — `src/production-asset-publisher-service.mjs`, `src/google-drive-publisher-adapter.mjs`, `src/production-asset-publisher-adapter.mjs`, `src/production-asset-publisher-mock-adapter.mjs`, `src/google-drive-publisher-config.mjs`, CLI `npm run publish:assets`; see "Google Drive Publisher (DC-003-I022)"; I021 unchanged; mock remains the default without `--live`; **not yet exercised live — pending fresh Strategy Office approval**; Dropbox/OneDrive/S3 explicitly not implemented |
-| Unit test suite | Done — 795 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Production Metrics & Cost Accounting (telemetry + estimated cost per production run) | Done (DC-003-I023) — `src/production-metrics.mjs`, `src/production-metrics-collector.mjs`, `src/production-cost-calculator.mjs`, `src/production-cost-config.mjs`, `src/production-metrics-store.mjs` + adapter files, CLI `npm run metrics`; see "Production Metrics & Cost Accounting (DC-003-I023)"; I021/I022 unchanged; Anthropic usage now preserved via `onUsage` hook (I019 additive change, no public contract altered); live-verified against the real I020 production run's own historical data; no dashboard, no real provider billing integration |
+| Unit test suite | Done — 891 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files)); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

@@ -58,6 +58,17 @@ const DEFAULT_MAX_TOKENS = 4096;
  * fields.maxTokens — default 4096.
  * fields.timeoutMs — per-call timeout passed to the transport, default
  *   15000.
+ * fields.onUsage — DC-003-I023, optional, `(usage) => void`. Called once
+ *   per successful generateCarousel() with `{ inputTokens, outputTokens,
+ *   totalTokens }` (or `null` if the response carried no usable usage
+ *   data) — a purely observational side-channel for
+ *   production-metrics-collector.mjs, exactly the same "hook, don't
+ *   change the return value" technique DC-003-I020.1's
+ *   pipeline-stages-live.mjs already established (onGenerated/
+ *   onSlideRendered) to avoid touching a public domain contract.
+ *   generateCarousel()'s own return value is completely unaffected by
+ *   this option — it is never called for a failed generation, and never
+ *   changes what's returned on success.
  */
 export function createAnthropicProvider(fields = {}) {
   if (!fields.transport) {
@@ -98,7 +109,8 @@ export function createAnthropicProvider(fields = {}) {
     async generateCarousel(prompt) {
       const request = { model, prompt, temperature, maxTokens, toolName: TOOL_NAME };
       const rawResponse = await transport.send(request, { timeoutMs });
-      const { slidesJson } = validateLlmTransportResponse(rawResponse, TOOL_NAME);
+      const { slidesJson, usage } = validateLlmTransportResponse(rawResponse, TOOL_NAME);
+      fields.onUsage?.(usage);
       return slidesJson;
     },
   };

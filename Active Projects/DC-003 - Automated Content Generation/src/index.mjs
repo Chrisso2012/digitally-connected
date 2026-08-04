@@ -239,3 +239,27 @@ export {
   DuplicatePackageError,
   PublisherUploadError,
 } from "./production-asset-publisher-errors.mjs";
+
+// DC-003-I023 — Production Metrics & Cost Accounting: observes completed
+// Production Run / Export / Publish results and builds one validated,
+// immutable Production Metrics Record — request counts, durations,
+// output counts, and estimated provider costs. Never a dashboard, never a
+// real provider invoice — see "Production Metrics & Cost Accounting
+// (DC-003-I023)" in the README.
+export { createProductionMetrics } from "./production-metrics.mjs";
+export { loadProductionCostConfig } from "./production-cost-config.mjs";
+export { calculateAnthropicCost, calculateTemplatedCost, calculateGoogleDriveCost, calculateTotalCost } from "./production-cost-calculator.mjs";
+export { collectProductionMetrics } from "./production-metrics-collector.mjs";
+export { assertValidMetricsStoreAdapter } from "./production-metrics-store-adapter.mjs";
+export { createLocalJsonProductionMetricsStoreAdapter } from "./local-json-production-metrics-store-adapter.mjs";
+export { createProductionMetricsStore } from "./production-metrics-store.mjs";
+export {
+  InvalidProductionMetricsInputError,
+  ProductionMetricsValidationError,
+  InvalidMetricsStoreAdapterError,
+  InvalidMetricsIdentifierError,
+  MetricsRecordAlreadyExistsError,
+  MetricsRecordNotFoundError,
+  CorruptedMetricsRecordError,
+  MetricsPersistenceError,
+} from "./production-metrics-errors.mjs";

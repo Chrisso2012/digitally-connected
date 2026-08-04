@@ -102,3 +102,33 @@ test("a malformed input's error never leaks the actual input value, only its typ
     }
   }
 });
+
+// --- DC-003-I023: token usage preservation ---------------------------
+
+test("a response with a well-formed usage object normalizes it to { inputTokens, outputTokens, totalTokens }", () => {
+  const input = { slides: [] };
+  const { usage } = validateLlmTransportResponse(toolUseResponse(input, { usage: { input_tokens: 150, output_tokens: 320 } }), TOOL_NAME);
+  assert.deepEqual(usage, { inputTokens: 150, outputTokens: 320, totalTokens: 470 });
+});
+
+test("a response with no usage field at all yields usage: null, not an error", () => {
+  const { usage } = validateLlmTransportResponse(toolUseResponse({ slides: [] }), TOOL_NAME);
+  assert.equal(usage, null);
+});
+
+test("a malformed usage object (non-numeric fields) degrades to usage: null rather than throwing", () => {
+  const { usage } = validateLlmTransportResponse(toolUseResponse({ slides: [] }, { usage: { input_tokens: "many", output_tokens: 10 } }), TOOL_NAME);
+  assert.equal(usage, null);
+});
+
+test("usage: 0 input/output tokens is preserved as real zero-token evidence, not treated as missing", () => {
+  const { usage } = validateLlmTransportResponse(toolUseResponse({ slides: [] }, { usage: { input_tokens: 0, output_tokens: 0 } }), TOOL_NAME);
+  assert.deepEqual(usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+});
+
+test("slidesJson's own contract is unaffected by the presence or absence of usage", () => {
+  const input = { slides: [{ slide_type: "cover", content: {} }] };
+  const withUsage = validateLlmTransportResponse(toolUseResponse(input, { usage: { input_tokens: 1, output_tokens: 1 } }), TOOL_NAME);
+  const withoutUsage = validateLlmTransportResponse(toolUseResponse(input), TOOL_NAME);
+  assert.equal(withUsage.slidesJson, withoutUsage.slidesJson);
+});

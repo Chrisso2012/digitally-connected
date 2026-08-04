@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/production-metrics.schema.json",
+  "title": "Production Metrics Record",
+  "description": "DC-003-I023 — the accounting and telemetry record for one production run: which execution ran, how long each observed stage took, how many external requests were made, estimated provider costs, and export/publishing status. Built entirely from evidence already produced by I016/I020/I021/I022 (plus, where safely available, provider usage data) — never from an invented or guessed value. carousel_content_id/carousel_id are required only for a completed record (status: completed); a failed record may legitimately have neither, since a run can fail before either ever exists.",
+  "type": "object",
+  "required": ["metrics_id", "request_id", "execution_id", "recorded_at", "status", "requests", "durations_ms", "outputs", "costs"],
+  "additionalProperties": false,
+  "properties": {
+    "metrics_id": { "type": "string", "pattern": "^met_[A-Za-z0-9]+$" },
+    "request_id": { "type": "string", "pattern": "^req_[A-Za-z0-9]+$" },
+    "execution_id": { "type": ["string", "null"], "pattern": "^exec_[0-9]{8}_[A-Za-z0-9]+$" },
+    "carousel_content_id": { "type": ["string", "null"], "pattern": "^cc_[A-Za-z0-9]+$" },
+    "carousel_id": { "type": ["string", "null"], "pattern": "^car_[A-Za-z0-9]+$" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed"],
+      "description": "completed: the production run reported success (I020's own Production Run Result success: true). failed: it did not — request/attempt counts and any cost already incurred are still recorded where evidence exists; export/publish are never reported as successful unless they genuinely occurred."
+    },
+    "requests": {
+      "type": "object",
+      "description": "External request counts. Derived under the assumption of a single-attempt live run (DC-003-I020's own maxAttempts:1 live-verification safety rule) unless the caller supplies explicit counts — see README \"Request counts\" for why this assumption is stated, not silently relied upon.",
+      "required": ["anthropic", "templated", "google_drive"],
+      "additionalProperties": false,
+      "properties": {
+        "anthropic": { "type": "integer", "minimum": 0 },
+        "templated": { "type": "integer", "minimum": 0 },
+        "google_drive": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "durations_ms": {
+      "type": "object",
+      "description": "Millisecond durations for each observed stage. null means genuinely not tracked anywhere in the current pipeline (see README \"Durations\" for exactly which of these are available today and which are not) — never a guessed or zero-filled value standing in for missing data.",
+      "required": ["generation", "render", "export", "publish", "total"],
+      "additionalProperties": false,
+      "properties": {
+        "generation": { "type": ["number", "null"], "minimum": 0 },
+        "render": { "type": ["number", "null"], "minimum": 0 },
+        "export": { "type": ["number", "null"], "minimum": 0 },
+        "publish": { "type": ["number", "null"], "minimum": 0 },
+        "total": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "required": ["slides_generated", "slides_rendered", "files_exported", "files_published"],
+      "additionalProperties": false,
+      "properties": {
+        "slides_generated": { "type": "integer", "minimum": 0 },
+        "slides_rendered": { "type": "integer", "minimum": 0 },
+        "files_exported": { "type": "integer", "minimum": 0 },
+        "files_published": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "costs": {
+      "type": "object",
+      "description": "Every provider amount is an ESTIMATE derived from configured rates (config/env, never hardcoded pricing) — never a real provider invoice. See README \"Actual vs. estimated costs\" for the exact vocabulary (estimated | unavailable) this milestone uses and why \"actual\" is never produced.",
+      "required": ["currency", "anthropic", "templated", "google_drive", "total"],
+      "additionalProperties": false,
+      "properties": {
+        "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
+        "anthropic": { "$ref": "#/$defs/providerCost" },
+        "templated": { "$ref": "#/$defs/providerCost" },
+        "google_drive": { "$ref": "#/$defs/providerCost" },
+        "total": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "providerCost": {
+      "type": "object",
+      "required": ["amount", "calculation_type"],
+      "additionalProperties": false,
+      "properties": {
+        "amount": { "type": "number", "minimum": 0 },
+        "calculation_type": {
+          "type": "string",
+          "enum": ["estimated", "unavailable", "actual"],
+          "description": "estimated: calculated from a configured rate and available usage/count evidence. unavailable: no usage/count evidence exists to calculate from (amount is 0). actual: reserved for a future milestone that integrates real provider billing APIs — never produced by I023 itself."
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "status": { "const": "completed" },
+        "carousel_content_id": { "type": "string", "pattern": "^cc_[A-Za-z0-9]+$" },
+        "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" }
+      },
+      "required": ["carousel_content_id", "carousel_id"]
+    },
+    {
+      "properties": {
+        "status": { "const": "failed" }
+      }
+    }
+  ]
+}

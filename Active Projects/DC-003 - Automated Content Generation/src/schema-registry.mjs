@@ -33,6 +33,8 @@ const SCHEMA_FILES = {
   contentRequest: "content-request.schema.json",
   // DC-003-I018 — the Content Asset Repository's domain object.
   contentAsset: "content-asset.schema.json",
+  // DC-003-I023 — the production cost-accounting/telemetry record.
+  productionMetrics: "production-metrics.schema.json",
 };
 
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);

@@ -20,6 +20,7 @@ const APPROVED_FIXTURES = {
   invocationResponse: "invocation-response.example.json",
   contentRequest: "content-request.example.json",
   contentAsset: "content-asset.example.json",
+  productionMetrics: "production-metrics.example.json",
 };
 
 const validator = createValidator();

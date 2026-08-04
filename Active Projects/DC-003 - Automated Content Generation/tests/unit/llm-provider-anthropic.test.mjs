@@ -215,3 +215,46 @@ test("generateCarousel's output is identical regardless of what context.topicPac
   const resultB = await provider.generateCarousel("prompt", { topicPackage: { topic_id: "topic_B_totally_different" } });
   assert.equal(resultA, resultB);
 });
+
+// --- DC-003-I023: onUsage observer hook -----------------------------
+
+test("onUsage is called once with the normalized usage on a successful generation", async () => {
+  let observedUsage = "not called";
+  const provider = createAnthropicProvider({
+    transport: createMockLlmTransport(),
+    model: "claude-sonnet-5",
+    onUsage: (usage) => {
+      observedUsage = usage;
+    },
+  });
+  await provider.generateCarousel("prompt", {});
+  // llm-transport-mock.mjs's own success response models usage: { input_tokens: 100, output_tokens: 200 }.
+  assert.deepEqual(observedUsage, { inputTokens: 100, outputTokens: 200, totalTokens: 300 });
+});
+
+test("onUsage is optional — generateCarousel works identically when it is omitted", async () => {
+  const provider = createAnthropicProvider({ transport: createMockLlmTransport(), model: "claude-sonnet-5" });
+  const result = await provider.generateCarousel("prompt", {});
+  assert.equal(typeof result, "string");
+});
+
+test("onUsage is never called when generation fails", async () => {
+  let calls = 0;
+  const provider = createAnthropicProvider({
+    transport: createMockLlmTransport({ mode: "malformed" }),
+    model: "claude-sonnet-5",
+    onUsage: () => {
+      calls += 1;
+    },
+  });
+  await assert.rejects(() => provider.generateCarousel("prompt", {}));
+  assert.equal(calls, 0);
+});
+
+test("generateCarousel's own return value is byte-for-byte identical whether or not onUsage is supplied", async () => {
+  const withHook = createAnthropicProvider({ transport: createMockLlmTransport(), model: "claude-sonnet-5", onUsage: () => {} });
+  const withoutHook = createAnthropicProvider({ transport: createMockLlmTransport(), model: "claude-sonnet-5" });
+  const resultA = await withHook.generateCarousel("prompt", {});
+  const resultB = await withoutHook.generateCarousel("prompt", {});
+  assert.equal(resultA, resultB);
+});
