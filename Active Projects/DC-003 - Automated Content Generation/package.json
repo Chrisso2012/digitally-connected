@@ -23,6 +23,7 @@
     "content:request": "node tests/validation/content-request.mjs",
     "content-asset": "node tests/validation/content-asset.mjs",
     "production:live": "node tests/validation/production-run-live.mjs",
+    "export:assets": "node tests/validation/export-production-assets.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

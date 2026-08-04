@@ -34,7 +34,8 @@
     "finished_carousel": "car_",
     "execution": "exec_",
     "execution_record": "rec_",
-    "content_request": "req_"
+    "content_request": "req_",
+    "asset_package": "pkg_"
   },
   "content_request_source_types": ["article"],
   "content_request_design_count": 6

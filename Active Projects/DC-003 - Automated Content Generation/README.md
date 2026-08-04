@@ -4019,6 +4019,197 @@ original (I020) error shape's `stage`/`slideType`/`diagnostic` fields
 (would require a separately-approved I010 change) — none of these were
 touched.
 
+## Production Asset Export (DC-003-I021)
+
+Converts an approved, completed Finished Carousel into a publishable
+asset package on the **local filesystem only** — six ordered PNGs plus
+`metadata.json`. No cloud upload (Google Drive, Dropbox, OneDrive, S3) is
+implemented in I021; the adapter interface is deliberately
+provider-independent so a future milestone can add one without touching
+this milestone's own code.
+
+### Repository investigation (performed before implementation)
+
+- **Rendered slide URLs**: `finished-carousel.schema.json`'s own
+  `slides[].image_url` (nullable string) — already public CDN links (e.g.
+  Templated's `cdn.templated.media`), no authentication needed to fetch
+  them.
+- **Execution metadata**: already on the Finished Carousel Object —
+  `execution_metadata` (`execution_id`, `rendered_at`, `provider`,
+  `render_duration_ms`) and `metadata` (`total_slides`, `completed_slides`,
+  `failed_slides`, `total_duration_ms`).
+- **Existing exported assets**: none — a repository-wide search found no
+  `Exports`/`exports` directory and no prior export code anywhere.
+- **Reusable file-export abstraction**: none existed, but
+  `local-json-carousel-store-adapter.mjs`'s (I015) atomic-write pattern
+  (temp file in the same directory → read-back verification → rename) was
+  reused as the model for this milestone's own binary atomic writes.
+- **Existing remote-asset downloads**: none — `fetch()` was previously used
+  only by the two credentialed HTTP transports (`llm-transport-http.mjs`,
+  `renderer-transport-http.mjs`); this milestone is the first to download
+  binary bytes from a URL already carried on a domain object.
+
+**Two genuine gaps found, and how they were resolved without inventing
+data:**
+- The Finished Carousel Object has **no `llm_model` field** — that lived
+  only on the separate, unpersisted Carousel Content Object. `llm_model` is
+  **omitted entirely** from `metadata.json` (not even `null` — there is
+  nothing on this object to look up).
+- The Finished Carousel Object has **no `source_asset_id`/"GS01"-style
+  field** — only `topic_id`. `metadata.json` uses `topic_id`, the closest
+  identifier actually present, rather than inventing or cross-referencing
+  the Content Asset Repository (I018) to recover the literal "GS01".
+
+### Architecture
+
+```mermaid
+flowchart LR
+    A[Finished Carousel Store\nI015, unchanged] --> B[Production Asset Export Service\nvalidates: carousel, destination, adapter]
+    B --> C{Export Adapter\ninterface, provider-independent}
+    C --> D[Local Filesystem Adapter\nthis milestone's one implementation]
+    C -.future.-> E[Google Drive / Dropbox / OneDrive / S3\nNOT implemented in I021]
+    D --> F[destination/car_.../\n01-cover.png … 06-cta.png\nmetadata.json]
+```
+
+Mirrors the same "dumb, swappable adapter behind one documented shape, no
+implicit default" pattern this codebase already uses three times — the
+Finished Carousel Store's Storage Adapter (I015), the Renderer's Transport
+(I006), and the LLM Provider's Transport (I019):
+
+- **`src/production-asset-export-adapter.mjs`** — the interface only:
+  `{ name, exportPackage(finishedCarousel, destination) }` plus
+  `assertValidExportAdapter()`. No filesystem code lives here.
+- **`src/local-production-asset-export-adapter.mjs`** — the one
+  implementation this milestone ships: creates the destination folder,
+  downloads each slide's image via `fetch()` (Node's built-in, no new
+  dependency — the same choice I006/I019 already made), writes atomically,
+  and writes `metadata.json` last.
+- **`src/production-asset-export-service.mjs`** — validates the adapter
+  shape, re-validates the Finished Carousel against
+  `finished-carousel.schema.json` (defense in depth, never trusts an
+  upstream caller already checked it), enforces two eligibility rules the
+  schema alone can't express (`overall_status === "completed"` and
+  `approval.approved === true`), validates `destination`, then delegates.
+
+### Export structure
+
+```
+<destination>/
+  <carousel_id>/
+    01-cover.png
+    02-content.png
+    03-statistic.png
+    04-quote.png
+    05-infographic.png
+    06-cta.png
+    metadata.json
+```
+
+The per-carousel subfolder is named by `carousel_id` (e.g.
+`car_9c026a104e3745c3`), not a literal Content Asset ID like "GS01" — see
+"Repository investigation" above for why that identifier isn't available
+on the Finished Carousel Object. Filenames are
+`<slide_number zero-padded>-<slide_type>.<format>`, built from the
+carousel's own `slide_number`/`slide_type`/`format` fields — slides are
+sorted by `slide_number` before processing (never trusting array order
+blindly), so export order is always cover → content → statistic → quote →
+infographic → cta regardless of how the stored JSON happens to order its
+`slides` array.
+
+### metadata.json
+
+```json
+{
+  "asset_package_id": "pkg_...",
+  "carousel_id": "car_...",
+  "carousel_content_id": "cc_...",
+  "execution_id": "exec_...",
+  "topic_id": "topic_...",
+  "export_timestamp": "2026-...",
+  "renderer_provider": "templated-http",
+  "render_duration_ms": 22277,
+  "total_duration_ms": 22277,
+  "slide_count": 6,
+  "export_version": "1.0"
+}
+```
+
+Every field except `asset_package_id`/`export_timestamp`/`export_version`
+(this export operation's own identity, generated here — analogous to how
+every other builder in this codebase stamps its own ID/timestamp/version)
+is copied directly from a field already present on the Finished Carousel
+Object — nothing is invented. `render_duration_ms` and `total_duration_ms`
+currently hold the same value in this codebase (both are ultimately
+computed from the same render-timing sum — see `execution_metadata` vs
+`metadata` in "Finished Carousel Builder" above) — they're still two
+separate, honestly-mapped source fields, not a duplicated invention.
+
+### Atomicity, idempotency, and "survives process restart"
+
+Every file (each PNG and `metadata.json`) is written via the same
+temp-file → read-back-verify → rename pattern I015's Local JSON Storage
+Adapter already established — a same-directory rename is atomic on both
+POSIX and NTFS, so a reader can never observe a partially-written file, and
+a failed write never touches whatever was there before.
+
+An export directory is considered **complete** only once its own
+`metadata.json` exists and names the exact same `carousel_id` — written
+**last**, only after every slide has been downloaded and written
+successfully. This is the whole idempotency mechanism:
+
+- **Re-running against an already-complete export makes zero network
+  requests** — the adapter reads the persisted `metadata.json`, confirms
+  the `carousel_id` matches, and returns the original `asset_package_id`
+  and `export_timestamp` unchanged (verified live — a real re-export
+  against an actual rendered carousel completed in ~3.8s, all Node
+  startup overhead, no download).
+- **A restart before completion** just safely re-attempts from scratch —
+  any PNGs already written from the interrupted attempt are individually
+  valid (atomic writes), just not yet accompanied by a `metadata.json`, so
+  the directory correctly reads as "not complete" and gets safely
+  re-processed; existing files are overwritten atomically, never
+  corrupted.
+- **A slide download failure stops immediately** — no later slide is
+  requested, and `metadata.json` is never written, so a corrupted or
+  malicious "completed" state can never exist.
+
+### CLI
+
+```bash
+npm run export:assets -- <carouselId> <storeDirectory> <destination>
+```
+
+`storeDirectory` is a required, explicit argument — no default, no env
+var — matching every other storage-directory-taking CLI in this repository
+(I015's `store`, I016's `content:request`, I020's `production:live`). The
+brief's own example (`npm run export:assets -- car_9c026a104e3745c3
+/exports`) omits it; this CLI adds it as the required middle argument
+instead of hardcoding or defaulting a store location, per the same
+repository-evidence reasoning I016/I018 already applied to earlier CLIs in
+this codebase.
+
+The CLI: loads the named carousel from the I015 Finished Carousel Store
+(unchanged), calls `executeProductionAssetExport()`, and prints a concise
+summary (status, asset package ID, export path, slide count, files
+exported, whether this run was a no-op re-export). Safe, structured errors
+only on failure — never a raw filesystem path, raw HTTP response body, or
+stack trace for an expected failure mode.
+
+Downloading each slide's image is the one network activity this milestone
+performs — a plain GET to an already-public CDN URL, no credentials
+involved. It is not a credentialed provider call and needs no
+live-verification gate the way Anthropic/Templated API calls do; automated
+tests still never reach the real network (global.fetch is stubbed in every
+test, matching this codebase's established convention).
+
+### Explicitly out of scope (I021)
+
+Google Drive, Dropbox, OneDrive, S3, cost accounting, a publishing
+workflow, approval logic (I014's existing `carousel-approval.mjs` is
+reused as a precondition, not reimplemented), metadata editing,
+thumbnails, PDFs, Markdown exports, captions, reel scripts, and ZIP
+archives — PNG export plus `metadata.json` only.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -4385,7 +4576,8 @@ milestone).
 | LLM provider error hierarchy + retry classification | Done (DC-003-I019), extended (DC-003-I019.1) — `src/llm-provider-errors.mjs`; closed a real pre-existing gap in `carousel-generator.mjs`'s retry loop (every provider error was retried uniformly before this); I019.1 closed a second gap found via the same mechanism — generic 4xx (e.g. HTTP 400) was retryable by default until `LlmClientError` was introduced |
 | Safe LLM error diagnostics (HTTP 400/4xx) | Done (DC-003-I019.1) — `src/llm-error-diagnostics.mjs`; see "Safe LLM Error Diagnostics (DC-003-I019.1)"; status/errorType/requestId/sanitised-message only, never the raw body/API key/prompt/tool content/stack trace |
 | Real-provider generation CLI check | Done (DC-003-I019) — `npm run generate:live` (mock by default) / `-- --live` (requires `LLM_API_KEY`, single-attempt by default); rendering stays mock-only always, no `--live-render` flag exists |
-| Unit test suite | Done — 729 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check)); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Production Asset Export (local PNG + metadata.json export, provider-independent adapter) | Done (DC-003-I021) — `src/production-asset-export-service.mjs`, `src/local-production-asset-export-adapter.mjs`, `src/production-asset-export-adapter.mjs`, CLI `npm run export:assets`; see "Production Asset Export (DC-003-I021)"; live-verified against a real rendered carousel (real PNG downloads, real idempotent re-export); Google Drive/Dropbox/OneDrive/S3 explicitly not implemented |
+| Unit test suite | Done — 757 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

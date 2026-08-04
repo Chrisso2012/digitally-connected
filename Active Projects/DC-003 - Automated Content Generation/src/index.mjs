@@ -198,3 +198,20 @@ export { buildSafeDiagnostic as buildLlmSafeDiagnostic } from "./llm-error-diagn
 // persisted Finished Carousel. See "Live Production Run (DC-003-I020)" in
 // the README.
 export { executeProductionRun } from "./production-run-service.mjs";
+
+// DC-003-I021 — Production Asset Export: converts an approved, completed
+// Finished Carousel into a local, publishable asset package (six ordered
+// PNGs + metadata.json). Provider-independent adapter interface, mirroring
+// the Finished Carousel Store / Renderer / LLM Provider pattern — see
+// "Production Asset Export (DC-003-I021)" in the README.
+export { assertValidExportAdapter } from "./production-asset-export-adapter.mjs";
+export { createLocalProductionAssetExportAdapter, EXPORT_VERSION as PRODUCTION_ASSET_EXPORT_VERSION } from "./local-production-asset-export-adapter.mjs";
+export { executeProductionAssetExport } from "./production-asset-export-service.mjs";
+export {
+  InvalidExportAdapterError,
+  InvalidFinishedCarouselForExportError,
+  CarouselNotEligibleForExportError,
+  InvalidExportDestinationError,
+  SlideDownloadError,
+  ExportPersistenceError,
+} from "./production-asset-export-errors.mjs";
