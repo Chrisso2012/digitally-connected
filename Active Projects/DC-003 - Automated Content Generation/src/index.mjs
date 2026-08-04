@@ -298,3 +298,19 @@ export {
   CorruptedPublisherResultError,
   PublisherResultPersistenceError,
 } from "./publisher-result-errors.mjs";
+
+// DC-003-I026 — Windows Production Asset Export: a second, human-facing
+// delivery copy of an already-completed I021 archive package, into a
+// configurable Windows-visible folder bind-mounted into the container.
+// The Docker archive remains the sole system of record; this is a plain,
+// verified filesystem copy — never a second Templated CDN download, and
+// I021 itself is completely unmodified. See "Windows Production Asset
+// Export (DC-003-I026)" in the README.
+export { loadWindowsProductionExportConfig } from "./windows-production-export-config.mjs";
+export { executeWindowsProductionExport } from "./windows-production-export-service.mjs";
+export {
+  WindowsDeliveryConflictError,
+  WindowsDeliveryPartialPackageError,
+  WindowsDeliveryPersistenceError,
+  WindowsDeliveryVerificationError,
+} from "./windows-production-export-errors.mjs";

@@ -5061,6 +5061,251 @@ LinkedIn, Instagram, Facebook, X, scheduling, analytics, publisher
 retries, a publisher queue, and a publisher dashboard — all future
 milestones.
 
+## Windows Production Asset Export (DC-003-I026)
+
+Every prior export (I021) lands inside a Docker named volume — durable,
+but not something Strategy Office can open in Windows Explorer without
+`docker cp` or browsing volume internals. I026 adds exactly one thing: a
+second, human-facing copy of an already-approved, already-exported
+package, delivered into a real Windows folder. **The Docker archive
+remains the sole system of record; the Windows copy is a delivery copy,
+never the other way around** — this milestone never moves or deletes the
+archive, and every write to the Windows side is independently verified
+byte-for-byte against it.
+
+### Repository and Docker investigation (checked before writing any code, per the I026 brief)
+
+- **I021's own adapter already writes correctly to any writable mounted
+  directory — confirmed by reading it, not assumed.**
+  `local-production-asset-export-adapter.mjs`'s `exportPackage(finishedCarousel,
+  destination, runOptions)` treats `destination` as an entirely opaque
+  string; it has no Docker-specific logic anywhere. **No second export
+  adapter was built.** I026 calls I021's real
+  `executeProductionAssetExport()` unmodified for the archive step, then
+  performs a plain filesystem copy for the Windows step — see "Why a copy,
+  not a second export" below.
+- **`n8n-test`'s exact pre-recreation configuration was recorded first,**
+  not assumed: image `n8nio/n8n:latest` (pinned to the already-cached
+  local digest `882b126a8ddd…` — recreation never re-pulled, so no
+  version drift), user `node`, entrypoint `tini -- /docker-entrypoint.sh`,
+  no restart policy, bridge network, port `5678:5678`, the `n8n_data`
+  named volume, the existing read-only `/data/dc003-repo` bind mount,
+  `NODES_EXCLUDE=["n8n-nodes-base.localFileTrigger"]`, and `LLM_API_KEY`
+  (value never displayed — only its non-empty length was compared
+  before/after, confirming it survived recreation unchanged).
+- **The approved Windows destination is not OneDrive-backed.** Checked
+  directly: `C:\Users\Evans\Documents` (the brief's own suggested parent)
+  is a plain local folder, separate from the `OneDrive\Documents` path
+  this very repository lives under — no sync-lag or file-locking concern
+  either way, since the user-approved final location
+  (`E:\BUSINESS\Digital Marketing\Digitally Connected\CLAUDE\Production Assets`)
+  is on a separate physical/local drive entirely, not under any OneDrive
+  root at all.
+- **E: drive bind-mount support was verified with a disposable container**
+  before ever touching the real `n8n-test` container — confirmed
+  writable, then torn down, before the actual recreation.
+- **A small config module was genuinely needed** (item 7 of the
+  investigation) — a thin, two-value env-driven config, not a second
+  export mechanism. See "Configuration" below.
+
+### Why a copy, not a second I021 invocation
+
+Calling `executeProductionAssetExport()` a second time with a different
+destination would trigger six fresh Templated CDN downloads for that
+second destination — I021's own idempotency check only recognizes an
+already-complete package at the SAME destination, not across two
+different ones. The brief's own "Network-Efficiency Rule" and "Preferred
+flow" are explicit about the fix: confirm the archive via I021 once, then
+**copy the already-downloaded bytes** into the Windows folder. This is
+the approach implemented — a completed, idempotent rerun makes zero
+Templated/Anthropic/Google Drive/CDN requests of any kind, verified by a
+dedicated test asserting `global.fetch` is never called.
+
+### Architecture
+
+```
+Docker archive (I021, unmodified)
+  /home/node/.n8n/dc003/exports/<carousel_id>/
+        │  plain filesystem copy, byte-verified, metadata.json written last
+        ▼
+Windows delivery folder (bind-mounted)
+  /data/production-assets/<carousel_id>/           (container-visible)
+  E:\BUSINESS\...\CLAUDE\Production Assets\<carousel_id>\   (the real Windows folder)
+```
+
+`src/windows-production-export-service.mjs`'s `executeWindowsProductionExport()`
+composes exactly two things: I021's real `executeProductionAssetExport()`
+(archive step, completely unmodified — including its own approval/
+completeness enforcement) and a new, small, genuinely-necessary
+filesystem-copy step (Windows delivery). It owns no image-downloading,
+metadata-construction, or validation logic of its own.
+
+### Configuration
+
+`src/windows-production-export-config.mjs` — two container-visible paths,
+env-driven, both with sensible defaults matching this project's own
+already-established container-path conventions (deliberately NOT
+following the usual "no default, always explicit" rule I015/I023/I025's
+own storage-directory CLIs use — the I026 brief itself asks for
+convenience here: "use configured archive and Windows delivery roots
+rather than requiring the user to type Docker paths every time"):
+
+```bash
+PRODUCTION_ASSET_ARCHIVE_ROOT=/home/node/.n8n/dc003/exports   # default
+WINDOWS_PRODUCTION_DELIVERY_ROOT=/data/production-assets       # default
+```
+
+**The real Windows host path is never committed to source or config** —
+it exists only as the `docker run -v <hostPath>:/data/production-assets`
+bind mount described below, exactly as the brief requires ("the host path
+belongs to Docker infrastructure configuration ... not a committed
+source file").
+
+### Folder structure
+
+```
+<Windows Production Assets folder>/<carousel_id>/
+  01-cover.png
+  02-content.png
+  03-statistic.png
+  04-quote.png
+  05-infographic.png
+  06-cta.png
+  metadata.json
+```
+
+Folders are named by `carousel_id` only — no GS numbers, no article
+titles, per the brief (both are explicitly deferred to a future Content
+Lineage milestone, same as I021's own existing limitation).
+
+### Approval requirement
+
+Enforced entirely by I021's own `executeProductionAssetExport()` — this
+service adds no approval logic of its own. `overall_status !== "completed"`
+or `approval.approved !== true` throws `CarouselNotEligibleForExportError`
+before either the archive or the Windows step ever runs. A rejected
+carousel can never be `approved` under I014's own state machine, so this
+one check already covers `approval.rejected === true` too — no separate
+rejection check was written.
+
+### Idempotency and replacement
+
+| Destination state | Default behaviour | With `--replace` |
+|---|---|---|
+| Complete, byte-identical package already present | Verified no-op success, zero writes | (irrelevant — already identical) |
+| Complete but DIFFERENT package present | Fails: `WindowsDeliveryConflictError` | Overwrites, then re-verifies |
+| Some files present but no valid `metadata.json` (interrupted prior copy) | Fails: `WindowsDeliveryPartialPackageError` | Overwrites, then re-verifies |
+| Empty or missing destination | Normal fresh copy | (irrelevant) |
+
+`metadata.json` is written **last**, after every image has been atomically
+written — the same discipline `local-production-asset-export-adapter.mjs`
+(I021) already established for its own archive writes, verified here by
+a dedicated test: a destination with all six images already byte-correct
+but no `metadata.json` is still treated as incomplete, never as ready.
+
+### Integrity verification
+
+Every run — including the no-op path — ends with a byte-for-byte
+`Buffer.compare()` between every archive file and its Windows
+counterpart (`verifiedIdentical` in the result). A mismatch after copying
+is a `WindowsDeliveryVerificationError`, a safety net that should never
+fire in practice, not the expected path.
+
+### Result contract and safe errors
+
+```json
+{
+  "status": "completed",
+  "carouselId": "car_...",
+  "assetPackageId": "pkg_...",
+  "archive": { "status": "completed", "reference": "/home/node/.n8n/dc003/exports/car_..." },
+  "windowsDelivery": { "status": "completed", "reference": "/data/production-assets/car_...", "filesCopied": 7 },
+  "verifiedIdentical": true
+}
+```
+
+Both `reference` fields are container-visible paths only — never a raw
+Windows host path, never in this structured result and never in any
+thrown error message (verified by a dedicated test scanning every error
+message for the test's own temp-directory path). The CLI's own
+human-facing summary is the one place a Windows-meaningful location is
+shown, per the brief's own allowance — it prints the container-visible
+mount path plus a pointer to this README section for the real folder it
+maps to.
+
+### CLI
+
+```bash
+npm run export:windows -- <carouselId> <finishedCarouselStoreDirectory> [--replace]
+```
+
+Uses the configured archive/Windows-delivery roots — no raw Docker path
+typing required. Never generates, renders, approves, or publishes
+anything; it only loads an already-stored, already-approved Finished
+Carousel (I015, unchanged) and delivers its already-rendered assets.
+
+### Docker recreation
+
+`n8n-test` was recreated once, adding exactly one new bind mount
+(`<Windows Production Assets folder>:/data/production-assets`,
+read-write) — every other setting preserved exactly (see "Repository and
+Docker investigation" above for the full recorded baseline). Verified
+after recreation: all 11 workflows and all 5 credentials intact by ID,
+`Campaign Intelligence Engine v1.0` still the only active workflow and
+unchanged, the read-only repo mount still rejects writes, the new mount
+is writable and a container-written file is visible directly from the
+Windows host filesystem, Execute Command's node file is still present,
+and `NODES_EXCLUDE`/`LLM_API_KEY` are unchanged (the latter compared only
+by non-empty length, never printed).
+
+### Security considerations
+
+No credential value, full environment dump, or raw stack trace is ever
+printed by this milestone's own code or by any command used during Docker
+recreation. The new bind mount exposes exactly one Windows folder — never
+a wider directory — and remains entirely separate from the existing
+read-only DC-003 repository mount. The Windows folder itself carries no
+special permissions beyond normal NTFS defaults; it is a plain delivery
+folder, not a secrets store.
+
+### Relationship to I021
+
+I021 (`production-asset-export-service.mjs`,
+`local-production-asset-export-adapter.mjs`,
+`production-asset-export-adapter.mjs`) is completely unmodified — not one
+line changed. I026 only ever calls its existing public
+`executeProductionAssetExport()` function.
+
+### Relationship to future Content Lineage
+
+Folder naming stays `carousel_id`-only, matching I021's own existing
+limitation (no article title, no GS number available on a Finished
+Carousel Object today — see I021's own README section). Once Content
+Lineage introduces a stable, human-readable identifier, both I021's
+archive and this milestone's Windows delivery folder naming can adopt it
+together, without either module needing to change independently of the
+other.
+
+### Existing modules confirmed unchanged
+
+Finished Carousel Store, Carousel Approval workflow, I021 Production
+Asset Export, I022 Google Drive Publisher, I023 Production Metrics, I024
+Production Control Centre, I025 Publisher Result Store, Execution Ledger,
+Pipeline Orchestrator, and Production Workflow — none received any code
+changes for I026. No genuine I021 incompatibility was found, so I021
+itself was never touched. The only pre-existing files touched are
+`config/env.example` (documents the two new, defaulted env vars) and
+`src/index.mjs`/`package.json` (barrel exports and the `npm run
+export:windows` script).
+
+### Explicitly out of scope (I026)
+
+Google Drive changes, social publishing, article titles or GS-number
+folder names, Content Lineage itself, captions, Editorial Packages,
+Social Media Packages, ZIP archives, thumbnails, PDFs, publishing
+scheduling, cost changes, Control Centre UI changes, and n8n workflow
+changes.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -5084,6 +5329,7 @@ npm run workflow -- <workflowInputPath> <ledgerPath> <outputPath>  # CLI: run an
 npm run control-centre -- dashboard|health|jobs|activity <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]  # CLI: read-only operational console (DC-003-I024, extended by DC-003-I025)
 npm run control-centre -- job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
 npm run publisher-results -- list|get|carousel|execution ...  # CLI: read-only lookups against the Publisher Result Store (DC-003-I025)
+npm run export:windows -- <carouselId> <finishedCarouselStoreDirectory> [--replace]  # CLI: deliver an approved carousel to the Docker archive + Windows folder (DC-003-I026)
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -5435,7 +5681,8 @@ milestone).
 | Production Metrics & Cost Accounting (telemetry + estimated cost per production run) | Done (DC-003-I023) — `src/production-metrics.mjs`, `src/production-metrics-collector.mjs`, `src/production-cost-calculator.mjs`, `src/production-cost-config.mjs`, `src/production-metrics-store.mjs` + adapter files, CLI `npm run metrics`; see "Production Metrics & Cost Accounting (DC-003-I023)"; I021/I022 unchanged; Anthropic usage now preserved via `onUsage` hook (I019 additive change, no public contract altered); live-verified against the real I020 production run's own historical data; no dashboard, no real provider billing integration |
 | Production Control Centre (read-only operational console: system health, dashboard, recent jobs, recent activity, job detail) | Done (DC-003-I024), extended (DC-003-I025) — `src/control-centre-service.mjs`, `schemas/control-centre.schema.json`, CLI `npm run control-centre`; see "Production Control Centre (DC-003-I024, extended by DC-003-I025)"; I015/I021/I023 all unchanged; no persistence, no workflow logic, no new business rules, no network requests; terminal-only, no GUI; as of I025, `published`/`publishing` are sourced from the Publisher Result Store, not the disconnected approval-lifecycle field I024 originally fell back on |
 | Publisher Result Store (authoritative local record of every successful publish, provider-neutral) | Done (DC-003-I025) — `src/publisher-result.mjs`, `src/publisher-result-store.mjs` + adapter files, CLI `npm run publisher-results`; see "Publisher Result Store (DC-003-I025)"; I015/I021/I022/I023 core logic unchanged (I022's service gained one optional dependency only); no live Google Drive upload made; LinkedIn/Instagram/Facebook/X/scheduling/analytics/retries/queue/dashboard explicitly not implemented |
-| Unit test suite | Done — 997 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Windows Production Asset Export (second, human-facing delivery copy of an approved I021 archive package into a Windows-visible folder) | Done (DC-003-I026) — `src/windows-production-export-service.mjs`, `src/windows-production-export-config.mjs`, CLI `npm run export:windows`; see "Windows Production Asset Export (DC-003-I026)"; I021 completely unmodified (its real `executeProductionAssetExport()` called directly for the archive step); Windows delivery is a plain, byte-verified filesystem copy, never a second CDN download; `n8n-test` recreated with one new writable bind mount, all prior config/workflows/credentials confirmed intact; live-verified locally against the real `car_9c026a104e3745c3` package, zero external API calls |
+| Unit test suite | Done — 1024 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`)); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |
