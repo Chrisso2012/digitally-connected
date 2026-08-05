@@ -18,6 +18,11 @@ function cleanEvidence(overrides = {}) {
     filesModified: [],
     tests: { status: "passed" },
     fixtures: { status: "passed" },
+    // DC-003-I029.3.1 — "completed" so every pre-existing test in this
+    // file keeps exercising exactly what it exercised before the Delivery
+    // Status Authority Gate existed; tests for the new gate itself pass
+    // deliveryReportStatus: "failed"/"partial" explicitly.
+    deliveryReportStatus: "completed",
     ...overrides,
   };
 }
@@ -135,4 +140,99 @@ test("applyPostReviewGates(): correction_required is overridden when policy forb
 test("applyPostReviewGates(): ceo_decision_required proposal with no mandatory reasons still stands unchanged", () => {
   const result = applyPostReviewGates("ceo_decision_required", cleanEvidence(), POLICY);
   assert.deepEqual(result, { decision: "ceo_decision_required", overridden: false, reasons: [] });
+});
+
+// --- DC-003-I029.3.1: Delivery Status Authority Gate ---------------------
+//
+// Discovered via the DC-003-I029.4 end-to-end smoke test: a Delivery
+// Report independently verified as "failed" (or "partial") could still
+// receive a routine "approved" review as long as its own self-reported
+// test/fixture counters showed passing — nothing here checked the
+// Delivery Report's own overall status. These tests exercise the fix
+// directly at the gate layer (the smallest, purest place to prove the
+// rule); tests/unit/automated-strategy-review-service.test.mjs exercises
+// the same rule through the real service.
+
+test("evaluatePreReviewGates(): a 'completed' status is never forced by the delivery-status gate", () => {
+  const result = evaluatePreReviewGates(cleanEvidence({ deliveryReportStatus: "completed" }), POLICY);
+  assert.deepEqual(result, { forced: false, reasons: [] });
+});
+
+test("evaluatePreReviewGates(): a 'failed' status alone (no other mandatory reason) is forced to correction_required, skipping the adapter", () => {
+  const result = evaluatePreReviewGates(cleanEvidence({ deliveryReportStatus: "failed" }), POLICY);
+  assert.equal(result.forced, true);
+  assert.equal(result.decision, "correction_required");
+  assert.equal(result.reasons.length, 1);
+  assert.match(result.reasons[0], /Delivery Report status is "failed"/);
+});
+
+test("evaluatePreReviewGates(): a 'failed' status is forced to ceo_decision_required when policy forbids correction specifications", () => {
+  const strict = createStrategyReviewPolicy({ repositoryPath: "/repo", permittedBranch: "main", allowCorrectionSpecifications: false });
+  const result = evaluatePreReviewGates(cleanEvidence({ deliveryReportStatus: "failed" }), strict);
+  assert.equal(result.forced, true);
+  assert.equal(result.decision, "ceo_decision_required");
+});
+
+test("evaluatePreReviewGates(): a 'failed' status alongside an existing mandatory reason still forces ceo_decision_required, not correction_required", () => {
+  const result = evaluatePreReviewGates(cleanEvidence({ deliveryReportStatus: "failed", hasUnresolvedConflict: true }), POLICY);
+  assert.equal(result.forced, true);
+  assert.equal(result.decision, "ceo_decision_required");
+  assert.equal(result.reasons.length, 1, "the mandatory-reason check short-circuits before the delivery-status check even runs");
+});
+
+test("evaluatePreReviewGates(): a 'partial' status is NOT forced — the adapter is still invoked, since correctable-vs-CEO-judgment cannot be determined from status alone", () => {
+  const result = evaluatePreReviewGates(cleanEvidence({ deliveryReportStatus: "partial" }), POLICY);
+  assert.deepEqual(result, { forced: false, reasons: [] });
+});
+
+test("applyPostReviewGates(): an 'approved' proposal for a 'partial' delivery is overridden to correction_required, even with fully passing test/fixture evidence", () => {
+  const evidence = cleanEvidence({ deliveryReportStatus: "partial", tests: { status: "passed" }, fixtures: { status: "passed" } });
+  const result = applyPostReviewGates("approved", evidence, POLICY);
+  assert.equal(result.decision, "correction_required");
+  assert.equal(result.overridden, true);
+});
+
+test("applyPostReviewGates(): an 'approved' proposal for a 'failed' delivery is overridden to correction_required — proves passing counters cannot override overall status (gate-level; a full review flow pre-gates 'failed' before ever reaching an adapter, see automated-strategy-review-service.test.mjs)", () => {
+  const evidence = cleanEvidence({ deliveryReportStatus: "failed", tests: { status: "passed" }, fixtures: { status: "passed" } });
+  const result = applyPostReviewGates("approved", evidence, POLICY);
+  assert.equal(result.decision, "correction_required");
+  assert.equal(result.overridden, true);
+});
+
+test("applyPostReviewGates(): an 'approved' proposal for a 'partial' delivery escalates to ceo_decision_required when policy forbids correction specifications", () => {
+  const strict = createStrategyReviewPolicy({ repositoryPath: "/repo", permittedBranch: "main", allowCorrectionSpecifications: false });
+  const result = applyPostReviewGates("approved", cleanEvidence({ deliveryReportStatus: "partial" }), strict);
+  assert.equal(result.decision, "ceo_decision_required");
+});
+
+test("applyPostReviewGates(): a 'rejected' proposal is never downgraded by the delivery-status gate — for 'failed' evidence", () => {
+  const result = applyPostReviewGates("rejected", cleanEvidence({ deliveryReportStatus: "failed" }), POLICY);
+  assert.equal(result.decision, "rejected");
+  assert.equal(result.overridden, false, "a proposal already at/above the highest rank produces no override, matching the pre-existing floor-comparison contract");
+  assert.equal(result.reasons.length, 1, "the delivery-status reason is still recorded as evidence even though it didn't need to override anything");
+});
+
+test("applyPostReviewGates(): a 'rejected' proposal is never downgraded by the delivery-status gate — for 'partial' evidence", () => {
+  const result = applyPostReviewGates("rejected", cleanEvidence({ deliveryReportStatus: "partial" }), POLICY);
+  assert.equal(result.decision, "rejected");
+  assert.equal(result.overridden, false);
+});
+
+test("applyPostReviewGates(): a 'ceo_decision_required' proposal for a 'partial' delivery is left alone — the model's own CEO-level judgment is respected, not replaced by the lower correction floor", () => {
+  const result = applyPostReviewGates("ceo_decision_required", cleanEvidence({ deliveryReportStatus: "partial" }), POLICY);
+  assert.equal(result.decision, "ceo_decision_required");
+  assert.equal(result.overridden, false);
+});
+
+test("applyPostReviewGates(): a 'correction_required' proposal for a 'partial' delivery that already meets the floor is left alone", () => {
+  const result = applyPostReviewGates("correction_required", cleanEvidence({ deliveryReportStatus: "partial" }), POLICY);
+  assert.equal(result.decision, "correction_required");
+  assert.equal(result.overridden, false);
+});
+
+test("applyPostReviewGates(): an existing mandatory reason (credential file) outranks the delivery-status floor for a 'partial' delivery", () => {
+  const evidence = cleanEvidence({ deliveryReportStatus: "partial", credentialFilesDetected: [".env"] });
+  const result = applyPostReviewGates("approved", evidence, POLICY);
+  assert.equal(result.decision, "ceo_decision_required");
+  assert.equal(result.reasons.length, 2, "both the mandatory reason and the delivery-status reason are recorded");
 });

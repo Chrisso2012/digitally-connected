@@ -17,6 +17,26 @@
 //   just because a gate also tripped, and a model respecting
 //   policy.allowRoutineApproval=false by already proposing
 //   "ceo_decision_required" is left alone.
+//
+// DC-003-I029.3.1 — Delivery Status Authority Gate, added after the
+// DC-003-I029.4 end-to-end smoke test proved this gap real: a Delivery
+// Report whose own overall `status` is "failed" or "partial" was NOT, by
+// itself, a mandatory-escalation condition here — only test/fixture
+// failure was checked (evaluateEvidenceMismatchReasons), so a Delivery
+// Report independently verified as "failed" (no real commit landed) but
+// carrying self-reported "tests passed" counters could still receive a
+// routine "approved" review. evaluateDeliveryStatusReasons() is a SECOND,
+// separate, lower-ranked floor (correction_required, not
+// ceo_decision_required) — a non-"completed" Delivery Report status can
+// never resolve to "approved," but by itself it is not automatically a
+// CEO-escalation matter either: the brief's own default is
+// "correction_required," with escalation to "ceo_decision_required"
+// reserved for cases where an EXISTING mandatory reason (unverifiable
+// repo, conflicts, history rewrite, credential/infrastructure/
+// architecture files, live requests, wrong branch, changed-file count) is
+// ALSO present, or policy.allowCorrectionSpecifications forbids issuing a
+// correction at all. See README "Delivery Status Authority Gate
+// (DC-003-I029.3.1)".
 
 const DECISION_RANK = { approved: 0, correction_required: 1, ceo_decision_required: 2, rejected: 3 };
 
@@ -61,6 +81,24 @@ export function evaluateMandatoryEscalationReasons(evidence, policy) {
 }
 
 /**
+ * DC-003-I029.3.1 — the Delivery Status Authority Gate's own reasons.
+ * Returns a non-empty array whenever the Delivery Report's own overall
+ * status is not "completed" — the single fact this gate exists to enforce
+ * cannot be waived by passing test/fixture counters (checked separately,
+ * see evaluateEvidenceMismatchReasons), by the model's own summary, or by
+ * anything the caller supplies. Used both pre- and post-review.
+ */
+function evaluateDeliveryStatusReasons(evidence) {
+  const reasons = [];
+  if (evidence.deliveryReportStatus !== "completed") {
+    reasons.push(
+      `Delivery Report status is "${evidence.deliveryReportStatus}", not "completed" — only a completed delivery is eligible for routine approval.`
+    );
+  }
+  return reasons;
+}
+
+/**
  * Post-review-only: a proposal that contradicts evidence the service
  * already independently knows (currently just "approved despite failing
  * verification"). Treated as a FLOOR at ceo_decision_required, same as a
@@ -100,36 +138,83 @@ function evaluatePolicyRestrictionReasons(proposedDecision, policy) {
 
 /**
  * Pre-review gate check — call BEFORE invoking the adapter. Returns
- * `{ forced: true, decision: "ceo_decision_required", reasons }` when at
- * least one mandatory condition already trips on the evidence alone (the
- * adapter is never invoked in this case — see
- * automated-strategy-review-service.mjs), or `{ forced: false, reasons: [] }`
- * otherwise.
+ * `{ forced: true, decision, reasons }` when the evidence alone already
+ * determines the outcome (the adapter is never invoked in this case —
+ * see automated-strategy-review-service.mjs), or
+ * `{ forced: false, reasons: [] }` otherwise.
+ *
+ * Two independent forcing conditions, checked in order:
+ *
+ *   1. A mandatory escalation reason (repo unverifiable, conflicts,
+ *      history rewrite, credential/infrastructure/architecture files,
+ *      live requests, wrong branch, changed-file count) forces
+ *      "ceo_decision_required" — unchanged since I029.3.
+ *   2. DC-003-I029.3.1 — a Delivery Report whose own status is "failed"
+ *      is, by itself, already deterministically sufficient to require at
+ *      least a correction (the brief's own default) — the adapter is
+ *      skipped entirely rather than spending a request on a decision that
+ *      could never legitimately be "approved." Downgraded further to
+ *      "ceo_decision_required" only if policy forbids issuing a
+ *      correction at all (policy.allowCorrectionSpecifications=false).
+ *
+ * A "partial" Delivery Report is deliberately NOT forced here: whether
+ * the remaining work is safely correctable within the Work Order or
+ * requires CEO-level scope/roadmap judgment is exactly the kind of call
+ * this deterministic layer cannot make on its own — the adapter is still
+ * invoked, and applyPostReviewGates() guarantees the final decision can
+ * never be "approved" regardless of what it proposes.
  */
 export function evaluatePreReviewGates(evidence, policy) {
-  const reasons = evaluateMandatoryEscalationReasons(evidence, policy);
-  return reasons.length > 0 ? { forced: true, decision: "ceo_decision_required", reasons } : { forced: false, reasons: [] };
+  const mandatoryReasons = evaluateMandatoryEscalationReasons(evidence, policy);
+  if (mandatoryReasons.length > 0) {
+    return { forced: true, decision: "ceo_decision_required", reasons: mandatoryReasons };
+  }
+
+  if (evidence.deliveryReportStatus === "failed") {
+    const reasons = evaluateDeliveryStatusReasons(evidence);
+    if (!policy.allowCorrectionSpecifications) {
+      return {
+        forced: true,
+        decision: "ceo_decision_required",
+        reasons: [...reasons, "Policy does not permit generating correction specifications for this review."],
+      };
+    }
+    return { forced: true, decision: "correction_required", reasons };
+  }
+
+  return { forced: false, reasons: [] };
 }
 
 /**
  * Post-review gate check — call AFTER the adapter returns a validated
- * proposal. Combines three reason categories and returns the FINAL
- * decision the service must use:
+ * proposal. Combines reason categories and returns the FINAL decision the
+ * service must use:
  *
  *   - a policy restriction on the proposed decision TYPE itself (e.g.
  *     allowAutomaticRejection=false) is absolute — always forces
  *     ceo_decision_required, regardless of how "severe" the proposed
  *     decision already was;
  *   - mandatory evidence-based reasons and an evidence/approval mismatch
- *     are a FLOOR at ceo_decision_required — never downgrades an
- *     already-more-cautious "rejected" proposal;
+ *     (including DC-003-I029.3.1's own test/fixture-vs-status check) are a
+ *     FLOOR at ceo_decision_required;
+ *   - DC-003-I029.3.1 — a non-"completed" Delivery Report status, with no
+ *     ceo-tier reason otherwise present, is a SEPARATE, lower FLOOR at
+ *     correction_required (or ceo_decision_required when policy forbids a
+ *     correction) — this is what prevents an "approved" proposal for a
+ *     failed/partial delivery from ever surviving, while still defaulting
+ *     to the brief's own "correction_required," not immediate escalation;
+ *   - whichever floor is higher-ranked wins; a floor never downgrades an
+ *     already-more-cautious proposal (e.g. the model's own "rejected");
  *   - no reasons at all leaves the model's own proposal untouched.
  */
 export function applyPostReviewGates(proposedDecision, evidence, policy) {
   const mandatoryReasons = evaluateMandatoryEscalationReasons(evidence, policy);
   const evidenceMismatchReasons = evaluateEvidenceMismatchReasons(proposedDecision, evidence);
   const policyRestrictionReasons = evaluatePolicyRestrictionReasons(proposedDecision, policy);
-  const allReasons = [...mandatoryReasons, ...evidenceMismatchReasons, ...policyRestrictionReasons];
+  const deliveryStatusReasons = evaluateDeliveryStatusReasons(evidence);
+
+  const ceoTierReasons = [...mandatoryReasons, ...evidenceMismatchReasons];
+  const allReasons = [...ceoTierReasons, ...policyRestrictionReasons, ...deliveryStatusReasons];
 
   if (allReasons.length === 0) {
     return { decision: proposedDecision, overridden: false, reasons: [] };
@@ -139,7 +224,8 @@ export function applyPostReviewGates(proposedDecision, evidence, policy) {
     return { decision: "ceo_decision_required", overridden: proposedDecision !== "ceo_decision_required", reasons: allReasons };
   }
 
-  const floorDecision = "ceo_decision_required";
+  const floorDecision =
+    ceoTierReasons.length > 0 ? "ceo_decision_required" : policy.allowCorrectionSpecifications ? "correction_required" : "ceo_decision_required";
   const finalDecision = DECISION_RANK[proposedDecision] >= DECISION_RANK[floorDecision] ? proposedDecision : floorDecision;
   return { decision: finalDecision, overridden: finalDecision !== proposedDecision, reasons: allReasons };
 }

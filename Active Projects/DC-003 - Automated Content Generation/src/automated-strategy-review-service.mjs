@@ -20,10 +20,14 @@
 // passes through strategy-review-authority-gates.mjs both before
 // (skipping the adapter call entirely for unambiguous cases, saving a
 // request) and after invocation (defense in depth, and the only place a
-// "the model proposed approval despite failing evidence" mismatch is
-// caught and forced to ceo_decision_required). This service can only
-// make an outcome MORE cautious than what the deterministic evidence
-// already demands, never less.
+// proposal that contradicts already-known evidence is caught and forced
+// more cautious — to ceo_decision_required for a mandatory escalation
+// reason or a policy restriction, or to correction_required for
+// DC-003-I029.3.1's own Delivery Status Authority Gate). This service can
+// only make an outcome MORE cautious than what the deterministic evidence
+// already demands, never less — see synthesizeCorrection()'s own comment
+// for why a gate-forced correction_required rebuilds unassessed criteria
+// rather than reusing the model's own (now-invalidated) assessment.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -89,6 +93,22 @@ function synthesizeCeoEscalation(reasons) {
   };
 }
 
+// DC-003-I029.3.1 — mirrors synthesizeCeoEscalation()'s own pattern for
+// the new correction_required floor. Every criterion is unassessed at
+// this point (buildUnassessedCriteria() marks all of them
+// "insufficient_evidence"), so failedCriteria references all of them —
+// required by createEngineeringStrategyReview()'s own validation
+// ("correction_required" requires at least one failing criterion, and
+// correction.failedCriteria may only reference failing criteria).
+function synthesizeCorrection(reasons, workOrder) {
+  return {
+    failedCriteria: workOrder.review_criteria.map((_, i) => i + 1),
+    requiredOutcome: 'Complete the original Engineering Work Order and produce a Delivery Report with status "completed".',
+    prohibitedScopeExpansion: "Remain within the original Engineering Work Order — no scope expansion.",
+    verificationRequired: `All mandatory review criteria pass. Repository evidence is independently verified. Delivery Report status is "completed". ${reasons.join(" ")}`,
+  };
+}
+
 /**
  * Builds an Automated Strategy Review Service.
  *
@@ -151,9 +171,18 @@ export function createAutomatedStrategyReviewService(fields = {}, options = {}) 
       if (preGate.forced) {
         finalDecision = preGate.decision;
         criteria = buildUnassessedCriteria(workOrder, preGate.reasons.join(" "));
-        ceoEscalation = synthesizeCeoEscalation(preGate.reasons);
+        // DC-003-I029.3.1 — evaluatePreReviewGates() can now force either
+        // "ceo_decision_required" (unchanged) or "correction_required" (a
+        // "failed" Delivery Report with no other mandatory reason) — build
+        // whichever structure createEngineeringStrategyReview() requires
+        // for that specific decision; the other stays null.
+        correction = finalDecision === "correction_required" ? synthesizeCorrection(preGate.reasons, workOrder) : null;
+        ceoEscalation = finalDecision === "ceo_decision_required" ? synthesizeCeoEscalation(preGate.reasons) : null;
         risks = preGate.reasons;
-        summary = `Review escalated before the reviewer was invoked: ${preGate.reasons.join(" ")}`;
+        summary =
+          finalDecision === "correction_required"
+            ? `Review resolved before the reviewer was invoked: ${preGate.reasons.join(" ")}`
+            : `Review escalated before the reviewer was invoked: ${preGate.reasons.join(" ")}`;
       } else {
         let proposal;
         try {
@@ -171,30 +200,49 @@ export function createAutomatedStrategyReviewService(fields = {}, options = {}) 
         if (proposal) {
           const gateResult = applyPostReviewGates(proposal.decision, evidence, policy);
           finalDecision = gateResult.decision;
-          // assertValidReviewProposal() only guarantees every index 1..N is
-          // present exactly once, not that the array arrived in that
-          // order — sort explicitly, since createEngineeringStrategyReview()
-          // requires strict positional ordering.
-          criteria = [...proposal.criteria]
-            .sort((a, b) => a.criterionIndex - b.criterionIndex)
-            .map((c) => ({ criterionIndex: c.criterionIndex, result: c.result, evidence: c.evidence, reason: c.reason }));
-          if (gateResult.overridden) {
-            correction = null;
-            ceoEscalation = finalDecision === "ceo_decision_required" ? synthesizeCeoEscalation(gateResult.reasons) : null;
+
+          // DC-003-I029.3.1 — when the gate overrides DOWN TO
+          // "correction_required" (the model proposed "approved" for a
+          // non-"completed" Delivery Report with no ceo-tier reason
+          // present), the model's own per-criterion assessment assumed
+          // the decision this gate just overrode — typically all
+          // pass/not_applicable — which createEngineeringStrategyReview()
+          // itself refuses to pair with "correction_required" (it
+          // requires at least one failing criterion). Discard it and
+          // build unassessed criteria instead, exactly mirroring the
+          // pre-review forced path's own treatment, rather than
+          // reinterpreting the model's own pass/fail judgements.
+          if (gateResult.overridden && finalDecision === "correction_required") {
+            criteria = buildUnassessedCriteria(workOrder, gateResult.reasons.join(" "));
+            correction = synthesizeCorrection(gateResult.reasons, workOrder);
+            ceoEscalation = null;
             risks = [...proposal.risks, ...gateResult.reasons];
           } else {
-            correction = proposal.correction
-              ? {
-                  failedCriteria: proposal.correction.failedCriteria,
-                  requiredOutcome: proposal.correction.requiredOutcome,
-                  prohibitedScopeExpansion: proposal.correction.prohibitedScopeExpansion,
-                  verificationRequired: proposal.correction.verificationRequired,
-                }
-              : null;
-            ceoEscalation = proposal.ceoEscalation
-              ? { decisionRequired: proposal.ceoEscalation.decisionRequired, reason: proposal.ceoEscalation.reason, safeOptions: proposal.ceoEscalation.safeOptions }
-              : null;
-            risks = proposal.risks;
+            // assertValidReviewProposal() only guarantees every index 1..N
+            // is present exactly once, not that the array arrived in that
+            // order — sort explicitly, since createEngineeringStrategyReview()
+            // requires strict positional ordering.
+            criteria = [...proposal.criteria]
+              .sort((a, b) => a.criterionIndex - b.criterionIndex)
+              .map((c) => ({ criterionIndex: c.criterionIndex, result: c.result, evidence: c.evidence, reason: c.reason }));
+            if (gateResult.overridden) {
+              correction = null;
+              ceoEscalation = finalDecision === "ceo_decision_required" ? synthesizeCeoEscalation(gateResult.reasons) : null;
+              risks = [...proposal.risks, ...gateResult.reasons];
+            } else {
+              correction = proposal.correction
+                ? {
+                    failedCriteria: proposal.correction.failedCriteria,
+                    requiredOutcome: proposal.correction.requiredOutcome,
+                    prohibitedScopeExpansion: proposal.correction.prohibitedScopeExpansion,
+                    verificationRequired: proposal.correction.verificationRequired,
+                  }
+                : null;
+              ceoEscalation = proposal.ceoEscalation
+                ? { decisionRequired: proposal.ceoEscalation.decisionRequired, reason: proposal.ceoEscalation.reason, safeOptions: proposal.ceoEscalation.safeOptions }
+                : null;
+              risks = proposal.risks;
+            }
           }
           summary = proposal.summary;
         }

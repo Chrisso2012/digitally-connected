@@ -311,6 +311,124 @@ test("reviewDelivery(): escalation reasons never contain a raw stack trace", () 
     assert.doesNotMatch(stored.ceo_escalation.reason, /at file:\/\//);
   }));
 
+// --- DC-003-I029.3.1: Delivery Status Authority Gate (through the real service) ---
+//
+// Discovered via the DC-003-I029.4 end-to-end smoke test: a real mock
+// delivery run (self-reporting "tests passed") whose independent git
+// re-verification correctly downgraded to status "failed" could still
+// receive a routine "approved" Strategy Review from the (always-proposes-
+// approved-by-default) mock reviewer. These tests exercise the fix
+// end-to-end through the real service, seeding a Delivery Report whose
+// own `status` is "failed"/"partial" directly (mirroring exactly what
+// automated-delivery-office-service.mjs produces when a runner claims
+// success but no real commit independently verifies).
+
+test("reviewDelivery(): a 'failed' Delivery Report with misleadingly-passing test/fixture counters is never approved", () =>
+  withTempDirs(async (dirs) => {
+    const { service, workOrderStore, deliveryReportStore, strategyReviewStore } = buildService(dirs);
+    const workOrder = seedWorkOrder(workOrderStore);
+    const report = seedDeliveryReport(deliveryReportStore, workOrder.work_order_id, {
+      status: "failed",
+      commit: null,
+      pushStatus: "not_applicable",
+      workingTree: "clean",
+      // Self-reported counters still show everything passing — exactly
+      // the misleading combination the I029.4 smoke test hit.
+      tests: { passed: 10, failed: 0, total: 10 },
+      fixtures: { passed: 5, failed: 0, total: 5 },
+    });
+
+    const result = await service.reviewDelivery({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id });
+    assert.notEqual(result.decision, "approved");
+    assert.equal(result.decision, "correction_required");
+    const stored = strategyReviewStore.get(result.strategyReviewId);
+    assert.ok(stored.correction);
+    assert.equal(stored.ceo_escalation, null);
+  }));
+
+test("reviewDelivery(): a 'failed' Delivery Report skips the adapter entirely — zero requests for an unambiguous case", () =>
+  withTempDirs(async (dirs) => {
+    let called = false;
+    const spyAdapter = { name: "spy", reviewDelivery: async () => { called = true; } };
+    const { service, workOrderStore, deliveryReportStore } = buildService(dirs, { reviewerAdapter: spyAdapter });
+    const workOrder = seedWorkOrder(workOrderStore);
+    const report = seedDeliveryReport(deliveryReportStore, workOrder.work_order_id, { status: "failed", commit: null, pushStatus: "not_applicable" });
+
+    const result = await service.reviewDelivery({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id });
+    assert.equal(called, false);
+    assert.equal(result.decision, "correction_required");
+  }));
+
+test("reviewDelivery(): a 'failed' Delivery Report combined with an existing mandatory reason (unresolved conflict) escalates to ceo_decision_required, still skipping the adapter", () =>
+  withTempDirs(async (dirs) => {
+    let called = false;
+    const spyAdapter = { name: "spy", reviewDelivery: async () => { called = true; } };
+    const { service, workOrderStore, deliveryReportStore, strategyReviewStore } = buildService(dirs, {
+      reviewerAdapter: spyAdapter,
+      runGit: fakeRunGit({ statusLines: ["UU conflicted.mjs"] }),
+    });
+    const workOrder = seedWorkOrder(workOrderStore);
+    const report = seedDeliveryReport(deliveryReportStore, workOrder.work_order_id, { status: "failed", commit: null, pushStatus: "not_applicable" });
+
+    const result = await service.reviewDelivery({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id });
+    assert.equal(called, false);
+    assert.equal(result.decision, "ceo_decision_required");
+    const stored = strategyReviewStore.get(result.strategyReviewId);
+    assert.ok(stored.ceo_escalation);
+    assert.equal(stored.correction, null);
+  }));
+
+test("reviewDelivery(): a 'partial' Delivery Report DOES reach the adapter, and the default mock 'approved' proposal is overridden to correction_required", () =>
+  withTempDirs(async (dirs) => {
+    let called = false;
+    const wrappedAdapter = {
+      name: createStrategyReviewMockAdapter().name,
+      reviewDelivery: async (args) => {
+        called = true;
+        return createStrategyReviewMockAdapter().reviewDelivery(args);
+      },
+    };
+    const { service, workOrderStore, deliveryReportStore, strategyReviewStore } = buildService(dirs, { reviewerAdapter: wrappedAdapter });
+    const workOrder = seedWorkOrder(workOrderStore);
+    const report = seedDeliveryReport(deliveryReportStore, workOrder.work_order_id, { status: "partial", commit: "bbb2222", pushStatus: "not_applicable" });
+
+    const result = await service.reviewDelivery({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id });
+    assert.equal(called, true, "unlike a 'failed' delivery, 'partial' is not pre-gated — the adapter is genuinely invoked");
+    assert.equal(result.decision, "correction_required");
+    const stored = strategyReviewStore.get(result.strategyReviewId);
+    assert.ok(stored.correction);
+    // The gate discarded the model's own all-pass criteria (invalid
+    // alongside "correction_required") in favour of unassessed criteria —
+    // see automated-strategy-review-service.mjs's own comment.
+    assert.ok(stored.criteria.every((c) => c.result === "insufficient_evidence"));
+  }));
+
+test("reviewDelivery(): a 'partial' Delivery Report whose adapter proposal is genuinely 'rejected' is never softened to correction_required", () =>
+  withTempDirs(async (dirs) => {
+    const { service, workOrderStore, deliveryReportStore, strategyReviewStore } = buildService(dirs, {
+      reviewerAdapter: createStrategyReviewMockAdapter({ mode: "rejected" }),
+    });
+    const workOrder = seedWorkOrder(workOrderStore);
+    const report = seedDeliveryReport(deliveryReportStore, workOrder.work_order_id, { status: "partial", commit: "bbb2222", pushStatus: "not_applicable" });
+
+    const result = await service.reviewDelivery({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id });
+    assert.equal(result.decision, "rejected");
+    assert.equal(strategyReviewStore.get(result.strategyReviewId).correction, null);
+  }));
+
+test("reviewDelivery(): the synthesized correction for a gate-forced 'failed' review stays within the original Work Order — no scope expansion, references every (unassessed) criterion", () =>
+  withTempDirs(async (dirs) => {
+    const { service, workOrderStore, deliveryReportStore, strategyReviewStore } = buildService(dirs);
+    const workOrder = seedWorkOrder(workOrderStore);
+    const report = seedDeliveryReport(deliveryReportStore, workOrder.work_order_id, { status: "failed", commit: null, pushStatus: "not_applicable" });
+
+    const result = await service.reviewDelivery({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id });
+    const stored = strategyReviewStore.get(result.strategyReviewId);
+    assert.deepEqual(stored.correction.failed_criteria, [1, 2], "workOrder.review_criteria has 2 entries — every one is referenced, none fabricated beyond range");
+    assert.match(stored.correction.required_outcome, /original Engineering Work Order/i);
+    assert.match(stored.correction.prohibited_scope_expansion, /no scope expansion/i);
+  }));
+
 // --- getReviewStatus() ------------------------------------------------
 
 test("getReviewStatus(): reports the Delivery Report, its reviews, and current lock state", () =>
