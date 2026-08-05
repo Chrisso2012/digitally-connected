@@ -35,6 +35,7 @@
     "bridge": "node tests/validation/bridge.mjs",
     "delivery-office": "node tests/validation/delivery-office-runner.mjs",
     "strategy-review": "node tests/validation/strategy-review-agent.mjs",
+    "operations-bridge": "node tests/validation/operations-bridge.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

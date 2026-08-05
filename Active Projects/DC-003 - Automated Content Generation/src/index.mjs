@@ -610,3 +610,10 @@ export {
   DeliveryReportNotEligibleForReviewError,
   InvalidAutomatedStrategyReviewDependenciesError,
 } from "./strategy-review-errors.mjs";
+
+// DC-003-I029.4 — Automated Operations Bridge: orchestrates I029.2
+// (Automated Delivery Office) and I029.3 (Automated Strategy Review) into
+// one chained call. Orchestration only — no new eligibility/lock/git/
+// review logic; see automated-operations-bridge-service.mjs's own header.
+export { createOperationsBridgeService, getOperationsBridgeStatus } from "./automated-operations-bridge-service.mjs";
+export { InvalidAutomatedOperationsBridgeDependenciesError } from "./operations-bridge-errors.mjs";
