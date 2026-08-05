@@ -485,3 +485,29 @@ export {
 
 export { createEngineeringWorkManagementService } from "./engineering-work-management-service.mjs";
 export { InvalidEngineeringWorkManagementDependenciesError } from "./engineering-work-management-errors.mjs";
+
+// DC-003-I029.1 — Bridge Transport: moves Engineering Work Orders out and
+// Engineering Delivery Reports in. Transport only — no approvals, no
+// engineering decisions, no prompt generation, no networking. Mock-only;
+// the clean extension point for a future real transport provider. See
+// "Bridge Transport (DC-003-I029.1)" in the README.
+export { createBridgeTransportRecord } from "./bridge-transport-record.mjs";
+export { assertValidBridgeTransportStoreAdapter } from "./bridge-transport-store-adapter.mjs";
+export { createLocalJsonBridgeTransportStoreAdapter } from "./local-json-bridge-transport-store-adapter.mjs";
+export { createBridgeTransportStore } from "./bridge-transport-store.mjs";
+export { createMockBridgeTransportAdapter } from "./bridge-transport-mock-adapter.mjs";
+export { exportWorkOrder, importDeliveryReport, getQueue, getHistory } from "./bridge-transport-service.mjs";
+export {
+  InvalidBridgeTransportRecordInputError,
+  BridgeTransportRecordValidationError,
+  InvalidBridgeTransportStoreAdapterError,
+  InvalidBridgeTransportRecordIdentifierError,
+  BridgeTransportRecordAlreadyExistsError,
+  BridgeTransportRecordNotFoundError,
+  CorruptedBridgeTransportRecordError,
+  BridgeTransportPersistenceError,
+  BridgeTransportSendError,
+  BridgeTransportCorruptionError,
+  DuplicateBridgeTransportError,
+  InvalidBridgeTransportDependenciesError,
+} from "./bridge-transport-errors.mjs";

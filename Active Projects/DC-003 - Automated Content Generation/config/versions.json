@@ -20,7 +20,8 @@
     "social_publishing_manifest": "1.0",
     "social_analytics_snapshot": "1.0",
     "engineering_work_order": "1.0",
-    "engineering_delivery_report": "1.0"
+    "engineering_delivery_report": "1.0",
+    "bridge_transport_record": "1.0"
   },
   "prompt_version": "carousel-copy.v1"
 }

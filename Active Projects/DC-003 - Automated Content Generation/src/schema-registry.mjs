@@ -63,9 +63,13 @@ const SCHEMA_FILES = {
   // Engineering section embeds the latest one).
   engineeringWorkOrder: "engineering-work-order.schema.json",
   engineeringDeliveryReport: "engineering-delivery-report.schema.json",
-  // DC-003-I024, extended by DC-003-I028/I029 — the Control Centre's
-  // in-memory read model. Must be compiled AFTER
-  // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport
+  // DC-003-I029.1 — one immutable transport event moving a Work Order out
+  // or a Delivery Report in. Must be registered BEFORE controlCentre
+  // below, since control-centre.schema.json $refs it by $id.
+  bridgeTransportRecord: "bridge-transport-record.schema.json",
+  // DC-003-I024, extended by DC-003-I028/I029/I029.1 — the Control
+  // Centre's in-memory read model. Must be compiled AFTER
+  // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport/bridgeTransportRecord
   // above (object key order = compile order in validator.mjs) since it
   // $refs all of them by $id.
   controlCentre: "control-centre.schema.json",

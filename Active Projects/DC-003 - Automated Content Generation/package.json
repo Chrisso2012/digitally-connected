@@ -32,6 +32,7 @@
     "publisher-results": "node tests/validation/publisher-results.mjs",
     "social:analytics": "node tests/validation/social-analytics.mjs",
     "engineering": "node tests/validation/engineering.mjs",
+    "bridge": "node tests/validation/bridge.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

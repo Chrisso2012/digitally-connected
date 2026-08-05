@@ -16,6 +16,8 @@ import { createEngineeringWorkOrderStore } from "../../src/engineering-work-orde
 import { createEngineeringWorkOrder } from "../../src/engineering-work-order.mjs";
 import { createEngineeringDeliveryReportStore } from "../../src/engineering-delivery-report-store.mjs";
 import { createEngineeringDeliveryReport } from "../../src/engineering-delivery-report.mjs";
+import { createBridgeTransportStore } from "../../src/bridge-transport-store.mjs";
+import { createBridgeTransportRecord } from "../../src/bridge-transport-record.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError } from "../../src/control-centre-errors.mjs";
 import { CarouselNotFoundError } from "../../src/finished-carousel-store-errors.mjs";
@@ -109,6 +111,28 @@ function buildEngineeringStores() {
 function buildWorkOrder(overrides = {}, options = {}) {
   return createEngineeringWorkOrder(
     { milestone: "DC-003-I029", title: "t", objective: "o", reviewCriteria: ["c1"], ...overrides },
+    options
+  );
+}
+
+function buildBridgeTransportStore() {
+  return createBridgeTransportStore({ adapter: createInMemoryAdapter("in-memory-bridge-transport-adapter") });
+}
+
+const VALID_CHECKSUM = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+function buildTransportRecord(overrides = {}, options = {}) {
+  return createBridgeTransportRecord(
+    {
+      objectType: "engineering_work_order",
+      objectId: "wo_placeholder00001",
+      transportType: "mock",
+      status: "delivered",
+      source: "engineering-work-order-store",
+      destination: "/tmp/outgoing/placeholder.json",
+      checksum: VALID_CHECKSUM,
+      ...overrides,
+    },
     options
   );
 }
@@ -906,6 +930,72 @@ test("the Control Centre never makes a network request to compute overview.engin
       engineeringWorkOrderStore: workOrderStore,
       engineeringDeliveryReportStore: deliveryReportStore,
     });
+    service.getOverview();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// --- Bridge Transport (DC-003-I029.1) --------------------------------------
+
+test("throws InvalidControlCentreDependenciesError for a bridgeTransportStore that doesn't implement the shape", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  assert.throws(
+    () => createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, bridgeTransportStore: { name: "not-a-real-store" } }),
+    InvalidControlCentreDependenciesError
+  );
+});
+
+test("overview.bridge is null when no bridgeTransportStore was supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  assert.equal(service.getOverview().bridge, null);
+});
+
+test("overview.bridge assembles real counts and the full latest transport record when supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const bridgeTransportStore = buildBridgeTransportStore();
+
+  bridgeTransportStore.save(buildTransportRecord({ status: "rejected" }, { idGenerator: () => "bt_cc0000000000001", now: () => "2026-08-01T00:00:00.000Z" }));
+  bridgeTransportStore.save(buildTransportRecord({ status: "delivered" }, { idGenerator: () => "bt_cc0000000000002", now: () => "2026-08-05T00:00:00.000Z" }));
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, bridgeTransportStore });
+  const bridge = service.getOverview().bridge;
+
+  assert.equal(bridge.pending_exports, 0);
+  assert.equal(bridge.pending_imports, 0);
+  assert.equal(bridge.history_count, 2);
+  assert.equal(bridge.healthy, true);
+  assert.equal(bridge.last_transport.transport_record_id, "bt_cc0000000000002");
+  assert.equal(bridge.last_transport.status, "delivered"); // full record, not a summary
+});
+
+test("a broken bridgeTransportStore degrades overview.bridge to an honest zeroed/unhealthy summary rather than throwing", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const brokenBridgeTransportStore = {
+    ...buildBridgeTransportStore(),
+    list() {
+      throw new Error("simulated store failure");
+    },
+  };
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, bridgeTransportStore: brokenBridgeTransportStore });
+  const bridge = service.getOverview().bridge;
+  assert.equal(bridge.healthy, false);
+  assert.equal(bridge.history_count, 0);
+});
+
+test("the Control Centre never makes a network request to compute overview.bridge", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const bridgeTransportStore = buildBridgeTransportStore();
+  bridgeTransportStore.save(buildTransportRecord());
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("must not be called");
+  };
+  try {
+    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, bridgeTransportStore });
     service.getOverview();
   } finally {
     globalThis.fetch = originalFetch;

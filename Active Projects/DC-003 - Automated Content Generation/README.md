@@ -5957,6 +5957,129 @@ bridge, conversation history, prompt storage, and LLM requests are all
 explicitly out of scope for I029 itself. This milestone only prepares the
 structured objects that transport will one day carry.
 
+## Bridge Transport (DC-003-I029.1)
+
+I029 defined the engineering language (Engineering Work Order, Engineering
+Delivery Report). I029.1 moves those objects between locations. **Transport
+is intentionally dumb** — it makes no engineering decisions, generates no
+prompts, interprets no intent, and talks to no LLM. Deliberately kept lean
+(14 new files) — a clean extension point, not a new business capability.
+
+```
+Engineering Work Order Store
+       ↓
+Bridge Transport
+       ↓
+Outgoing Queue
+       ↓
+( future transport )
+       ↓
+Incoming Queue
+       ↓
+Engineering Delivery Report Store
+```
+
+**Repository investigation, confirmed before writing any code:** no
+transport abstraction existed anywhere in this repository — every
+"Adapter" built so far either persists a domain object (Storage Adapters:
+I015/I023/I025/I028/I029) or publishes to an external platform (Publisher
+Adapters: I022/I027). Nothing moves a repository-owned object *between two
+locations* the way this milestone needs to. I029's own Work Order/Delivery
+Report Stores, CLI, and Control Centre integration are reused completely
+unmodified — this milestone adds one new store and one new Control Centre
+section alongside them, nothing more.
+
+**Bridge Transport Record** (`schemas/bridge-transport-record.schema.json`,
+`bt_` prefix) — one immutable record per transport event: `object_type`,
+`object_id`, `direction`, `transport_type`, `status`, `transported_at`,
+`source`, `destination`, `checksum`, `notes`. `direction` is **derived**
+from `object_type`, never accepted as caller input — an Engineering Work
+Order only ever travels `outgoing`, an Engineering Delivery Report only
+ever travels `incoming`, matching the architecture diagram above exactly
+(a real constraint, not an invented one). `transport_type` is deliberately
+free-form, not a closed enum (mirrors `publisher-result.schema.json`'s own
+free-form `provider`) — only `"mock"` is ever produced by this milestone,
+so a future real provider needs no schema change. `checksum` (SHA-256 hex)
+is computed by the **service**, not the transport adapter, from the object
+already in hand — this means a checksum is always available for a
+transport record regardless of whether the adapter call itself succeeds,
+so a genuine transport *failure* can still be recorded as real history
+(a `rejected` record), never silently dropped. The one true exception: an
+import payload that fails to even parse has no real `object_id` to record
+against, so no Bridge Transport Record is created for that case (mirrors
+DC-003-I028's own "malformed input persists nothing" discipline) — the
+caller just sees the error.
+
+**Queue model:** `pending` | `delivered` | `rejected`. `pending` is
+reserved for a future *asynchronous* transport provider — the mock
+transport is synchronous, so it never leaves anything genuinely pending;
+`pending_exports`/`pending_imports` are honestly always 0 today, not
+faked. No retry behaviour and no scheduling were invented, per the brief.
+
+**Store:** `bridge-transport-store.mjs` + 2 adapter files, mirroring
+I015/I023/I025/I028/I029's own domain-store/storage-adapter/local-JSON
+separation exactly — `save`/`get`/`list`/`findByObject`/`exists`, atomic
+writes, no `replace()` (a transport event, once recorded — even a
+rejected one — is permanent history, never revised).
+
+**Mock Transport Adapter** (`bridge-transport-mock-adapter.mjs`) — the
+only adapter this milestone ships and the only one tests/the CLI use.
+`sendWorkOrder()` genuinely writes the Work Order's JSON to a real local
+destination directory (the closest honest thing to an "Outgoing Queue"
+without a real remote endpoint); `receiveDeliveryReport()` genuinely reads
+and parses a local file. `options.mode` (`success` default | `failure` |
+`duplicate` | `corrupted`) lets tests exercise the service's own
+history-recording behaviour deterministically. No formal contract-checker
+file exists for this adapter shape (unlike the Storage Adapter above) —
+deliberately lean; the two-method shape is documented directly in
+`bridge-transport-service.mjs` and is the intended swap-in point for a
+real future provider (ChatGPT/Claude/MCP/n8n/API) without touching the
+service itself.
+
+**Service** (`bridge-transport-service.mjs`): `exportWorkOrder()` (reads
+the Work Order — read-only, never mutates I029's own store — checks
+Bridge Transport history for a prior successful export before ever
+calling the adapter, then records `delivered` or `rejected`),
+`importDeliveryReport()` (reads + schema-validates the payload, checks the
+real Engineering Delivery Report Store for a duplicate, then saves it for
+real and records the transport), `getQueue()`, `getHistory()`.
+
+**CLI** (`tests/validation/bridge.mjs`, `npm run bridge`):
+
+```bash
+npm run bridge -- export <workOrderId> <workOrderStoreDirectory> <transportStoreDirectory> <destinationDir>
+npm run bridge -- import <deliveryReportPath> <deliveryReportStoreDirectory> <transportStoreDirectory>
+npm run bridge -- queue <transportStoreDirectory>
+npm run bridge -- history <transportStoreDirectory>
+```
+
+Mock only — there is no `--live` flag, since no real transport provider
+exists yet to switch to. No networking anywhere in this file.
+
+**Control Centre integration:** additive/optional, mirroring I028/I029's
+own precedent exactly — `bridgeTransportStore` (standalone, not paired
+with anything) adds a `bridge` field to the overview
+(`pending_exports`, `pending_imports`, `history_count`, `last_transport`
+embedded as the full record, `healthy`), `null` when not supplied. CLI:
+append `--bridge=<dir>` to the `dashboard` subcommand. Read-only — the
+Control Centre never calls the store's own `save()`.
+
+**Future transport providers:** this milestone deliberately stops one
+step before real ChatGPT, Claude, MCP, n8n, or API integration. Those
+systems should be able to plug in by implementing the same
+`sendWorkOrder()`/`receiveDeliveryReport()` two-method shape and being
+passed into `exportWorkOrder()`/`importDeliveryReport()` in place of the
+mock adapter — no redesign of the schema, store, service, CLI, or Control
+Centre section required. **This milestone intentionally performs no
+networking of any kind.**
+
+**Explicitly out of scope** (per this milestone's own brief): ChatGPT,
+Claude, MCP, n8n, GitHub, webhooks, scheduling, polling, automatic
+approvals, automatic engineering, prompt generation, and repository
+mutation beyond the one legitimate write import performs (persisting an
+already-valid, already-approved-elsewhere Delivery Report into its own
+permanent I029 store).
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -6337,7 +6460,8 @@ milestone).
 | Social Publisher (publishes an approved carousel to Instagram carousel + LinkedIn multi-image posts, per an approved Social Publishing Manifest) | Done (DC-003-I027) — `src/social-publisher-service.mjs`, `src/social-publishing-manifest.mjs`, `src/instagram-carousel-publisher-adapter.mjs`, `src/linkedin-multi-image-publisher-adapter.mjs` + mock adapters/configs, CLI `npm run publish:social`; see "Social Publisher (DC-003-I027)"; new `schemas/social-publishing-manifest.schema.json` closes the confirmed "no approved platform copy exists anywhere" gap; `publisher-result.schema.json` (I025) needed zero changes; I021/I022/I025/I014 all unchanged; mock remains the default without `--live`; duplicate-publish prevention and sequential per-destination publishing with immediate Publisher Result recording (never batched); Control Centre's `jobPublishing` gained an additive `by_provider` breakdown; **no live Instagram/LinkedIn/Facebook/Meta request made — proposed budgets Instagram 8, LinkedIn 13, each requiring its own separate future approval** |
 | Social Analytics (post-publication performance snapshots for Instagram + LinkedIn, sourced only from Publisher Results, immutable time-series) | Done (DC-003-I028) — `src/social-analytics-snapshot.mjs`, `src/social-analytics-store.mjs` + adapter files, `src/instagram-insights-adapter.mjs`, `src/linkedin-post-analytics-adapter.mjs` + mock adapters/configs, CLI `npm run social:analytics`; see "Social Analytics (DC-003-I028)"; new `schemas/social-analytics-snapshot.schema.json`; `publisher-result.schema.json` (I025) and every I008–I012/I014/I015/I021/I022/I025/I026/I027 module unchanged; Control Centre's `socialAnalyticsStore` dependency is additive/optional (never a breaking required field, unlike I025's own precedent); mock remains the default without `--live`; **no live Instagram/LinkedIn/Meta analytics request made — proposed budgets Instagram 1, LinkedIn organization 1, LinkedIn member 5, each requiring its own separate future approval; no platform has been live-connected yet for either publishing or analytics** |
 | Engineering Work Management (structured Strategy Office <-> Delivery Office objects: Work Order, Delivery Report, read-only join service, Control Centre section) | Done (DC-003-I029) — `src/engineering-work-order.mjs`, `src/engineering-work-order-store.mjs` + adapter files, `src/engineering-delivery-report.mjs`, `src/engineering-delivery-report-store.mjs` + adapter files, `src/engineering-work-management-service.mjs`, CLI `npm run engineering`; see "Engineering Work Management (DC-003-I029)"; new `schemas/engineering-work-order.schema.json` and `schemas/engineering-delivery-report.schema.json`; no Claude/ChatGPT/MCP/n8n/API/message-transport integration of any kind — defines the engineering language only; Control Centre's paired `engineeringWorkOrderStore`/`engineeringDeliveryReportStore` dependency is additive/optional, mirroring I028's own `socialAnalyticsStore` precedent; no workflow-transition functions exist (`work create` only ever produces `draft`/`ready`); every prior module (I008–I028) confirmed untouched |
-| Unit test suite | Done — 1283 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Bridge Transport (moves Engineering Work Orders out / Engineering Delivery Reports in, mock-only clean extension point) | Done (DC-003-I029.1) — `src/bridge-transport-record.mjs`, `src/bridge-transport-store.mjs` + adapter files, `src/bridge-transport-mock-adapter.mjs`, `src/bridge-transport-service.mjs`, CLI `npm run bridge`; see "Bridge Transport (DC-003-I029.1)"; new `schemas/bridge-transport-record.schema.json`; no Claude/ChatGPT/MCP/n8n/API/networking of any kind — transport only, no engineering decisions, no prompt generation; `direction` is derived from `object_type`, never caller-supplied; Control Centre's `bridgeTransportStore` dependency is additive/optional, mirroring I028/I029's own precedent; kept deliberately lean (14 new files) — every I029 module (Work Order/Delivery Report Stores, CLI, Control Centre) reused completely unmodified |
+| Unit test suite | Done — 1330 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

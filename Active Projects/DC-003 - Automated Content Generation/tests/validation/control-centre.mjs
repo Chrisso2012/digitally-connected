@@ -69,6 +69,13 @@ import {
   CorruptedEngineeringDeliveryReportError,
   EngineeringDeliveryReportPersistenceError,
 } from "../../src/engineering-delivery-report-errors.mjs";
+import { createLocalJsonBridgeTransportStoreAdapter } from "../../src/local-json-bridge-transport-store-adapter.mjs";
+import { createBridgeTransportStore } from "../../src/bridge-transport-store.mjs";
+import {
+  InvalidBridgeTransportStoreAdapterError,
+  CorruptedBridgeTransportRecordError,
+  BridgeTransportPersistenceError,
+} from "../../src/bridge-transport-errors.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "../../src/control-centre-errors.mjs";
 
@@ -95,15 +102,19 @@ const KNOWN_ERRORS = [
   InvalidEngineeringDeliveryReportStoreAdapterError,
   CorruptedEngineeringDeliveryReportError,
   EngineeringDeliveryReportPersistenceError,
+  InvalidBridgeTransportStoreAdapterError,
+  CorruptedBridgeTransportRecordError,
+  BridgeTransportPersistenceError,
 ];
 
-// DC-003-I028/I029 — named flags, not more positionals, so each can be
-// supplied independently of the already-optional [exportsRootDir]
+// DC-003-I028/I029/I029.1 — named flags, not more positionals, so each can
+// be supplied independently of the already-optional [exportsRootDir]
 // positional without any ordering ambiguity.
 const NAMED_FLAG_PREFIXES = {
   socialAnalyticsStoreDirectory: "--social-analytics=",
   engineeringWorkOrdersDirectory: "--engineering-work-orders=",
   engineeringDeliveryReportsDirectory: "--engineering-delivery-reports=",
+  bridgeTransportStoreDirectory: "--bridge=",
 };
 
 function extractNamedFlags(args) {
@@ -125,6 +136,7 @@ function usageAndExit() {
   console.error(
     "  (append --engineering-work-orders=<dir> --engineering-delivery-reports=<dir> to the dashboard command to include Engineering, DC-003-I029)"
   );
+  console.error("  (append --bridge=<dir> to the dashboard command to include Bridge Transport, DC-003-I029.1)");
   console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
@@ -234,6 +246,20 @@ function printEngineeringSection(engineering) {
   console.log(`  Latest Delivery Report     ${engineering.latest_delivery_report?.delivery_report_id ?? "(none)"}`);
 }
 
+function printBridgeSection(bridge) {
+  console.log("Bridge Transport");
+  console.log();
+  if (bridge === null) {
+    console.log("  unknown (no --bridge=<dir> supplied)");
+    return;
+  }
+  console.log(`  Pending Exports            ${bridge.pending_exports}`);
+  console.log(`  Pending Imports            ${bridge.pending_imports}`);
+  console.log(`  Transport History Count    ${bridge.history_count}`);
+  console.log(`  Last Transport             ${bridge.last_transport?.transport_record_id ?? "(none)"}`);
+  console.log(`  Bridge Healthy             ${bridge.healthy}`);
+}
+
 function printDashboard(overview) {
   console.log(RULE);
   console.log("DC-003 CONTROL CENTRE");
@@ -250,6 +276,8 @@ function printDashboard(overview) {
   printRecentActivitySection(overview.recent_activity);
   console.log();
   printEngineeringSection(overview.engineering);
+  console.log();
+  printBridgeSection(overview.bridge);
 }
 
 function printJobDetail(detail) {
@@ -348,7 +376,8 @@ function buildService(
   exportsRootDir,
   socialAnalyticsStoreDirectory,
   engineeringWorkOrdersDirectory,
-  engineeringDeliveryReportsDirectory
+  engineeringDeliveryReportsDirectory,
+  bridgeTransportStoreDirectory
 ) {
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir: carouselStoreDirectory }) });
   const productionMetricsStore = createProductionMetricsStore({ adapter: createLocalJsonProductionMetricsStoreAdapter({ storageDir: metricsStoreDirectory }) });
@@ -362,6 +391,9 @@ function buildService(
   const engineeringDeliveryReportStore = engineeringDeliveryReportsDirectory
     ? createEngineeringDeliveryReportStore({ adapter: createLocalJsonEngineeringDeliveryReportStoreAdapter({ storageDir: engineeringDeliveryReportsDirectory }) })
     : null;
+  const bridgeTransportStore = bridgeTransportStoreDirectory
+    ? createBridgeTransportStore({ adapter: createLocalJsonBridgeTransportStoreAdapter({ storageDir: bridgeTransportStoreDirectory }) })
+    : null;
   return createControlCentreService({
     finishedCarouselStore,
     productionMetricsStore,
@@ -369,6 +401,7 @@ function buildService(
     socialAnalyticsStore,
     engineeringWorkOrderStore,
     engineeringDeliveryReportStore,
+    bridgeTransportStore,
     exportsRootDir: exportsRootDir ?? null,
   });
 }
@@ -376,7 +409,7 @@ function buildService(
 const [subcommand, ...rawRest] = process.argv.slice(2);
 if (!subcommand) usageAndExit();
 const {
-  flags: { socialAnalyticsStoreDirectory, engineeringWorkOrdersDirectory, engineeringDeliveryReportsDirectory },
+  flags: { socialAnalyticsStoreDirectory, engineeringWorkOrdersDirectory, engineeringDeliveryReportsDirectory, bridgeTransportStoreDirectory },
   rest,
 } = extractNamedFlags(rawRest);
 
@@ -391,7 +424,8 @@ try {
       exportsRootDir,
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
-      engineeringDeliveryReportsDirectory
+      engineeringDeliveryReportsDirectory,
+      bridgeTransportStoreDirectory
     );
     printDashboard(service.getOverview());
   } else if (subcommand === "health") {
@@ -404,7 +438,8 @@ try {
       exportsRootDir,
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
-      engineeringDeliveryReportsDirectory
+      engineeringDeliveryReportsDirectory,
+      bridgeTransportStoreDirectory
     );
     printHealthSection(service.getOverview().health);
   } else if (subcommand === "jobs") {
@@ -417,7 +452,8 @@ try {
       exportsRootDir,
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
-      engineeringDeliveryReportsDirectory
+      engineeringDeliveryReportsDirectory,
+      bridgeTransportStoreDirectory
     );
     printRecentJobsSection(service.getOverview().recent_jobs);
   } else if (subcommand === "activity") {
@@ -430,7 +466,8 @@ try {
       exportsRootDir,
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
-      engineeringDeliveryReportsDirectory
+      engineeringDeliveryReportsDirectory,
+      bridgeTransportStoreDirectory
     );
     printRecentActivitySection(service.getOverview().recent_activity);
   } else if (subcommand === "job") {
@@ -443,7 +480,8 @@ try {
       exportsRootDir,
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
-      engineeringDeliveryReportsDirectory
+      engineeringDeliveryReportsDirectory,
+      bridgeTransportStoreDirectory
     );
     printJobDetail(service.getJobDetail(carouselId));
   } else {

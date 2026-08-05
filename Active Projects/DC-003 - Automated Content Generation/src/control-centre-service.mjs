@@ -52,6 +52,7 @@ import { loadLlmProviderConfig } from "./llm-provider-config.mjs";
 import { loadRendererConfig } from "./renderer-config.mjs";
 import { loadGoogleDrivePublisherConfig } from "./google-drive-publisher-config.mjs";
 import { createEngineeringWorkManagementService } from "./engineering-work-management-service.mjs";
+import { getQueue as getBridgeQueue } from "./bridge-transport-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "./control-centre-errors.mjs";
 
 const DEFAULT_RECENT_JOBS_LIMIT = 10;
@@ -79,6 +80,7 @@ function assertDependencies({
   socialAnalyticsStore,
   engineeringWorkOrderStore,
   engineeringDeliveryReportStore,
+  bridgeTransportStore,
 }) {
   if (
     !finishedCarouselStore ||
@@ -145,6 +147,17 @@ function assertDependencies({
       );
     }
   }
+  // DC-003-I029.1 — optional, standalone (not paired) — the Bridge
+  // section needs only the Bridge Transport Store itself.
+  if (
+    bridgeTransportStore !== null &&
+    bridgeTransportStore !== undefined &&
+    (typeof bridgeTransportStore.list !== "function" || typeof bridgeTransportStore.get !== "function")
+  ) {
+    throw new InvalidControlCentreDependenciesError(
+      "fields.bridgeTransportStore, when supplied, must be a Bridge Transport Store — see createBridgeTransportStore() in bridge-transport-store.mjs"
+    );
+  }
 }
 
 // Reuses I022's own "metadata.json present, parseable, carousel_id
@@ -207,6 +220,9 @@ function sumCost(metricsSummaries) {
  *   optional (DC-003-I029), supplied together or not at all — see
  *   engineering-work-order-store.mjs / engineering-delivery-report-store.mjs.
  *   When omitted, `engineering` is null.
+ * fields.bridgeTransportStore — optional (DC-003-I029.1), standalone (not
+ *   paired) — see bridge-transport-store.mjs. When omitted, `bridge` is
+ *   null.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -231,6 +247,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     socialAnalyticsStore = null,
     engineeringWorkOrderStore = null,
     engineeringDeliveryReportStore = null,
+    bridgeTransportStore = null,
     exportsRootDir = null,
   } = fields;
   assertDependencies({
@@ -240,6 +257,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     socialAnalyticsStore,
     engineeringWorkOrderStore,
     engineeringDeliveryReportStore,
+    bridgeTransportStore,
   });
 
   const now = options.now ?? (() => new Date().toISOString());
@@ -686,13 +704,39 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  // DC-003-I029.1 — read-only, additive, standalone (not paired with
+  // anything). Delegates counting to getQueue() from
+  // bridge-transport-service.mjs — one source of truth, not a second
+  // implementation. `last_transport` is re-fetched as a FULL record (the
+  // store's own list() only returns summaries) to match every other
+  // "embed the full latest record" precedent in this schema
+  // (social_performance, engineering.latest_delivery_report). Degrades to
+  // an honest zeroed/unhealthy summary on a store read failure, mirroring
+  // computeEngineering()'s own discipline.
+  function computeBridge() {
+    if (!bridgeTransportStore) return null;
+    try {
+      const queue = getBridgeQueue({ transportStore: bridgeTransportStore });
+      const lastTransport = queue.last_transport ? bridgeTransportStore.get(queue.last_transport.transport_record_id) : null;
+      return {
+        pending_exports: queue.pending_exports,
+        pending_imports: queue.pending_imports,
+        history_count: queue.history_count,
+        last_transport: lastTransport,
+        healthy: true,
+      };
+    } catch {
+      return { pending_exports: 0, pending_imports: 0, history_count: 0, last_transport: null, healthy: false };
+    }
+  }
+
   /**
    * Assembles the full "overview" read model: system health, dashboard
-   * totals, recent jobs, recent activity, and engineering status, all from
-   * one consistent snapshot of the stores. Never throws for a broken
-   * store — a store read failure is folded into that store's own health
-   * check instead (see computeHealth()); it only throws
-   * ControlCentreAssemblyError if this module's own assembly logic
+   * totals, recent jobs, recent activity, engineering status, and bridge
+   * transport status, all from one consistent snapshot of the stores.
+   * Never throws for a broken store — a store read failure is folded into
+   * that store's own health check instead (see computeHealth()); it only
+   * throws ControlCentreAssemblyError if this module's own assembly logic
    * produces something that doesn't match control-centre.schema.json (a
    * bug in this file, not a data problem).
    */
@@ -707,6 +751,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       recent_jobs: core.recentSummaries.slice(0, recentJobsLimit).map((summary) => computeJobSummary(summary, core.publishedCarouselIds)),
       recent_activity: computeActivity(core.recentFull),
       engineering: computeEngineering(),
+      bridge: computeBridge(),
     };
 
     return validateAndFreeze(overview);

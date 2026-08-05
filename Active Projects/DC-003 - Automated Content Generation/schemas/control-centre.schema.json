@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -16,7 +16,8 @@
         "dashboard": { "$ref": "#/$defs/dashboardSummary" },
         "recent_jobs": { "type": "array", "items": { "$ref": "#/$defs/jobSummary" } },
         "recent_activity": { "type": "array", "items": { "$ref": "#/$defs/activityEntry" } },
-        "engineering": { "$ref": "#/$defs/engineeringSummary" }
+        "engineering": { "$ref": "#/$defs/engineeringSummary" },
+        "bridge": { "$ref": "#/$defs/bridgeSummary" }
       }
     },
     {
@@ -322,6 +323,26 @@
             "latest_delivery_report": {
               "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/engineering-delivery-report.schema.json" }]
             }
+          }
+        }
+      ]
+    },
+    "bridgeSummary": {
+      "description": "DC-003-I029.1 — sourced entirely from the Bridge Transport Store, read-only, no store ever modified by the Control Centre and no networking of any kind. null when no Bridge Transport Store was supplied.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["pending_exports", "pending_imports", "history_count", "last_transport", "healthy"],
+          "additionalProperties": false,
+          "properties": {
+            "pending_exports": { "type": "integer", "minimum": 0 },
+            "pending_imports": { "type": "integer", "minimum": 0 },
+            "history_count": { "type": "integer", "minimum": 0 },
+            "last_transport": {
+              "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/bridge-transport-record.schema.json" }]
+            },
+            "healthy": { "type": "boolean" }
           }
         }
       ]

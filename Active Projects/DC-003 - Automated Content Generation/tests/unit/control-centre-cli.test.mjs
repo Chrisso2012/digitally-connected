@@ -357,3 +357,44 @@ test("dashboard --engineering-work-orders=<dir> --engineering-delivery-reports=<
     assert.match(result.stdout, /commit=7d88509 push=pushed tree=clean/);
   });
 });
+
+// --- Bridge Transport (DC-003-I029.1) --------------------------------------
+
+test("dashboard omits --bridge=<dir> by default and reports Bridge Transport as unknown", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Bridge Transport\n\n\s+unknown/);
+  });
+});
+
+test("dashboard --bridge=<dir> shows real Bridge Transport data end to end", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir, base }) => {
+    const bridgeDir = path.join(base, "bridge-transport");
+
+    const recordScript = `
+      import { createLocalJsonBridgeTransportStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-bridge-transport-store-adapter.mjs"))};
+      import { createBridgeTransportStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "bridge-transport-store.mjs"))};
+      import { createBridgeTransportRecord } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "bridge-transport-record.mjs"))};
+
+      const store = createBridgeTransportStore({ adapter: createLocalJsonBridgeTransportStoreAdapter({ storageDir: ${JSON.stringify(bridgeDir)} }) });
+      store.save(createBridgeTransportRecord({
+        objectType: "engineering_work_order",
+        objectId: "wo_9c026a104e3745c3",
+        transportType: "mock",
+        status: "delivered",
+        source: "engineering-work-order-store",
+        destination: "/data/bridge/outgoing/wo_9c026a104e3745c3.json",
+        checksum: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      }));
+    `;
+    const seed = spawnSync(process.execPath, ["--input-type=module", "-e", recordScript], { encoding: "utf-8", env: CLEAN_ENV });
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir, `--bridge=${bridgeDir}`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Transport History Count\s+1/);
+    assert.match(result.stdout, /Bridge Healthy\s+true/);
+    assert.match(result.stdout, /Last Transport\s+bt_/);
+  });
+});

@@ -1,0 +1,13 @@
+{
+  "transport_record_id": "bt_9c026a104e3745c3",
+  "object_type": "engineering_work_order",
+  "object_id": "wo_9c026a104e3745c3",
+  "direction": "outgoing",
+  "transport_type": "mock",
+  "status": "delivered",
+  "transported_at": "2026-08-05T14:00:00Z",
+  "source": "engineering-work-order-store",
+  "destination": "/data/bridge/outgoing/wo_9c026a104e3745c3.json",
+  "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "notes": null
+}

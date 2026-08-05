@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/bridge-transport-record.schema.json",
+  "title": "Bridge Transport Record",
+  "description": "DC-003-I029.1 — one immutable transport event: one Engineering Work Order moved out, or one Engineering Delivery Report moved in. Transport is intentionally dumb — this record proves a move happened and how, never why. `transport_type` is deliberately free-form (not a closed enum) since Bridge Transport must remain provider-neutral and support a future real transport provider without a schema change (mirrors publisher-result.schema.json's own free-form `provider` field for the same reason) — only 'mock' is ever produced by this milestone. `object_type`/`object_id`/`direction` are tied together: an Engineering Work Order only ever travels outgoing (Strategy Office -> Delivery Office); an Engineering Delivery Report only ever travels incoming (Delivery Office -> Strategy Office) — matching this milestone's own architecture diagram, not an invented rule.",
+  "type": "object",
+  "required": [
+    "transport_record_id",
+    "object_type",
+    "object_id",
+    "direction",
+    "transport_type",
+    "status",
+    "transported_at",
+    "source",
+    "destination",
+    "checksum",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "transport_record_id": { "type": "string", "pattern": "^bt_[A-Za-z0-9]+$" },
+    "object_type": { "type": "string", "enum": ["engineering_work_order", "engineering_delivery_report"] },
+    "object_id": { "type": "string" },
+    "direction": { "type": "string", "enum": ["outgoing", "incoming"] },
+    "transport_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The transport mechanism used — 'mock' is the only value this milestone ever produces. Free-form so a future real provider (e.g. an MCP/n8n/API bridge) needs no schema change."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "delivered", "rejected"],
+      "description": "pending: reserved for a future asynchronous transport provider — the mock transport is synchronous and never leaves a record pending. delivered: the move succeeded. rejected: the move failed (duplicate, corrupted payload, or transport failure) — rejected records are still kept, as transport history."
+    },
+    "transported_at": { "type": "string", "format": "date-time" },
+    "source": { "type": "string", "minLength": 1 },
+    "destination": { "type": "string", "minLength": 1 },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hex digest of the transported object's own canonical JSON — used for duplicate/corruption detection, never a substitute for schema validation."
+    },
+    "notes": { "type": ["string", "null"] }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "object_type": { "const": "engineering_work_order" },
+        "object_id": { "type": "string", "pattern": "^wo_[A-Za-z0-9]+$" },
+        "direction": { "const": "outgoing" }
+      }
+    },
+    {
+      "properties": {
+        "object_type": { "const": "engineering_delivery_report" },
+        "object_id": { "type": "string", "pattern": "^dr_[A-Za-z0-9]+$" },
+        "direction": { "const": "incoming" }
+      }
+    }
+  ]
+}

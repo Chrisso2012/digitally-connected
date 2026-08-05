@@ -26,6 +26,7 @@ const APPROVED_FIXTURES = {
   socialAnalyticsSnapshot: "social-analytics-snapshot.example.json",
   engineeringWorkOrder: "engineering-work-order.example.json",
   engineeringDeliveryReport: "engineering-delivery-report.example.json",
+  bridgeTransportRecord: "bridge-transport-record.example.json",
   controlCentre: "control-centre.example.json",
 };
 
