@@ -17,7 +17,8 @@
     "production_metrics": "1.0",
     "control_centre": "1.0",
     "publisher_result": "1.0",
-    "social_publishing_manifest": "1.0"
+    "social_publishing_manifest": "1.0",
+    "social_analytics_snapshot": "1.0"
   },
   "prompt_version": "carousel-copy.v1"
 }

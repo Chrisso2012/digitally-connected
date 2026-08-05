@@ -1,0 +1,25 @@
+{
+  "analytics_snapshot_id": "sas_9c026a104e3745c3",
+  "publisher_result_id": "pub_9c026a104e3745c3",
+  "carousel_id": "car_9c026a104e3745c3",
+  "provider": "instagram",
+  "destination": "17841400000000000",
+  "provider_post_reference": "17800000000000000",
+  "collected_at": "2026-08-06T09:00:00Z",
+  "status": "completed",
+  "metrics": {
+    "reach": { "value": 1240, "availability": "available" },
+    "views": { "value": null, "availability": "not-supported" }
+  },
+  "engagement": {
+    "reactions": { "value": 85, "availability": "available" },
+    "comments": { "value": 12, "availability": "available" },
+    "shares": { "value": 6, "availability": "available" },
+    "saves": { "value": 20, "availability": "available" },
+    "total": { "value": 123, "availability": "available" }
+  },
+  "source": {
+    "type": "mock",
+    "provider_api_version": "v21.0"
+  }
+}

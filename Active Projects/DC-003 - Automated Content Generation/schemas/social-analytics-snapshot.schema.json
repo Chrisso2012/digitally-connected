@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/social-analytics-snapshot.schema.json",
+  "title": "Social Analytics Snapshot",
+  "description": "DC-003-I028 — one immutable observation of one published social post at one point in time. Publisher Results (I025/I027) prove that publication occurred; a Social Analytics Snapshot records what happened after publication. Every collection produces a NEW snapshot — historical snapshots are never overwritten (see social-analytics-store.mjs, which has no replace()/update()). `provider` is deliberately a closed enum (Instagram/LinkedIn only, matching this milestone's own explicitly scoped platform list) rather than publisher-result.schema.json's free-form string — a future platform requires its own future milestone to extend this schema, mirroring control-centre.schema.json's own `by_provider` precedent. `status` is a fixed const, matching publisher-result.schema.json's own design: this schema represents a successful collection only — a failed collection attempt never produces a stored snapshot (see README \"Failure Behaviour\").",
+  "type": "object",
+  "required": [
+    "analytics_snapshot_id",
+    "publisher_result_id",
+    "carousel_id",
+    "provider",
+    "destination",
+    "provider_post_reference",
+    "collected_at",
+    "status",
+    "metrics",
+    "engagement",
+    "source"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "analytics_snapshot_id": { "type": "string", "pattern": "^sas_[A-Za-z0-9]+$" },
+    "publisher_result_id": { "type": "string", "pattern": "^pub_[A-Za-z0-9]+$" },
+    "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
+    "provider": { "type": "string", "enum": ["instagram", "linkedin"] },
+    "destination": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The same safe account/author identifier already carried by the source Publisher Result's own `destination` field — an Instagram user ID or a LinkedIn `urn:li:person:...`/`urn:li:organization:...` author URN. Never a credential."
+    },
+    "provider_post_reference": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The platform post/media identifier this snapshot's metrics were collected for — copied verbatim from the source Publisher Result's own `provider_reference`. Never guessed or derived from a URL."
+    },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "status": { "const": "completed" },
+    "metrics": {
+      "type": "object",
+      "description": "Provider-neutral map of metric name -> { value, availability }. Deliberately open (additionalProperties, no fixed required key set) — Instagram and LinkedIn expose different documented metric names for the content types I027 publishes, and this schema does not force either provider to supply a metric the other has. See README \"Metric availability semantics\" for the full per-provider list.",
+      "additionalProperties": { "$ref": "#/$defs/metricValue" }
+    },
+    "engagement": {
+      "type": "object",
+      "description": "The one provider-independent engagement breakdown this milestone defines (brief §11): reactions, comments, shares, saves, each a normalized metricValue, plus a derived `total`. `total` is calculated ONLY when all four inputs are `available` — never a partial sum presented as complete, and never a guessed value when an input is unavailable.",
+      "required": ["reactions", "comments", "shares", "saves", "total"],
+      "additionalProperties": false,
+      "properties": {
+        "reactions": { "$ref": "#/$defs/metricValue" },
+        "comments": { "$ref": "#/$defs/metricValue" },
+        "shares": { "$ref": "#/$defs/metricValue" },
+        "saves": { "$ref": "#/$defs/metricValue" },
+        "total": { "$ref": "#/$defs/metricValue" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "description": "`type: \"mock\"` honestly labels a snapshot collected via a mock adapter (mirrors execution_metadata.provider's own \"templated-http\" vs \"mock-transport\" real-vs-mock distinction elsewhere in this codebase) — `type: \"provider-api\"` is reserved for a genuine live collection, none of which have occurred as of this milestone's delivery (see README \"Live-verification gates\").",
+      "required": ["type", "provider_api_version"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["provider-api", "mock"] },
+        "provider_api_version": { "type": ["string", "null"] }
+      }
+    }
+  },
+  "$defs": {
+    "metricValue": {
+      "type": "object",
+      "description": "A single normalized metric observation. Unavailable data is NEVER represented as a numeric zero (brief's own explicit rule) — `value` is `null` for every availability state except `available`, and a legitimate zero (e.g. zero comments) is only ever expressed as `{ value: 0, availability: \"available\" }`.",
+      "required": ["value", "availability"],
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": ["number", "null"], "minimum": 0 },
+        "availability": {
+          "type": "string",
+          "enum": ["available", "unavailable", "not-supported", "not-returned"],
+          "description": "available: a real numeric value was returned (may legitimately be 0). unavailable: the provider indicated this data could not be produced right now (e.g. Instagram's own documented \"empty data set instead of 0\" behavior). not-supported: this metric does not apply to this platform/content type at all (a client-side, pre-request classification, e.g. Instagram's per-media-type metric list). not-returned: the metric was requested but the provider's response simply omitted it, distinct from an explicit unavailable signal."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "availability": { "const": "available" } }, "required": ["availability"] },
+          "then": { "properties": { "value": { "type": "number", "minimum": 0 } }, "required": ["value"] }
+        },
+        {
+          "if": { "not": { "properties": { "availability": { "const": "available" } }, "required": ["availability"] } },
+          "then": { "properties": { "value": { "const": null } } }
+        }
+      ]
+    }
+  }
+}

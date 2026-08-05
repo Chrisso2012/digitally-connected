@@ -5565,6 +5565,240 @@ post deletion or editing, retries during initial verification, analytics,
 social listening, comment management, engagement automation,
 authentication UI, and n8n workflow changes.
 
+## Social Analytics (DC-003-I028)
+
+Closes the first feedback loop: *what happened after this post was
+published?* Publisher Results (I025/I027) prove that publication occurred;
+a **Social Analytics Snapshot** records what happened after publication.
+The analytics layer only ever observes already-published posts — it never
+publishes, edits, deletes, or promotes them, and never guesses which post
+belongs to which carousel (every collection is anchored to a real,
+persisted Publisher Result's own `provider_reference`).
+
+**Architecture:**
+
+```
+Publisher Result Store
+        ↓
+Analytics Collection Service (src/social-analytics-service.mjs)
+        ↓
+Platform Analytics Adapter
+        ├── Instagram Insights Adapter
+        └── LinkedIn Post Analytics Adapter
+        ↓
+Normalised Social Analytics Snapshot (src/social-analytics-snapshot.mjs)
+        ↓
+Social Analytics Store (src/social-analytics-store.mjs)
+        ↓
+Production Control Centre
+```
+
+**Supported platforms:** Instagram and LinkedIn only, matching I027's own
+scope exactly — `schemas/social-analytics-snapshot.schema.json`'s
+`provider` field is a closed enum (`instagram` | `linkedin`), not the
+free-form string `publisher-result.schema.json` uses, since this
+milestone's own brief scopes it to exactly these two platforms.
+
+**Repository investigation, confirmed before writing any code:**
+`publisher-result.schema.json` needed zero changes — `provider_reference`
+(the platform post/media ID or URN) and `destination` (the safe
+account/author identifier) already carry everything analytics collection
+needs; `metadata.post_url`/`metadata.item_count` (I027) were also already
+present. Traced the exact values each I027 adapter writes: Instagram's
+`provider_reference` is the published media ID from `media_publish`'s own
+response; LinkedIn's is the post URN (`urn:li:share:...` or
+`urn:li:ugcPost:...`) read from the `x-restli-id`/`x-linkedin-id` response
+header. Both are exactly what the real Instagram Insights and LinkedIn
+analytics endpoints require as their own lookup key — no second identifier
+was invented, and I025/I027 were confirmed untouched.
+
+**Snapshot / time-series model:** every successful collection produces a
+brand-new, immutable Social Analytics Snapshot
+(`analytics_snapshot_id`, prefix `sas_`) — the Social Analytics Store has
+no `replace()`/`update()` at all, so a prior snapshot is never overwritten.
+Repeated collection over time (day 1, day 3, day 7, …) is the intended
+usage, not an edge case. `findByPublisherResult()`/`findByCarousel()`
+return full chronological history; `latestByPublisherResult()` returns the
+single most recent one (maximum `collected_at`, tied broken deterministically
+by `analytics_snapshot_id`). Scheduling automatic collection is explicitly
+out of scope — every collection is a manual, one-shot CLI/service call.
+
+**Metric availability semantics:** every metric value is
+`{ value, availability }`, never a bare number. `availability` is one of
+`available` (a real value, which may legitimately be `0`), `unavailable`
+(the provider indicated the data genuinely can't be produced right now —
+Instagram's own documented behavior: *"if insights data you are requesting
+does not exist or is currently unavailable, the API returns an empty data
+set instead of 0"*), `not-supported` (this metric doesn't apply to this
+platform/content type at all — decided client-side, before any request is
+even made), or `not-returned` (requested but the provider's response simply
+omitted it). Unavailable data is never represented as a numeric zero
+anywhere in this schema — a legitimate zero and an unavailable metric are
+structurally distinguishable at every layer, snapshot schema through CLI
+output.
+
+**Instagram Insights Adapter** (`src/instagram-insights-adapter.mjs`):
+queries `GET /<media-id>/insights` (`media-id` = the published carousel's
+own `provider_reference`) against Meta's Instagram Platform Insights API,
+requesting `reach,likes,comments,saved,shares` — **`impressions` is
+excluded** (Meta: deprecated for any media created after 2024-07-02, which
+is every media this codebase could ever publish) and **`views` is
+excluded** (video-only, not applicable to a static-image carousel); both
+are classified `not-supported` without ever being requested. A requested
+metric absent from the response's `data` array is normalized to
+`unavailable`, matching Meta's own documented behavior verbatim. Permission
+required: `instagram_manage_insights` (Facebook Login, matching this
+codebase's existing `graph.facebook.com` base URL/flow) — a **different**
+permission from I027's own `instagram_content_publish` publish-only scope;
+provisioning it on the existing app/token is an operator concern this
+milestone cannot detect ahead of time. Request budget for one collection:
+**1 request**.
+
+**LinkedIn Post Analytics Adapter** (`src/linkedin-post-analytics-adapter.mjs`):
+uses a genuinely **different endpoint and permission tier** depending on
+whether the post's author is a member or an organization — classified via
+`classifyAuthorUrn()` (I027's own function, reused verbatim, never a second
+classifier) against the Publisher Result's own `destination` — never
+silently switched.
+- **Organization posts** — LinkedIn's Organization Share Statistics API
+  (`GET /rest/organizationalEntityShareStatistics`), permission
+  `rw_organization_admin` (the standard, generally-available Marketing API
+  tier, the same tier I027's own publishing already assumes). **1 request**
+  returns everything (impressions, unique impressions, clicks, likes,
+  comments, shares). LinkedIn's own docs state a share with no
+  actions/impressions is simply absent from the response — this is a
+  **documented, legitimate zero**, not "unavailable" (the opposite
+  convention from Instagram's own "empty means unavailable" rule; each
+  platform's documented behavior is honored on its own terms, never
+  homogenized).
+- **Member (personal-profile) posts** — LinkedIn's Member Post Analytics
+  API (`GET /rest/memberCreatorPostAnalytics`), permission
+  `r_member_postAnalytics` — a **distinct, partner-gated permission**
+  under LinkedIn's Community Management API requiring its own separate
+  application/approval process, materially different from
+  `rw_organization_admin`. This path is gated behind an explicit
+  `LINKEDIN_MEMBER_POST_ANALYTICS_ENABLED=true` opt-in and fails **before
+  any request** if unset, naming the exact required permission. This
+  endpoint accepts exactly **one metric per request** (no comma-list) —
+  five separate sequential requests are required (`IMPRESSION`,
+  `MEMBERS_REACHED`, `RESHARE`, `REACTION`, `COMMENT` — the five metrics
+  documented as present across every LinkedIn API version this project
+  could configure; newer versions add `POST_SAVE`/etc., deliberately not
+  requested, so `saves` is reported `not-supported` on this path). No
+  documented "empty means zero" convention exists for this endpoint (unlike
+  the organization path) — an empty response is conservatively
+  `unavailable`, never assumed to be zero. **Request budget: 5 requests**
+  — sharply more expensive than either Instagram (1) or LinkedIn
+  organization (1), and the primary reason this path needs its own
+  explicit opt-in rather than firing automatically whenever a member URN
+  is detected.
+
+**Configuration:** reuses I027's own `INSTAGRAM_ACCESS_TOKEN` /
+`INSTAGRAM_USER_ID` / `INSTAGRAM_API_BASE_URL` / `INSTAGRAM_API_VERSION`
+and `LINKEDIN_ACCESS_TOKEN` / `LINKEDIN_API_BASE_URL` /
+`LINKEDIN_API_VERSION` variable names verbatim (`src/instagram-analytics-config.mjs`
+/ `src/linkedin-analytics-config.mjs` are genuinely separate config modules
+from the publisher's own, per this codebase's one-module-per-concern
+convention, but read the identical env var names — no duplicate credential
+was invented). One genuinely new variable:
+`LINKEDIN_MEMBER_POST_ANALYTICS_ENABLED` (a capability confirmation, not a
+credential). Every adapter fails before any request if required
+configuration is missing; no credential value is ever printed or included
+in an error message.
+
+**Mock-default guarantee:** `src/instagram-mock-insights-adapter.mjs` /
+`src/linkedin-mock-post-analytics-adapter.mjs` are the only adapters
+automated tests and the CLI's own default (non-`--live`) mode use — fully
+deterministic, zero network, with `options.mode` covering every scenario
+this milestone's own brief requires: `completed`, `zero-engagement`,
+`unavailable-metrics`, `delayed`, `failure`, `malformed`.
+
+**Social Analytics Store:** mirrors the I015/I023/I025 domain-store /
+storage-adapter / local-JSON-adapter separation exactly
+(`src/social-analytics-store.mjs`, `src/social-analytics-store-adapter.mjs`,
+`src/local-json-social-analytics-store-adapter.mjs`) — one JSON file per
+snapshot at `<storageDir>/<analytics_snapshot_id>.json`, atomic
+temp-file-write-verify-rename, path-traversal blocked by the same
+identifier-pattern check every other store in this codebase already uses,
+duplicate identifiers rejected, corrupted records fail explicitly naming
+which one. Never committed to Git — a real store only ever exists on
+disk/in a Docker volume.
+
+**Derived-metric rules:** the only cross-metric calculation this milestone
+performs is `engagement.total = reactions + comments + shares + saves`,
+computed by the domain object factory (`social-analytics-snapshot.mjs`)
+**only** when all four inputs are `available` — any one unavailable input
+makes `total` itself `unavailable`, never a silently-partial sum. No
+engagement *rate* is calculated (no fixed, universally-agreed denominator
+exists across these metric sets). Views/reach/impressions are never
+combined with each other, and platforms are never ranked against one
+another — both explicitly forbidden by this milestone's own brief, since
+the underlying metrics are not measured the same way across providers.
+
+**Control Centre integration** (`src/control-centre-service.mjs`,
+`schemas/control-centre.schema.json`): additive only, mirrors
+`exportsRootDir`'s own "optional, honestly null when not supplied" pattern
+— `socialAnalyticsStore` is an optional Control Centre dependency (not a
+new required positional/constructor field, unlike I025's own breaking
+change for `publisherResultStore`), so every pre-I028 caller/test keeps
+working unmodified. When supplied: Job Detail gains `social_performance`
+(`{ instagram, linkedin }`, each `{ collected, latest_snapshot }`, the
+whole snapshot embedded verbatim, re-validated against
+`social-analytics-snapshot.schema.json`) and the dashboard gains
+`social_analytics` (`{ instagram, linkedin }`, each
+`{ posts_published, posts_with_analytics }`). The Control Centre reads
+**only** from the Social Analytics Store — zero Instagram/LinkedIn
+requests of any kind, verified by a dedicated regression test that stubs
+`global.fetch` to throw if ever called. CLI: append
+`--social-analytics=<dir>` to any `control-centre.mjs` subcommand.
+
+**CLI** (`tests/validation/social-analytics.mjs`, `npm run social:analytics`):
+
+```bash
+npm run social:analytics -- collect <publisherResultId> <publisherResultStoreDirectory> <analyticsStoreDirectory> [--live]
+npm run social:analytics -- get <snapshotId> <analyticsStoreDirectory>
+npm run social:analytics -- publisher <publisherResultId> <analyticsStoreDirectory>
+npm run social:analytics -- carousel <carouselId> <analyticsStoreDirectory>
+npm run social:analytics -- latest <publisherResultId> <analyticsStoreDirectory>
+```
+
+`collect` defaults to mock, no network. `--live` requires the relevant
+platform's credentials, permits exactly one collection attempt (no
+automatic retry), and prints the exact request budget (1 for Instagram, 1
+for LinkedIn organization, 5 for LinkedIn member) **before** making any
+request. `get`/`publisher`/`carousel`/`latest` are always local,
+read-only, and make no request of any kind. No CLI output ever includes a
+credential, caption, commentary, raw provider response body, or
+account-private data.
+
+**Live-verification gates:** No live Instagram, Meta, or LinkedIn analytics
+request was made during implementation — every adapter above was built
+from current official documentation only (Meta's Instagram Platform
+Insights docs; LinkedIn's Organization Share Statistics and Member Post
+Analytics docs, both fetched directly from Microsoft Learn during this
+milestone's own investigation, not from memory). Per this milestone's own
+brief: fresh Strategy Office **and** CEO approval is required per platform
+before any live collection; the relevant post must already exist through a
+real, live I027 publish (which has not yet occurred for either platform —
+see "Social Publisher (DC-003-I027)"); the first collection permits no
+retries; and no follow-up diagnostic request may occur without fresh
+approval. **Current limitation, carried forward honestly: no social
+platform has yet been live-connected for either publishing (I027) or
+analytics (I028) — everything described above is built, tested, and
+mock-verified end-to-end, but has never made a real Meta or LinkedIn
+request.**
+
+**Explicitly out of scope** (per this milestone's own brief): live social
+publishing, application credential provisioning, scheduled/automatic
+collection, polling, cron or n8n workflow changes, comments/commenter
+identities, sentiment analysis, social listening, competitor analytics,
+paid-ad analytics, follower demographics, lead/website/CRM attribution,
+cross-platform scoring, recommendations, automatic prompt optimisation,
+content rewriting, charted dashboards, Google Sheets reporting, and
+provider billing analytics. Those questions — *why did it happen, what
+should we publish next, did it create revenue* — belong to later Content
+Intelligence and attribution milestones, not this one.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -5943,7 +6177,8 @@ milestone).
 | Publisher Result Store (authoritative local record of every successful publish, provider-neutral) | Done (DC-003-I025) — `src/publisher-result.mjs`, `src/publisher-result-store.mjs` + adapter files, CLI `npm run publisher-results`; see "Publisher Result Store (DC-003-I025)"; I015/I021/I022/I023 core logic unchanged (I022's service gained one optional dependency only); no live Google Drive upload made; LinkedIn/Instagram/Facebook/X/scheduling/analytics/retries/queue/dashboard explicitly not implemented |
 | Windows Production Asset Export (second, human-facing delivery copy of an approved I021 archive package into a Windows-visible folder) | Done (DC-003-I026) — `src/windows-production-export-service.mjs`, `src/windows-production-export-config.mjs`, CLI `npm run export:windows`; see "Windows Production Asset Export (DC-003-I026)"; I021 completely unmodified (its real `executeProductionAssetExport()` called directly for the archive step); Windows delivery is a plain, byte-verified filesystem copy, never a second CDN download; `n8n-test` recreated with one new writable bind mount, all prior config/workflows/credentials confirmed intact; live-verified locally against the real `car_9c026a104e3745c3` package, zero external API calls |
 | Social Publisher (publishes an approved carousel to Instagram carousel + LinkedIn multi-image posts, per an approved Social Publishing Manifest) | Done (DC-003-I027) — `src/social-publisher-service.mjs`, `src/social-publishing-manifest.mjs`, `src/instagram-carousel-publisher-adapter.mjs`, `src/linkedin-multi-image-publisher-adapter.mjs` + mock adapters/configs, CLI `npm run publish:social`; see "Social Publisher (DC-003-I027)"; new `schemas/social-publishing-manifest.schema.json` closes the confirmed "no approved platform copy exists anywhere" gap; `publisher-result.schema.json` (I025) needed zero changes; I021/I022/I025/I014 all unchanged; mock remains the default without `--live`; duplicate-publish prevention and sequential per-destination publishing with immediate Publisher Result recording (never batched); Control Centre's `jobPublishing` gained an additive `by_provider` breakdown; **no live Instagram/LinkedIn/Facebook/Meta request made — proposed budgets Instagram 8, LinkedIn 13, each requiring its own separate future approval** |
-| Unit test suite | Done — 1108 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Social Analytics (post-publication performance snapshots for Instagram + LinkedIn, sourced only from Publisher Results, immutable time-series) | Done (DC-003-I028) — `src/social-analytics-snapshot.mjs`, `src/social-analytics-store.mjs` + adapter files, `src/instagram-insights-adapter.mjs`, `src/linkedin-post-analytics-adapter.mjs` + mock adapters/configs, CLI `npm run social:analytics`; see "Social Analytics (DC-003-I028)"; new `schemas/social-analytics-snapshot.schema.json`; `publisher-result.schema.json` (I025) and every I008–I012/I014/I015/I021/I022/I025/I026/I027 module unchanged; Control Centre's `socialAnalyticsStore` dependency is additive/optional (never a breaking required field, unlike I025's own precedent); mock remains the default without `--live`; **no live Instagram/LinkedIn/Meta analytics request made — proposed budgets Instagram 1, LinkedIn organization 1, LinkedIn member 5, each requiring its own separate future approval; no platform has been live-connected yet for either publishing or analytics** |
+| Unit test suite | Done — 1202 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

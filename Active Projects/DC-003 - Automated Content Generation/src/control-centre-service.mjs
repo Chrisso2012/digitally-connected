@@ -71,7 +71,7 @@ function mostRecentIso(isoStrings) {
   return present.reduce((latest, current) => (current > latest ? current : latest));
 }
 
-function assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore }) {
+function assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore }) {
   if (
     !finishedCarouselStore ||
     typeof finishedCarouselStore.list !== "function" ||
@@ -98,6 +98,18 @@ function assertDependencies({ finishedCarouselStore, productionMetricsStore, pub
   ) {
     throw new InvalidControlCentreDependenciesError(
       "fields.publisherResultStore must be a Publisher Result Store — see createPublisherResultStore() in publisher-result-store.mjs"
+    );
+  }
+  // DC-003-I028 — optional, like exportsRootDir: when omitted, every
+  // social-performance signal is honestly "unknown" rather than checked.
+  // When supplied, it must actually be a Social Analytics Store.
+  if (
+    socialAnalyticsStore !== null &&
+    socialAnalyticsStore !== undefined &&
+    (typeof socialAnalyticsStore.list !== "function" || typeof socialAnalyticsStore.findByCarousel !== "function")
+  ) {
+    throw new InvalidControlCentreDependenciesError(
+      "fields.socialAnalyticsStore, when supplied, must be a Social Analytics Store — see createSocialAnalyticsStore() in social-analytics-store.mjs"
     );
   }
 }
@@ -153,6 +165,11 @@ function sumCost(metricsSummaries) {
  *   Result Store instance — see publisher-result-store.mjs. The
  *   authoritative source for every `published`/`publishing` value this
  *   service returns.
+ * fields.socialAnalyticsStore — optional (DC-003-I028), a Social Analytics
+ *   Store instance — see social-analytics-store.mjs. When omitted, every
+ *   `social_performance`/`dashboard.social_analytics` signal is honestly
+ *   null (never checked), mirroring exportsRootDir's own "unknown, not
+ *   zero" convention.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -170,8 +187,8 @@ function sumCost(metricsSummaries) {
  * Returns { getOverview, getJobDetail }.
  */
 export function createControlCentreService(fields = {}, options = {}) {
-  const { finishedCarouselStore, productionMetricsStore, publisherResultStore, exportsRootDir = null } = fields;
-  assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore = null, exportsRootDir = null } = fields;
+  assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore });
 
   const now = options.now ?? (() => new Date().toISOString());
   const env = options.env ?? process.env;
@@ -266,7 +283,19 @@ export function createControlCentreService(fields = {}, options = {}) {
       })
       .filter(Boolean);
 
-    return { carouselRead, metricsRead, publisherResultRead, publishedCarouselIds, sortedSummaries, recentSummaries, recentFull, metricsFull };
+    const analyticsSummaries = readSocialAnalyticsSummaries();
+
+    return {
+      carouselRead,
+      metricsRead,
+      publisherResultRead,
+      analyticsSummaries,
+      publishedCarouselIds,
+      sortedSummaries,
+      recentSummaries,
+      recentFull,
+      metricsFull,
+    };
   }
 
   function checkExportHealth(recentFull) {
@@ -395,7 +424,54 @@ export function createControlCentreService(fields = {}, options = {}) {
     };
   }
 
-  function computeDashboard({ carouselRead, metricsRead, metricsFull, publishedCarouselIds }) {
+  // DC-003-I028 — best-effort, mirroring findPublisherResultsForCarousel()'s
+  // own "tolerate a secondary store's own failure" discipline. null when
+  // no Social Analytics Store was supplied — every caller of this must
+  // treat null as "never checked", never as "zero".
+  function readSocialAnalyticsSummaries() {
+    if (!socialAnalyticsStore) return null;
+    try {
+      return socialAnalyticsStore.list();
+    } catch {
+      return [];
+    }
+  }
+
+  function computeSocialAnalyticsDashboard(publisherResultSummaries, analyticsSummaries) {
+    if (analyticsSummaries === null) return null;
+    const withAnalytics = new Set(analyticsSummaries.map((s) => `${s.provider}:${s.publisher_result_id}`));
+    const forProvider = (provider) => {
+      const published = publisherResultSummaries.filter((s) => s.provider === provider);
+      const withAnalyticsCount = published.filter((s) => withAnalytics.has(`${provider}:${s.publisher_result_id}`)).length;
+      return { posts_published: published.length, posts_with_analytics: withAnalyticsCount };
+    };
+    return { instagram: forProvider("instagram"), linkedin: forProvider("linkedin") };
+  }
+
+  // DC-003-I028 — the latest snapshot per provider for one carousel,
+  // sourced entirely from the Social Analytics Store's own findByCarousel()
+  // (already chronologically ordered). null when no store was supplied.
+  function computeSocialPerformance(carouselId) {
+    if (!socialAnalyticsStore) return null;
+    let snapshots;
+    try {
+      snapshots = socialAnalyticsStore.findByCarousel(carouselId);
+    } catch {
+      snapshots = [];
+    }
+    const latestFor = (provider) => {
+      const matches = snapshots.filter((s) => s.provider === provider);
+      return matches.length > 0 ? matches[matches.length - 1] : null;
+    };
+    const instagramLatest = latestFor("instagram");
+    const linkedinLatest = latestFor("linkedin");
+    return {
+      instagram: { collected: instagramLatest !== null, latest_snapshot: instagramLatest },
+      linkedin: { collected: linkedinLatest !== null, latest_snapshot: linkedinLatest },
+    };
+  }
+
+  function computeDashboard({ carouselRead, metricsRead, metricsFull, publishedCarouselIds, publisherResultRead, analyticsSummaries }) {
     const summaries = carouselRead.summaries;
     const completed = summaries.filter((s) => s.overall_status === "completed").length;
     const failed = summaries.filter((s) => s.overall_status === "failed").length;
@@ -439,6 +515,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       today: { produced_count: todaysProducedCount, estimated_cost: sumCost(todaysMetrics) },
       estimated_cost: sumCost(metricsRead.summaries),
       average_duration: averageDuration,
+      social_analytics: computeSocialAnalyticsDashboard(publisherResultRead.summaries, analyticsSummaries),
     };
   }
 
@@ -600,6 +677,7 @@ export function createControlCentreService(fields = {}, options = {}) {
           publisher_results: publisherResults,
           by_provider: computeByProvider(publisherResults),
         },
+        social_performance: computeSocialPerformance(carouselId),
       },
     };
 

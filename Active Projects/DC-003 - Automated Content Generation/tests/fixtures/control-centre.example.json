@@ -25,7 +25,8 @@
       "estimated_cost": { "currency": "USD", "amount": 0.3234, "records_counted": 1 }
     },
     "estimated_cost": { "currency": "USD", "amount": 0.3234, "records_counted": 1 },
-    "average_duration": { "average_ms": 33734, "records_counted": 1 }
+    "average_duration": { "average_ms": 33734, "records_counted": 1 },
+    "social_analytics": null
   },
   "recent_jobs": [
     {

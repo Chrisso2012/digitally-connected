@@ -378,3 +378,71 @@ export {
   LinkedInImageUploadError,
   LinkedInPostCreationError,
 } from "./linkedin-publisher-errors.mjs";
+
+// DC-003-I028 — Social Analytics: turns a Publisher Result (I025/I027)
+// into an immutable, time-series Social Analytics Snapshot recording what
+// happened after publication. Never publishes/edits/deletes/promotes a
+// post — observes only. See "Social Analytics (DC-003-I028)" in the
+// README.
+export { createSocialAnalyticsSnapshot } from "./social-analytics-snapshot.mjs";
+export { assertValidSocialAnalyticsStoreAdapter } from "./social-analytics-store-adapter.mjs";
+export { createLocalJsonSocialAnalyticsStoreAdapter } from "./local-json-social-analytics-store-adapter.mjs";
+export { createSocialAnalyticsStore } from "./social-analytics-store.mjs";
+export {
+  InvalidSocialAnalyticsSnapshotInputError,
+  SocialAnalyticsSnapshotValidationError,
+  InvalidSocialAnalyticsStoreAdapterError,
+  InvalidSocialAnalyticsSnapshotIdentifierError,
+  SocialAnalyticsSnapshotAlreadyExistsError,
+  SocialAnalyticsSnapshotNotFoundError,
+  CorruptedSocialAnalyticsSnapshotError,
+  SocialAnalyticsPersistenceError,
+  InvalidSocialAnalyticsAdapterError,
+} from "./social-analytics-errors.mjs";
+export { assertValidSocialAnalyticsAdapter } from "./social-analytics-adapter.mjs";
+export { collectSocialAnalytics } from "./social-analytics-service.mjs";
+export {
+  UnsupportedAnalyticsProviderError,
+  MissingProviderPostReferenceError,
+  IneligiblePublisherResultForAnalyticsError,
+  SocialAnalyticsCollectionFailedError,
+} from "./social-analytics-service-errors.mjs";
+
+// DC-003-I028 — Instagram Insights Adapter
+export { createInstagramInsightsAdapter } from "./instagram-insights-adapter.mjs";
+export { createMockInstagramInsightsAdapter } from "./instagram-mock-insights-adapter.mjs";
+export {
+  loadInstagramAnalyticsConfig,
+  resolveLiveMaxAttempts as resolveInstagramAnalyticsLiveMaxAttempts,
+  DEFAULT_LIVE_MAX_ATTEMPTS as INSTAGRAM_ANALYTICS_DEFAULT_LIVE_MAX_ATTEMPTS,
+} from "./instagram-analytics-config.mjs";
+export {
+  InstagramAnalyticsConfigurationError,
+  InstagramAnalyticsAuthenticationError,
+  InstagramAnalyticsTransportError,
+  InstagramAnalyticsTimeoutError,
+  InstagramAnalyticsClientError,
+  InstagramAnalyticsRateLimitError,
+  InstagramInsightsRequestError,
+  InstagramInsightsMalformedResponseError,
+} from "./instagram-analytics-errors.mjs";
+
+// DC-003-I028 — LinkedIn Post Analytics Adapter
+export { createLinkedInPostAnalyticsAdapter } from "./linkedin-post-analytics-adapter.mjs";
+export { createMockLinkedInPostAnalyticsAdapter } from "./linkedin-mock-post-analytics-adapter.mjs";
+export {
+  loadLinkedInAnalyticsConfig,
+  resolveLiveMaxAttempts as resolveLinkedInAnalyticsLiveMaxAttempts,
+  DEFAULT_LIVE_MAX_ATTEMPTS as LINKEDIN_ANALYTICS_DEFAULT_LIVE_MAX_ATTEMPTS,
+} from "./linkedin-analytics-config.mjs";
+export {
+  LinkedInAnalyticsConfigurationError,
+  LinkedInMemberAnalyticsNotEnabledError,
+  LinkedInAnalyticsAuthenticationError,
+  LinkedInAnalyticsTransportError,
+  LinkedInAnalyticsTimeoutError,
+  LinkedInAnalyticsClientError,
+  LinkedInAnalyticsRateLimitError,
+  LinkedInAnalyticsRequestError,
+  LinkedInAnalyticsMalformedResponseError,
+} from "./linkedin-analytics-errors.mjs";

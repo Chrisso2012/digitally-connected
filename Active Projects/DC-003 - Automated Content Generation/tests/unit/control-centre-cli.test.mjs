@@ -225,3 +225,70 @@ test("running every subcommand never modifies the carousel, metrics, or publishe
     assert.equal(existsSync(publisherResultDir), false, "publisher result store directory was never created since it was never written to");
   });
 });
+
+// --- Social Performance (DC-003-I028) --------------------------------------
+
+test("dashboard omits --social-analytics=<dir> by default and reports it honestly as unknown", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Social Analytics\s+unknown/);
+  });
+});
+
+test("job <carouselId> --social-analytics=<dir> shows real Social Performance data end to end", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir, base }) => {
+    runCarouselCli("save", FIXTURE_PATH, carouselDir);
+    const analyticsDir = path.join(base, "social-analytics");
+
+    // Seed a real Publisher Result and a real Social Analytics Snapshot
+    // directly via the domain layer, mirroring this file's own
+    // "job <carouselId> shows a real Publisher Result once one is
+    // recorded" test above.
+    const recordScript = `
+      import { createLocalJsonPublisherResultStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-publisher-result-store-adapter.mjs"))};
+      import { createPublisherResultStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "publisher-result-store.mjs"))};
+      import { createPublisherResult } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "publisher-result.mjs"))};
+      import { createLocalJsonSocialAnalyticsStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-social-analytics-store-adapter.mjs"))};
+      import { createSocialAnalyticsStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "social-analytics-store.mjs"))};
+      import { createSocialAnalyticsSnapshot } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "social-analytics-snapshot.mjs"))};
+
+      const publisherResultStore = createPublisherResultStore({ adapter: createLocalJsonPublisherResultStoreAdapter({ storageDir: ${JSON.stringify(publisherResultDir)} }) });
+      const publisherResult = publisherResultStore.save(createPublisherResult({
+        carouselId: "car_01J9X9C7",
+        assetPackageId: "pkg_test0000000001",
+        executionId: "exec_20260731_9f3a2e1c8b4d",
+        provider: "instagram",
+        destination: "17800000000000001",
+        providerReference: "17800000000000099",
+        metadata: { post_url: null, item_count: 6 },
+      }));
+
+      const analyticsStore = createSocialAnalyticsStore({ adapter: createLocalJsonSocialAnalyticsStoreAdapter({ storageDir: ${JSON.stringify(analyticsDir)} }) });
+      analyticsStore.save(createSocialAnalyticsSnapshot({
+        publisherResultId: publisherResult.publisher_result_id,
+        carouselId: "car_01J9X9C7",
+        provider: "instagram",
+        destination: "17800000000000001",
+        providerPostReference: "17800000000000099",
+        metrics: { reach: { value: 1200, availability: "available" } },
+        engagement: {
+          reactions: { value: 85, availability: "available" },
+          comments: { value: 12, availability: "available" },
+          shares: { value: 6, availability: "available" },
+          saves: { value: 20, availability: "available" },
+        },
+        source: { type: "mock", providerApiVersion: "v21.0" },
+      }));
+    `;
+    const seed = spawnSync(process.execPath, ["--input-type=module", "-e", recordScript], { encoding: "utf-8", env: CLEAN_ENV });
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const result = runCli("job", "car_01J9X9C7", carouselDir, metricsDir, publisherResultDir, `--social-analytics=${analyticsDir}`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /instagram\s+collected=true/);
+    assert.match(result.stdout, /reach=1200/);
+    assert.match(result.stdout, /total_engagement=123/);
+    assert.match(result.stdout, /linkedin\s+collected=false/);
+  });
+});

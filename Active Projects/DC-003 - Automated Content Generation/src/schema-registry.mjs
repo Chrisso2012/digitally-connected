@@ -51,17 +51,23 @@ const SCHEMA_FILES = {
   // the Social Publisher Service executes exactly. No $refs to or from
   // any other schema, so its position here is not order-sensitive.
   socialPublishingManifest: "social-publishing-manifest.schema.json",
-  // DC-003-I024 — the Control Centre's in-memory read model. Must be
-  // compiled AFTER finishedCarousel/productionMetrics/publisherResult
+  // DC-003-I028 — one immutable observation of a published social post's
+  // performance at one point in time. Must be registered BEFORE
+  // controlCentre below, since control-centre.schema.json $refs it by $id
+  // (the Job Detail's own Social Performance section embeds it).
+  socialAnalyticsSnapshot: "social-analytics-snapshot.schema.json",
+  // DC-003-I024, extended by DC-003-I028 — the Control Centre's in-memory
+  // read model. Must be compiled AFTER
+  // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot
   // above (object key order = compile order in validator.mjs) since it
-  // $refs all three by $id.
+  // $refs all four by $id.
   controlCentre: "control-centre.schema.json",
 };
 
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
 
 /**
- * Loads all ten schemas and returns them keyed by identifier, e.g.
+ * Loads all fifteen schemas and returns them keyed by identifier, e.g.
  * `registry.topicPackage`. Fails fast on the first missing or malformed
  * schema file.
  */

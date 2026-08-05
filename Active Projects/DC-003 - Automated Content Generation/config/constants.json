@@ -38,7 +38,8 @@
     "asset_package": "pkg_",
     "production_metrics": "met_",
     "publisher_result": "pub_",
-    "social_publishing_manifest": "spm_"
+    "social_publishing_manifest": "spm_",
+    "social_analytics_snapshot": "sas_"
   },
   "content_request_source_types": ["article"],
   "content_request_design_count": 6

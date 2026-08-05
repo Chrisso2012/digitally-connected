@@ -10,6 +10,8 @@ import { createProductionMetrics } from "../../src/production-metrics.mjs";
 import { createPublisherResultStore } from "../../src/publisher-result-store.mjs";
 import { createPublisherResult } from "../../src/publisher-result.mjs";
 import { approveCarousel, rejectCarousel, publishCarousel } from "../../src/carousel-approval.mjs";
+import { createSocialAnalyticsStore } from "../../src/social-analytics-store.mjs";
+import { createSocialAnalyticsSnapshot } from "../../src/social-analytics-snapshot.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError } from "../../src/control-centre-errors.mjs";
 import { CarouselNotFoundError } from "../../src/finished-carousel-store-errors.mjs";
@@ -88,6 +90,29 @@ function buildStores() {
   const productionMetricsStore = createProductionMetricsStore({ adapter: createInMemoryAdapter("in-memory-metrics-adapter") });
   const publisherResultStore = createPublisherResultStore({ adapter: createInMemoryAdapter("in-memory-publisher-result-adapter") });
   return { finishedCarouselStore, productionMetricsStore, publisherResultStore };
+}
+
+function buildSocialAnalyticsStore() {
+  return createSocialAnalyticsStore({ adapter: createInMemoryAdapter("in-memory-social-analytics-adapter") });
+}
+
+function buildSnapshot(overrides = {}) {
+  return createSocialAnalyticsSnapshot({
+    publisherResultId: overrides.publisherResultId ?? "pub_test0000000001",
+    carouselId: overrides.carouselId ?? "car_01J9X9C7",
+    provider: overrides.provider ?? "instagram",
+    destination: overrides.destination ?? "17800000000000001",
+    providerPostReference: overrides.providerPostReference ?? "17800000000000099",
+    metrics: overrides.metrics ?? { reach: { value: 500, availability: "available" } },
+    engagement: overrides.engagement ?? {
+      reactions: { value: 10, availability: "available" },
+      comments: { value: 2, availability: "available" },
+      shares: { value: 1, availability: "available" },
+      saves: { value: 3, availability: "available" },
+    },
+    source: overrides.source ?? { type: "mock", providerApiVersion: "v21.0" },
+    collectedAt: overrides.collectedAt,
+  }, { idGenerator: overrides.idGenerator });
 }
 
 function withTempDir(fn) {
@@ -655,4 +680,100 @@ test("the service never calls a mutating store method (save/replace) — read-on
   service.getJobDetail("car_readonly0000001");
   // No assertion needed beyond "did not throw" — the guarded methods would
   // have thrown if the service ever called them.
+});
+
+// --- Social Performance (DC-003-I028) --------------------------------------
+
+test("throws InvalidControlCentreDependenciesError for a socialAnalyticsStore that doesn't implement the shape", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  assert.throws(
+    () => createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore: { name: "not-a-real-store" } }),
+    InvalidControlCentreDependenciesError
+  );
+});
+
+test("job_detail.social_performance is null when no socialAnalyticsStore was supplied — never checked, not 'not collected'", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel());
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const detail = service.getJobDetail("car_01J9X9C7");
+  assert.equal(detail.job.social_performance, null);
+});
+
+test("dashboard.social_analytics is null when no socialAnalyticsStore was supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  assert.equal(service.getOverview().dashboard.social_analytics, null);
+});
+
+test("job_detail.social_performance reports the latest snapshot per provider, sourced only from the Social Analytics Store", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel());
+  const socialAnalyticsStore = buildSocialAnalyticsStore();
+  socialAnalyticsStore.save(buildSnapshot({ provider: "instagram", collectedAt: "2026-08-01T00:00:00.000Z", idGenerator: () => "sas_early0000000001" }));
+  socialAnalyticsStore.save(buildSnapshot({ provider: "instagram", collectedAt: "2026-08-05T00:00:00.000Z", idGenerator: () => "sas_late00000000002" }));
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore });
+  const detail = service.getJobDetail("car_01J9X9C7");
+
+  assert.equal(detail.job.social_performance.instagram.collected, true);
+  assert.equal(detail.job.social_performance.instagram.latest_snapshot.analytics_snapshot_id, "sas_late00000000002");
+  assert.equal(detail.job.social_performance.linkedin.collected, false);
+  assert.equal(detail.job.social_performance.linkedin.latest_snapshot, null);
+});
+
+test("dashboard.social_analytics counts posts_published from real Publisher Results and posts_with_analytics from real snapshots", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel());
+  publisherResultStore.save(buildPublisherResult({ provider: "instagram", destination: "17800000000000001", providerReference: "pub_ref_1" }));
+  publisherResultStore.save(buildPublisherResult({ provider: "instagram", carouselId: "car_second00000002", executionId: "exec_20260801_deadbeef0002", providerReference: "pub_ref_2" }));
+
+  const socialAnalyticsStore = buildSocialAnalyticsStore();
+  const publisherResultId = publisherResultStore.list()[0].publisher_result_id;
+  socialAnalyticsStore.save(buildSnapshot({ publisherResultId, provider: "instagram" }));
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore });
+  const social = service.getOverview().dashboard.social_analytics;
+
+  assert.equal(social.instagram.posts_published, 2);
+  assert.equal(social.instagram.posts_with_analytics, 1);
+  assert.equal(social.linkedin.posts_published, 0);
+  assert.equal(social.linkedin.posts_with_analytics, 0);
+});
+
+test("a broken socialAnalyticsStore degrades job_detail.social_performance to 'never checked' rather than throwing", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel());
+  const brokenSocialAnalyticsStore = {
+    ...buildSocialAnalyticsStore(),
+    list() {
+      throw new Error("simulated store failure");
+    },
+    findByCarousel() {
+      throw new Error("simulated store failure");
+    },
+  };
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore: brokenSocialAnalyticsStore });
+  const detail = service.getJobDetail("car_01J9X9C7");
+  assert.equal(detail.job.social_performance.instagram.collected, false);
+});
+
+test("the Control Centre never makes a network request to compute social_performance/social_analytics", async () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel());
+  const socialAnalyticsStore = buildSocialAnalyticsStore();
+  socialAnalyticsStore.save(buildSnapshot());
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("must not be called");
+  };
+  try {
+    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore });
+    service.getOverview();
+    service.getJobDetail("car_01J9X9C7");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

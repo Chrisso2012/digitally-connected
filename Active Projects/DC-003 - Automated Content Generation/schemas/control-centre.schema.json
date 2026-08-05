@@ -124,7 +124,31 @@
           }
         },
         "estimated_cost": { "$ref": "#/$defs/costSummary" },
-        "average_duration": { "$ref": "#/$defs/durationSummary" }
+        "average_duration": { "$ref": "#/$defs/durationSummary" },
+        "social_analytics": {
+          "description": "DC-003-I028 — null when no Social Analytics Store was supplied to the Control Centre (never checked, not zero). counts are scoped to the same bounded 'recent' window every other dashboard total uses.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["instagram", "linkedin"],
+              "additionalProperties": false,
+              "properties": {
+                "instagram": { "$ref": "#/$defs/platformDashboardSocial" },
+                "linkedin": { "$ref": "#/$defs/platformDashboardSocial" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "platformDashboardSocial": {
+      "type": "object",
+      "required": ["posts_published", "posts_with_analytics"],
+      "additionalProperties": false,
+      "properties": {
+        "posts_published": { "type": "integer", "minimum": 0 },
+        "posts_with_analytics": { "type": "integer", "minimum": 0 }
       }
     },
     "jobSummary": {
@@ -223,9 +247,35 @@
         }
       }
     },
+    "socialPerformance": {
+      "description": "DC-003-I028 — null when no Social Analytics Store was supplied to the Control Centre (analytics were never checked, not 'not collected'). Sourced ENTIRELY from the Social Analytics Store — no Meta/LinkedIn request of any kind.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["instagram", "linkedin"],
+          "additionalProperties": false,
+          "properties": {
+            "instagram": { "$ref": "#/$defs/platformSocialPerformance" },
+            "linkedin": { "$ref": "#/$defs/platformSocialPerformance" }
+          }
+        }
+      ]
+    },
+    "platformSocialPerformance": {
+      "type": "object",
+      "required": ["collected", "latest_snapshot"],
+      "additionalProperties": false,
+      "properties": {
+        "collected": { "type": "boolean" },
+        "latest_snapshot": {
+          "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/social-analytics-snapshot.schema.json" }]
+        }
+      }
+    },
     "jobDetail": {
       "type": "object",
-      "required": ["carousel_id", "topic_id", "finished_carousel", "metrics", "export", "publishing"],
+      "required": ["carousel_id", "topic_id", "finished_carousel", "metrics", "export", "publishing", "social_performance"],
       "additionalProperties": false,
       "properties": {
         "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
@@ -235,7 +285,8 @@
           "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/production-metrics.schema.json" }]
         },
         "export": { "$ref": "#/$defs/jobExport" },
-        "publishing": { "$ref": "#/$defs/jobPublishing" }
+        "publishing": { "$ref": "#/$defs/jobPublishing" },
+        "social_performance": { "$ref": "#/$defs/socialPerformance" }
       }
     }
   }

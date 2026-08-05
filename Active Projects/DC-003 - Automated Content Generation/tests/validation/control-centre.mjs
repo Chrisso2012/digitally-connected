@@ -48,6 +48,13 @@ import {
   CorruptedPublisherResultError,
   PublisherResultPersistenceError,
 } from "../../src/publisher-result-errors.mjs";
+import { createLocalJsonSocialAnalyticsStoreAdapter } from "../../src/local-json-social-analytics-store-adapter.mjs";
+import { createSocialAnalyticsStore } from "../../src/social-analytics-store.mjs";
+import {
+  InvalidSocialAnalyticsStoreAdapterError,
+  CorruptedSocialAnalyticsSnapshotError,
+  SocialAnalyticsPersistenceError,
+} from "../../src/social-analytics-errors.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "../../src/control-centre-errors.mjs";
 
@@ -65,12 +72,26 @@ const KNOWN_ERRORS = [
   PublisherResultPersistenceError,
   InvalidControlCentreDependenciesError,
   ControlCentreAssemblyError,
+  InvalidSocialAnalyticsStoreAdapterError,
+  CorruptedSocialAnalyticsSnapshotError,
+  SocialAnalyticsPersistenceError,
 ];
+
+// DC-003-I028 — a named flag, not another positional, so it can be
+// supplied independently of the already-optional [exportsRootDir]
+// positional without any ordering ambiguity.
+function extractSocialAnalyticsFlag(args) {
+  const prefix = "--social-analytics=";
+  const flagArg = args.find((a) => a.startsWith(prefix));
+  const rest = args.filter((a) => !a.startsWith(prefix));
+  return { socialAnalyticsStoreDirectory: flagArg ? flagArg.slice(prefix.length) : null, rest };
+}
 
 const RULE = "=".repeat(50);
 
 function usageAndExit() {
   console.error("Usage:");
+  console.error("  (append --social-analytics=<dir> to any command below to include Social Performance, DC-003-I028)");
   console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
@@ -118,6 +139,14 @@ function printProductionSection(dashboard) {
   console.log(`  Rejected           ${dashboard.rejected}`);
   console.log(`  Exported           ${dashboard.exported === null ? "unknown (no exports root directory supplied)" : dashboard.exported}`);
   console.log(`  Published          ${dashboard.published}`);
+  console.log();
+  if (dashboard.social_analytics === null) {
+    console.log("  Social Analytics   unknown (no --social-analytics=<dir> supplied)");
+  } else {
+    const ig = dashboard.social_analytics.instagram;
+    const li = dashboard.social_analytics.linkedin;
+    console.log(`  Social Analytics   instagram: ${ig.posts_with_analytics}/${ig.posts_published} posts with analytics   linkedin: ${li.posts_with_analytics}/${li.posts_published} posts with analytics`);
+  }
   console.log();
   console.log(`  Today's Production        ${dashboard.today.produced_count} job(s)`);
   console.log(`  Today's Estimated Cost    ${formatCost(dashboard.today.estimated_cost)}`);
@@ -236,43 +265,75 @@ function printJobDetail(detail) {
         `google_drive=${m.costs.google_drive.amount}(${m.costs.google_drive.calculation_type}) total=${m.costs.total}`
     );
   }
+  console.log();
+  console.log("Social Performance");
+  printSocialPerformanceBlock(job.social_performance);
 }
 
-function buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir) {
+function printSocialPerformanceBlock(socialPerformance) {
+  if (socialPerformance === null) {
+    console.log("  unknown (no --social-analytics=<dir> supplied to the Control Centre)");
+    return;
+  }
+  for (const provider of ["instagram", "linkedin"]) {
+    const platform = socialPerformance[provider];
+    console.log(`  ${provider}  collected=${platform.collected}`);
+    if (platform.latest_snapshot) {
+      const s = platform.latest_snapshot;
+      const metricSummary = Object.entries(s.metrics)
+        .map(([name, m]) => `${name}=${m.availability === "available" ? m.value : m.availability}`)
+        .join(" ");
+      const totalEngagement = s.engagement.total.availability === "available" ? s.engagement.total.value : s.engagement.total.availability;
+      console.log(`    latest_collected_at=${s.collected_at} ${metricSummary} total_engagement=${totalEngagement}`);
+    }
+  }
+}
+
+function buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory) {
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir: carouselStoreDirectory }) });
   const productionMetricsStore = createProductionMetricsStore({ adapter: createLocalJsonProductionMetricsStoreAdapter({ storageDir: metricsStoreDirectory }) });
   const publisherResultStore = createPublisherResultStore({ adapter: createLocalJsonPublisherResultStoreAdapter({ storageDir: publisherResultStoreDirectory }) });
-  return createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, exportsRootDir: exportsRootDir ?? null });
+  const socialAnalyticsStore = socialAnalyticsStoreDirectory
+    ? createSocialAnalyticsStore({ adapter: createLocalJsonSocialAnalyticsStoreAdapter({ storageDir: socialAnalyticsStoreDirectory }) })
+    : null;
+  return createControlCentreService({
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    socialAnalyticsStore,
+    exportsRootDir: exportsRootDir ?? null,
+  });
 }
 
-const [subcommand, ...rest] = process.argv.slice(2);
+const [subcommand, ...rawRest] = process.argv.slice(2);
 if (!subcommand) usageAndExit();
+const { socialAnalyticsStoreDirectory, rest } = extractSocialAnalyticsFlag(rawRest);
 
 try {
   if (subcommand === "dashboard") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
     printDashboard(service.getOverview());
   } else if (subcommand === "health") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
     printHealthSection(service.getOverview().health);
   } else if (subcommand === "jobs") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
     printRecentJobsSection(service.getOverview().recent_jobs);
   } else if (subcommand === "activity") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
     printRecentActivitySection(service.getOverview().recent_activity);
   } else if (subcommand === "job") {
     const [carouselId, carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselId || !carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir);
+    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
     printJobDetail(service.getJobDetail(carouselId));
   } else {
     usageAndExit();
