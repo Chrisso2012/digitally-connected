@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/social-publishing-manifest.schema.json",
+  "title": "Social Publishing Manifest",
+  "description": "DC-003-I027 — the approved, platform-specific publishing instruction the Social Publisher Service executes exactly, never infers. This schema represents ONLY an already-approved manifest (`approval.approved` is fixed `true`) — there is no draft/review lifecycle here, unlike the Carousel Approval workflow's own approve/reject state machine; a manifest that hasn't been approved is simply not yet a valid instance of this object. No repository object anywhere in DC-003 currently stores Instagram captions or LinkedIn commentary (confirmed by repository investigation, not assumed) — this schema is the deliberate answer to that gap, not an automatic ingestion of Cowork/Google Docs content, which remains explicitly out of scope. Carries no platform credentials and no raw image data — only the identifiers linking it to an approved Finished Carousel/Production Asset Package, and the approved copy itself.",
+  "type": "object",
+  "required": ["manifest_id", "carousel_id", "asset_package_id", "created_at", "approval", "destinations"],
+  "additionalProperties": false,
+  "properties": {
+    "manifest_id": { "type": "string", "pattern": "^spm_[A-Za-z0-9]+$" },
+    "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
+    "asset_package_id": { "type": "string", "pattern": "^pkg_[A-Za-z0-9]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "approval": {
+      "type": "object",
+      "description": "Publishing-copy approval — a SEPARATE gate from the Finished Carousel's own I014 approval. Carousel approval is never treated as approval of captions or platform copy (per the I027 brief); the Social Publisher Service requires both independently.",
+      "required": ["approved", "approved_by", "approved_at"],
+      "additionalProperties": false,
+      "properties": {
+        "approved": { "const": true },
+        "approved_by": { "type": "string", "minLength": 1 },
+        "approved_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "destinations": {
+      "type": "object",
+      "description": "At least one destination must be enabled. An enabled destination's own copy field is required and non-empty — enforced per-destination below, never inferred or defaulted.",
+      "required": ["instagram", "linkedin"],
+      "additionalProperties": false,
+      "anyOf": [
+        { "type": "object", "properties": { "instagram": { "type": "object", "properties": { "enabled": { "const": true } } } } },
+        { "type": "object", "properties": { "linkedin": { "type": "object", "properties": { "enabled": { "const": true } } } } }
+      ],
+      "properties": {
+        "instagram": {
+          "type": "object",
+          "required": ["enabled", "caption", "alt_text"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "caption": { "type": ["string", "null"] },
+            "alt_text": { "type": ["string", "null"] }
+          },
+          "if": { "properties": { "enabled": { "const": true } } },
+          "then": { "properties": { "caption": { "type": "string", "minLength": 1 } } }
+        },
+        "linkedin": {
+          "type": "object",
+          "required": ["enabled", "commentary"],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "commentary": { "type": ["string", "null"] }
+          },
+          "if": { "properties": { "enabled": { "const": true } } },
+          "then": { "properties": { "commentary": { "type": "string", "minLength": 1 } } }
+        }
+      }
+    }
+  }
+}

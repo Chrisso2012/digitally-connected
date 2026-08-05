@@ -365,6 +365,51 @@ test("a carousel published more than once (re-publish) shows every Publisher Res
   assert.equal(detail.publisher_results[1].publisher_result_id, second.publisher_result_id);
 });
 
+// --- platform-specific publishing state (DC-003-I027) -----------------------
+
+test("publishing.by_provider reports 'not_recorded' for every provider when nothing has been published", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_noproviders0001" }));
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const { by_provider } = service.getJobDetail("car_noproviders0001").job.publishing;
+
+  assert.deepEqual(by_provider, { google_drive: "not_recorded", instagram: "not_recorded", linkedin: "not_recorded" });
+});
+
+test("publishing.by_provider reports 'completed' independently per platform, based only on real Publisher Results", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_multiplatform01" }));
+  publisherResultStore.save(buildPublisherResult({ carouselId: "car_multiplatform01", provider: "google-drive" }));
+  publisherResultStore.save(buildPublisherResult({ carouselId: "car_multiplatform01", provider: "instagram", destination: "instagram:acct" }));
+  // LinkedIn deliberately never published.
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  const { by_provider, published, publisher_results } = service.getJobDetail("car_multiplatform01").job.publishing;
+
+  assert.equal(published, true);
+  assert.equal(publisher_results.length, 2);
+  assert.deepEqual(by_provider, { google_drive: "completed", instagram: "completed", linkedin: "not_recorded" });
+});
+
+test("the Control Centre never makes a social-platform (or any) network request to compute by_provider", async () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  finishedCarouselStore.save(loadFreshCarousel({ carousel_id: "car_nonetworkcc0001" }));
+  publisherResultStore.save(buildPublisherResult({ carouselId: "car_nonetworkcc0001", provider: "linkedin", destination: "urn:li:person:mock" }));
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    throw new Error("fetch must never be called by the Control Centre");
+  };
+  try {
+    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+    const { by_provider } = service.getJobDetail("car_nonetworkcc0001").job.publishing;
+    assert.equal(by_provider.linkedin, "completed");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 // --- recent activity ---------------------------------------------------------
 
 test("recent activity only includes events with a real stored timestamp, sorted newest first", () => {

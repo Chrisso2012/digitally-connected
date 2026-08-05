@@ -5306,6 +5306,265 @@ Social Media Packages, ZIP archives, thumbnails, PDFs, publishing
 scheduling, cost changes, Control Centre UI changes, and n8n workflow
 changes.
 
+## Social Publisher (DC-003-I027)
+
+Turns DC-003 from a system that *prepares* social content into one that
+can *publish* it — to Instagram (as a native carousel post) and LinkedIn
+(as a native multi-image post). **The Social Publisher executes approved
+instructions; it does not create content, decide what to publish, alter
+captions, or infer missing fields.** It publishes only what an already-
+approved Social Publishing Manifest explicitly supplies.
+
+### Repository investigation (checked before writing any code, per the I027 brief)
+
+- **No approved platform copy exists anywhere in this repository.**
+  Checked directly: `content-asset.schema.json` (title/summary/topic_package
+  only), `finished-carousel.schema.json`, `production-metrics.schema.json`,
+  and `publisher-result.schema.json` — none carry an Instagram caption or
+  LinkedIn commentary field, and a repository-wide search for
+  `caption`/`commentary` in `schemas/` and `src/` returns nothing relevant.
+  **This is the exact gap the Social Publishing Manifest closes** — see
+  below — rather than an automatic Cowork/Google Docs ingestion, which
+  remains explicitly out of scope.
+- **The six rendered images are available two ways**, confirmed, not
+  assumed: `finished-carousel.schema.json`'s own `slides[].image_url`
+  (Templated's public CDN, already unauthenticated — see "Templated API
+  note" above) for Instagram's URL-fetch model, and the completed
+  Production Asset Package (I021 archive or its I026 Windows copy — both
+  byte-identical) for LinkedIn's binary-upload model.
+- **`publisher-result.schema.json` (I025) needs zero changes to represent
+  social outcomes.** `provider`/`destination`/`provider_reference` are
+  already free-form strings and `metadata` is already the one field in
+  this repository's whole schema set that isn't `additionalProperties: false`
+  — built exactly for this kind of future extension. No incompatibility
+  was found, so none was reported or changed.
+- **The existing I022 Google Drive Publisher Adapter shape
+  (`publishPackage(assetPackagePath, options)`, returning
+  `folderId`/`folderUrl`/`filesUploaded`) is not reusable for social
+  platforms** — confirmed by reading it, not assumed. It has no place for
+  a caption/commentary, no way to express "publish to platform A vs. B,"
+  and is structurally shaped around "upload one local folder," not
+  "publish one post via a multi-step platform-specific flow." A narrower,
+  purpose-built `social-publisher-adapter.mjs` interface was required, per
+  the brief's own proposal.
+- **No Meta/Instagram/Facebook/LinkedIn credential or n8n credential
+  exists anywhere** — checked directly (env var names only, container and
+  host, plus the n8n credential vault: still only Google Sheets ×2,
+  OpenAI ×2, Anthropic, as first confirmed during I022's own
+  investigation). **Both platforms additionally require application-level
+  provisioning this milestone does not attempt**: Instagram needs an
+  eligible professional (Business/Creator) account linked to a Facebook
+  Page plus a Meta App with the `instagram_content_publish` permission;
+  LinkedIn needs either member-level "Share on LinkedIn" access or
+  organisation-page posting permission, both gated behind LinkedIn's own
+  partner/product access process.
+
+### Architectural principle
+
+The approved Social Publishing Manifest is the publishing instruction.
+The Finished Carousel and Production Asset Package remain the sources of
+the images. The Publisher Result Store remains the source of truth that
+publication occurred. Carousel approval (I014) and publishing-copy
+approval (this manifest) are two separate, both-required gates — carousel
+approval is never treated as approval of captions or platform copy.
+
+### Social Publishing Manifest
+
+`schemas/social-publishing-manifest.schema.json` represents ONLY an
+already-approved manifest — `approval.approved` is a fixed `true`, unlike
+the Carousel Approval workflow's own approve/reject state machine; there
+is no draft/review lifecycle here. Schema-enforced, not just
+service-checked: at least one destination must be enabled (`anyOf`); an
+enabled Instagram destination requires a non-empty `caption`; an enabled
+LinkedIn destination requires non-empty `commentary` — both via `if/then`
+conditionals scoped to that destination alone. No platform credentials
+and no raw image data belong here, by construction (every level is
+`additionalProperties: false`). `src/social-publishing-manifest.mjs`'s
+`createSocialPublishingManifest()` stores whatever caption/commentary a
+caller supplies completely verbatim — never rewritten, trimmed, or
+normalised beyond the schema's own structural non-empty check.
+
+**Current limitation, documented not hidden:** approved platform copy is
+supplied manually — a human copies it from wherever it was actually
+approved (e.g. a reviewed Google Doc or Cowork output) into the manifest
+JSON file. Automatic ingestion from either source is explicitly out of
+scope for I027.
+
+### Architecture
+
+```
+Approved Social Publishing Manifest
+        +
+Approved Finished Carousel (I014)          ─┐
+Production Asset Package (I021/I026)        ├──▶  Social Publisher Service  ──▶  Publisher Result Store (I025)  ──▶  Control Centre (I024)
+        ↓
+Social Publisher Adapter (provider-neutral)
+        ├── Instagram Carousel Adapter
+        └── LinkedIn Multi-Image Adapter
+```
+
+### Instagram carousel workflow
+
+`src/instagram-carousel-publisher-adapter.mjs` — built directly from
+Meta's published Content Publishing API reference; **not yet exercised
+against a real request**, matching every other HTTP integration in this
+codebase before its own first live call (I006, I022). Uses
+`finished-carousel.schema.json`'s own public `slides[].image_url` values
+directly — Instagram's own container-creation call fetches the image
+itself from a URL, so no local download/re-upload happens, per the
+brief's own instruction. Canonical order (cover → content → statistic →
+quote → infographic → cta) is enforced by sorting `slides` on
+`slide_number`, never trusted from array order. Flow: 6 child
+carousel-item container creations (in order) → 1 parent carousel
+container → 1 `media_publish` call. **Request budget: 8 total.** No
+permalink-fetch call is made (that would need one more GET per publish);
+`postUrl` is `null` unless the publish response itself happens to include
+one.
+
+### LinkedIn multi-image workflow
+
+`src/linkedin-multi-image-publisher-adapter.mjs` — built directly from
+LinkedIn's published Images API + Posts API reference; also not yet
+exercised live. Unlike Instagram, LinkedIn requires actual binary bytes —
+this adapter reads the six approved PNGs directly from the completed
+Production Asset Package (`01-cover.png` … `06-cta.png`, the exact
+filenames `local-production-asset-export-adapter.mjs` already
+establishes), never re-rendering or touching Templated. Flow per image:
+1 `initializeUpload` + 1 binary `PUT` to the returned upload URL, ×6, then
+1 `POST /rest/posts` creating the multi-image post. **Request budget: 13
+total** (12 + 1). `postUrl` is derived by pure string construction from a
+`urn:li:share:…`/`urn:li:ugcPost:…` post ID (LinkedIn's own documented
+permalink shape) — never an extra API call.
+
+### Member vs. organisation publishing
+
+`LINKEDIN_AUTHOR_URN` is the one, fully explicit configuration value —
+`urn:li:person:<id>` for member publishing, or `urn:li:organization:<id>`
+for a page. This is never inferred or silently chosen: a malformed or
+missing URN fails `LinkedInConfigurationError` before any request, and
+`classifyAuthorUrn()` (exported for callers/tests) only ever returns
+`"member"`, `"organization"`, or `null` — never a guess.
+
+### Platform credential requirements
+
+```bash
+INSTAGRAM_ACCESS_TOKEN=
+INSTAGRAM_USER_ID=
+INSTAGRAM_API_BASE_URL=https://graph.facebook.com   # default
+INSTAGRAM_API_VERSION=v21.0                          # default — verify current before live use
+
+LINKEDIN_ACCESS_TOKEN=
+LINKEDIN_AUTHOR_URN=                                 # urn:li:person:<id> or urn:li:organization:<id>, explicit, required
+LINKEDIN_API_BASE_URL=https://api.linkedin.com       # default
+LINKEDIN_API_VERSION=                                # LinkedIn's own dated version header — required, no guessed default
+```
+
+Neither adapter retries automatically — every request is part of an
+irreversible content-publishing sequence. Both fail before any request if
+required configuration is missing, and neither ever prints a credential
+value.
+
+### Mock-default guarantee
+
+`src/instagram-mock-publisher-adapter.mjs` / `src/linkedin-mock-publisher-adapter.mjs`
+are the only adapters automated tests and the CLI's own default
+(non-`--live`) mode use — fully deterministic, zero network, mirroring
+`production-asset-publisher-mock-adapter.mjs`'s (I022) own established
+`options.mode` convention exactly.
+
+### Duplicate-publishing protection
+
+Before every destination's own request, the Publisher Result Store (I025,
+unmodified) is checked via `findByCarousel()` for an existing successful
+publication to the exact same `provider` + `destination` (the adapter's
+own configured account/page identifier, available synchronously before
+any request — see `social-publisher-adapter.mjs`'s own header comment for
+why). A match fails that destination immediately, before any platform
+request, reported as `"duplicate"` — **no `--replace` exists for this
+check, by design**: social posts cannot be safely replaced or deleted
+like a local file or a Drive upload. A deliberate re-publication requires
+a new, separately-approved manifest.
+
+### Partial-success semantics
+
+Destinations publish **sequentially** (Instagram, then LinkedIn — never
+in parallel), and a Publisher Result is saved **immediately** after each
+individual platform success — never batched, never delayed waiting for a
+later destination. Execution policy, explicitly tested (per the brief's
+own instruction that any continue-past-failure behaviour must be):
+**a failure on one destination does not prevent the next enabled
+destination from being attempted.** Overall `status` is `"completed"`
+(every enabled destination succeeded), `"partial_failure"` (some did, some
+didn't), or `"failed"` (none did — this also covers an all-`"duplicate"`
+rerun, since no *new* publication occurred). No rollback is ever
+attempted — a genuine Instagram success stays recorded even when LinkedIn
+fails in the same run.
+
+### Publisher Result integration
+
+Reuses I025 completely unmodified. After each successful platform
+publish: `provider` is `"instagram"`/`"linkedin"`; `destination` is the
+adapter's own safe account/page identifier (never a credential);
+`provider_reference` is the platform post/media ID; `metadata` carries
+`{ post_url, item_count }`. No second publication store was created.
+
+### Control Centre integration
+
+`schemas/control-centre.schema.json`'s `jobPublishing` gained one new,
+additive field: `by_provider` — `{ google_drive, instagram, linkedin }`,
+each `"completed"` or `"not_recorded"`, computed purely from
+`publisher_results` (already fetched via `findByCarousel()`) with **no
+live provider or social-platform query of any kind**. The dashboard's
+general `published` count/flag keeps its existing "at least one
+recorded publication" meaning; `by_provider` is what makes each platform's
+own state individually visible, exactly as the brief requires.
+
+### CLI
+
+```bash
+npm run publish:social -- <manifestPath> <finishedCarouselStoreDirectory> <publisherResultStoreDirectory> <assetPackageRoot> [--live]
+```
+
+Mock by default. `--live` requires credentials for every ENABLED
+destination before making any request for ANY destination (a disabled
+destination's credentials are never required), prints the exact proposed
+request budget before execution, and makes zero requests for disabled
+destinations. Captions/commentary are never printed in normal output —
+only identifiers and status.
+
+### Live-verification approval gates
+
+**No live Instagram, LinkedIn, Facebook, or Meta request was made during
+implementation.** Per the brief's own explicit instruction, the first
+controlled verification — when separately authorised — must publish to
+only ONE platform at a time, in this order: (1) Instagram, (2) LinkedIn
+in a separate approval round. No retries during initial live
+verification. Proposed request budgets: **Instagram 8** (6 child
+containers + 1 parent container + 1 publish), **LinkedIn 13** (6 × 2
+image-upload requests + 1 post creation).
+
+### Existing modules confirmed unchanged
+
+Production generation, Pipeline Orchestrator, Execution Ledger, Finished
+Carousel Store, Carousel Approval, Production Asset Export, Windows
+Production Asset Export, Google Drive Publisher adapters, Production
+Metrics, Publisher Result Store, and Content Asset Repository — none
+received any code changes for I027. The only pre-existing files touched
+are `src/control-centre-service.mjs` / `tests/validation/control-centre.mjs`
+/ `schemas/control-centre.schema.json` (the additive `by_provider`
+integration described above), plus the standard schema-registration
+touchpoints and `src/index.mjs`/`package.json` (barrel exports and the
+`npm run publish:social` script).
+
+### Explicitly out of scope (I027)
+
+Automatic Cowork/Google Docs ingestion, writing or rewriting captions,
+article generation, Social Media Package generation, video/Reels/Stories
+publishing, Facebook, Threads, X, TikTok, scheduling, content calendars,
+post deletion or editing, retries during initial verification, analytics,
+social listening, comment management, engagement automation,
+authentication UI, and n8n workflow changes.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -5314,7 +5573,7 @@ through DC-003-I006 either:
 
 ```bash
 npm test       # unit tests: tests/unit/*.test.mjs
-npm run validate  # CLI summary: all 13 approved fixtures against their schemas
+npm run validate  # CLI summary: all 14 approved fixtures against their schemas
 npm run check:topic -- <path>  # CLI check of one Topic Package file
 npm run generate:mock -- <path>  # CLI mock-generate a carousel from one Topic Package file
 npm run generate:live -- [assetId] [--live]  # CLI generate a carousel from a Content Asset; mock by default, real Anthropic only with --live
@@ -5330,6 +5589,7 @@ npm run control-centre -- dashboard|health|jobs|activity <carouselStoreDirectory
 npm run control-centre -- job <carouselId> <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]
 npm run publisher-results -- list|get|carousel|execution ...  # CLI: read-only lookups against the Publisher Result Store (DC-003-I025)
 npm run export:windows -- <carouselId> <finishedCarouselStoreDirectory> [--replace]  # CLI: deliver an approved carousel to the Docker archive + Windows folder (DC-003-I026)
+npm run publish:social -- <manifestPath> <finishedCarouselStoreDirectory> <publisherResultStoreDirectory> <assetPackageRoot> [--live]  # CLI: publish an approved carousel to Instagram/LinkedIn (DC-003-I027)
 ```
 
 `npm test` covers everything from DC-003-I002 through DC-003-I005
@@ -5682,7 +5942,8 @@ milestone).
 | Production Control Centre (read-only operational console: system health, dashboard, recent jobs, recent activity, job detail) | Done (DC-003-I024), extended (DC-003-I025) — `src/control-centre-service.mjs`, `schemas/control-centre.schema.json`, CLI `npm run control-centre`; see "Production Control Centre (DC-003-I024, extended by DC-003-I025)"; I015/I021/I023 all unchanged; no persistence, no workflow logic, no new business rules, no network requests; terminal-only, no GUI; as of I025, `published`/`publishing` are sourced from the Publisher Result Store, not the disconnected approval-lifecycle field I024 originally fell back on |
 | Publisher Result Store (authoritative local record of every successful publish, provider-neutral) | Done (DC-003-I025) — `src/publisher-result.mjs`, `src/publisher-result-store.mjs` + adapter files, CLI `npm run publisher-results`; see "Publisher Result Store (DC-003-I025)"; I015/I021/I022/I023 core logic unchanged (I022's service gained one optional dependency only); no live Google Drive upload made; LinkedIn/Instagram/Facebook/X/scheduling/analytics/retries/queue/dashboard explicitly not implemented |
 | Windows Production Asset Export (second, human-facing delivery copy of an approved I021 archive package into a Windows-visible folder) | Done (DC-003-I026) — `src/windows-production-export-service.mjs`, `src/windows-production-export-config.mjs`, CLI `npm run export:windows`; see "Windows Production Asset Export (DC-003-I026)"; I021 completely unmodified (its real `executeProductionAssetExport()` called directly for the archive step); Windows delivery is a plain, byte-verified filesystem copy, never a second CDN download; `n8n-test` recreated with one new writable bind mount, all prior config/workflows/credentials confirmed intact; live-verified locally against the real `car_9c026a104e3745c3` package, zero external API calls |
-| Unit test suite | Done — 1024 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`)); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Social Publisher (publishes an approved carousel to Instagram carousel + LinkedIn multi-image posts, per an approved Social Publishing Manifest) | Done (DC-003-I027) — `src/social-publisher-service.mjs`, `src/social-publishing-manifest.mjs`, `src/instagram-carousel-publisher-adapter.mjs`, `src/linkedin-multi-image-publisher-adapter.mjs` + mock adapters/configs, CLI `npm run publish:social`; see "Social Publisher (DC-003-I027)"; new `schemas/social-publishing-manifest.schema.json` closes the confirmed "no approved platform copy exists anywhere" gap; `publisher-result.schema.json` (I025) needed zero changes; I021/I022/I025/I014 all unchanged; mock remains the default without `--live`; duplicate-publish prevention and sequential per-destination publishing with immediate Publisher Result recording (never batched); Control Centre's `jobPublishing` gained an additive `by_provider` breakdown; **no live Instagram/LinkedIn/Facebook/Meta request made — proposed budgets Instagram 8, LinkedIn 13, each requiring its own separate future approval** |
+| Unit test suite | Done — 1108 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

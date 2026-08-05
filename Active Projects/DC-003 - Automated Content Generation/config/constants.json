@@ -37,7 +37,8 @@
     "content_request": "req_",
     "asset_package": "pkg_",
     "production_metrics": "met_",
-    "publisher_result": "pub_"
+    "publisher_result": "pub_",
+    "social_publishing_manifest": "spm_"
   },
   "content_request_source_types": ["article"],
   "content_request_design_count": 6

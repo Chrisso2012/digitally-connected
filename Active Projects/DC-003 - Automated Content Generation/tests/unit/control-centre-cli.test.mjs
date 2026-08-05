@@ -112,7 +112,7 @@ test("job <carouselId> prints full job detail for a real saved carousel, with no
     assert.match(result.stdout, /Approval/);
     assert.match(result.stdout, /Export/);
     assert.match(result.stdout, /Publishing/);
-    assert.match(result.stdout, /published {2}false/);
+    assert.match(result.stdout, /published\s+false/);
     assert.match(result.stdout, /no Publisher Result found for this carousel/);
     assert.match(result.stdout, /Metrics/);
   });
@@ -156,9 +156,12 @@ test("job <carouselId> shows a real Publisher Result once one is recorded", () =
 
     const result = runCli("job", "car_01J9X9C7", carouselDir, metricsDir, publisherResultDir);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /published {2}true/);
+    assert.match(result.stdout, /published\s+true/);
     assert.match(result.stdout, /provider=google-drive/);
     assert.match(result.stdout, /destination=https:\/\/drive\.google\.com/);
+    assert.match(result.stdout, /Google Drive\s+completed/);
+    assert.match(result.stdout, /Instagram\s+not_recorded/);
+    assert.match(result.stdout, /LinkedIn\s+not_recorded/);
   });
 });
 

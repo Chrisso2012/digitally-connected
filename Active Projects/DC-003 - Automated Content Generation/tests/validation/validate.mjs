@@ -29,6 +29,7 @@ const APPROVED_FIXTURES = [
   ["contentAsset", "content-asset.example.json"],
   ["productionMetrics", "production-metrics.example.json"],
   ["publisherResult", "publisher-result.example.json"],
+  ["socialPublishingManifest", "social-publishing-manifest.example.json"],
   ["controlCentre", "control-centre.example.json"],
 ];
 

@@ -314,3 +314,67 @@ export {
   WindowsDeliveryPersistenceError,
   WindowsDeliveryVerificationError,
 } from "./windows-production-export-errors.mjs";
+
+// DC-003-I027 — Social Publisher: executes an approved Social Publishing
+// Manifest, publishing an approved carousel to Instagram (carousel post)
+// and/or LinkedIn (multi-image post). Never generates, rewrites, or
+// approves copy — it receives already-approved instructions and executes
+// them exactly. Reuses the Finished Carousel Store (I015), the Carousel
+// Approval workflow (I014, unchanged), and the Publisher Result Store
+// (I025, unchanged) — no second publication store. See "Social Publisher
+// (DC-003-I027)" in the README.
+export { createSocialPublishingManifest } from "./social-publishing-manifest.mjs";
+export {
+  InvalidSocialPublishingManifestInputError,
+  SocialPublishingManifestValidationError,
+} from "./social-publishing-manifest-errors.mjs";
+export { assertValidSocialPublisherAdapter } from "./social-publisher-adapter.mjs";
+export { executeSocialPublish } from "./social-publisher-service.mjs";
+export {
+  InvalidSocialPublisherAdapterError,
+  InvalidSocialPublishingManifestForPublishError,
+  CarouselNotEligibleForSocialPublishError,
+  SocialManifestIdentityMismatchError,
+  InvalidAssetPackageForSocialPublishError,
+  DuplicateSocialPublicationError,
+  SocialPlatformPublishError,
+} from "./social-publisher-service-errors.mjs";
+
+// DC-003-I027 — Instagram Carousel Publisher
+export { createInstagramCarouselPublisherAdapter } from "./instagram-carousel-publisher-adapter.mjs";
+export { createMockInstagramPublisherAdapter } from "./instagram-mock-publisher-adapter.mjs";
+export {
+  loadInstagramPublisherConfig,
+  resolveLiveMaxAttempts as resolveInstagramLiveMaxAttempts,
+  DEFAULT_LIVE_MAX_ATTEMPTS as INSTAGRAM_DEFAULT_LIVE_MAX_ATTEMPTS,
+} from "./instagram-publisher-config.mjs";
+export {
+  InstagramConfigurationError,
+  InstagramAuthenticationError,
+  InstagramTransportError,
+  InstagramTimeoutError,
+  InstagramClientError,
+  InstagramRateLimitError,
+  InstagramContainerError,
+  InstagramPublishError,
+} from "./instagram-publisher-errors.mjs";
+
+// DC-003-I027 — LinkedIn Multi-Image Publisher
+export { createLinkedInMultiImagePublisherAdapter } from "./linkedin-multi-image-publisher-adapter.mjs";
+export { createMockLinkedInPublisherAdapter } from "./linkedin-mock-publisher-adapter.mjs";
+export {
+  loadLinkedInPublisherConfig,
+  classifyAuthorUrn,
+  resolveLiveMaxAttempts as resolveLinkedInLiveMaxAttempts,
+  DEFAULT_LIVE_MAX_ATTEMPTS as LINKEDIN_DEFAULT_LIVE_MAX_ATTEMPTS,
+} from "./linkedin-publisher-config.mjs";
+export {
+  LinkedInConfigurationError,
+  LinkedInAuthenticationError,
+  LinkedInTransportError,
+  LinkedInTimeoutError,
+  LinkedInClientError,
+  LinkedInRateLimitError,
+  LinkedInImageUploadError,
+  LinkedInPostCreationError,
+} from "./linkedin-publisher-errors.mjs";

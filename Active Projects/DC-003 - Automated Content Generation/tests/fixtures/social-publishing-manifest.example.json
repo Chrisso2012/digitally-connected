@@ -1,0 +1,22 @@
+{
+  "manifest_id": "spm_9c026a104e3745c3",
+  "carousel_id": "car_9c026a104e3745c3",
+  "asset_package_id": "pkg_0574c6f7c7674e50",
+  "created_at": "2026-08-05T10:00:00Z",
+  "approval": {
+    "approved": true,
+    "approved_by": "chris@digitallyconnected.net",
+    "approved_at": "2026-08-05T10:05:00Z"
+  },
+  "destinations": {
+    "instagram": {
+      "enabled": true,
+      "caption": "Your Google ranking didn't drop for no reason. Swipe through to find out which signal actually moved — and how fast it's fixable. 👇",
+      "alt_text": "Six-slide carousel explaining why a Google Search ranking dropped and how to recover it"
+    },
+    "linkedin": {
+      "enabled": true,
+      "commentary": "A ranking drop is almost always fixable once you know which signal actually moved. Here's the 3-signal audit we run before touching a single page."
+    }
+  }
+}

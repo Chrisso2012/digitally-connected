@@ -37,6 +37,7 @@ const REQUIRED_SCHEMA_VERSION_KEYS = [
   "production_metrics",
   "control_centre",
   "publisher_result",
+  "social_publishing_manifest",
 ];
 // Deliberately loose substring match — this is a safety net against obvious
 // mistakes (pasting a real key into config), not a secrets scanner.

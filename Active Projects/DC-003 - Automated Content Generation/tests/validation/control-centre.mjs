@@ -207,7 +207,10 @@ function printJobDetail(detail) {
   }
   console.log();
   console.log("Publishing");
-  console.log(`  published  ${job.publishing.published}`);
+  console.log(`  published        ${job.publishing.published}`);
+  console.log(`  Google Drive     ${job.publishing.by_provider.google_drive}`);
+  console.log(`  Instagram        ${job.publishing.by_provider.instagram}`);
+  console.log(`  LinkedIn         ${job.publishing.by_provider.linkedin}`);
   if (job.publishing.publisher_results.length === 0) {
     console.log("  no Publisher Result found for this carousel");
   } else {

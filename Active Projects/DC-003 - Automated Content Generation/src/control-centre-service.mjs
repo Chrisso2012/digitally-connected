@@ -552,13 +552,28 @@ export function createControlCentreService(fields = {}, options = {}) {
     return validateAndFreeze(overview);
   }
 
+  // DC-003-I027 — breaks the same Publisher Result evidence down by
+  // platform, since the general `published` boolean alone can no longer
+  // distinguish "published to Google Drive" from "published to Instagram"
+  // once more than one provider exists. No live provider/social-platform
+  // query — purely a grouping over `publisherResults`, already fetched.
+  function computeByProvider(publisherResults) {
+    const publishedProviders = new Set(publisherResults.map((result) => result.provider));
+    return {
+      google_drive: publishedProviders.has("google-drive") ? "completed" : "not_recorded",
+      instagram: publishedProviders.has("instagram") ? "completed" : "not_recorded",
+      linkedin: publishedProviders.has("linkedin") ? "completed" : "not_recorded",
+    };
+  }
+
   /**
    * Assembles one carousel's full operational picture — generation,
    * rendering, and approval (embedded whole as `finished_carousel`, itself
    * re-validated against finished-carousel.schema.json), metrics (embedded
    * whole when a matching record exists, else null), export status, and
-   * publishing (DC-003-I025 — every Publisher Result found for this
-   * carousel_id, embedded whole).
+   * publishing (DC-003-I025, extended by DC-003-I027 — every Publisher
+   * Result found for this carousel_id, embedded whole, plus a
+   * per-provider completed/not_recorded breakdown).
    *
    * Propagates whatever error finishedCarouselStore.get(carouselId) itself
    * throws (InvalidCarouselIdentifierError, CarouselNotFoundError,
@@ -583,6 +598,7 @@ export function createControlCentreService(fields = {}, options = {}) {
         publishing: {
           published: publisherResults.length > 0,
           publisher_results: publisherResults,
+          by_provider: computeByProvider(publisherResults),
         },
       },
     };

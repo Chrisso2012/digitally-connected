@@ -201,14 +201,25 @@
     },
     "jobPublishing": {
       "type": "object",
-      "description": "DC-003-I025 — sourced entirely from the Publisher Result Store, the repository's authoritative record of successful publications. `published` is true only when at least one Publisher Result exists for this carousel_id; `publisher_results` lists every one found (ordered oldest to newest — a carousel can legitimately be re-published, or published to more than one provider once a non-Drive publisher exists), each embedded whole and re-validated against publisher-result.schema.json. No heuristics, no provider queries — only repository evidence, per the I025 brief.",
-      "required": ["published", "publisher_results"],
+      "description": "DC-003-I025, extended by DC-003-I027 — sourced entirely from the Publisher Result Store, the repository's authoritative record of successful publications. `published` is true only when at least one Publisher Result exists for this carousel_id; `publisher_results` lists every one found (ordered oldest to newest — a carousel can legitimately be re-published, or published to more than one provider), each embedded whole and re-validated against publisher-result.schema.json. `by_provider` (DC-003-I027) breaks that same evidence down per platform, since the general `published` flag alone cannot distinguish 'published to Google Drive' from 'published to Instagram' once more than one provider exists. No heuristics, no live provider/social-platform queries — only repository evidence, per the I025/I027 briefs.",
+      "required": ["published", "publisher_results", "by_provider"],
       "additionalProperties": false,
       "properties": {
         "published": { "type": "boolean" },
         "publisher_results": {
           "type": "array",
           "items": { "$ref": "https://digitallyconnected.net/schemas/dc-003/publisher-result.schema.json" }
+        },
+        "by_provider": {
+          "type": "object",
+          "description": "One entry per currently-implemented publisher provider — google_drive (I022), instagram (I027), linkedin (I027). A future provider would need its own future milestone to extend this breakdown; the underlying `publisher_results` array is already provider-neutral and needs no change.",
+          "required": ["google_drive", "instagram", "linkedin"],
+          "additionalProperties": false,
+          "properties": {
+            "google_drive": { "type": "string", "enum": ["completed", "not_recorded"] },
+            "instagram": { "type": "string", "enum": ["completed", "not_recorded"] },
+            "linkedin": { "type": "string", "enum": ["completed", "not_recorded"] }
+          }
         }
       }
     },

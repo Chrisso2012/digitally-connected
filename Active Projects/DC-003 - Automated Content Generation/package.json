@@ -25,6 +25,7 @@
     "production:live": "node tests/validation/production-run-live.mjs",
     "export:assets": "node tests/validation/export-production-assets.mjs",
     "export:windows": "node tests/validation/export-production-assets-windows.mjs",
+    "publish:social": "node tests/validation/publish-social-assets.mjs",
     "publish:assets": "node tests/validation/publish-production-assets.mjs",
     "metrics": "node tests/validation/production-metrics.mjs",
     "control-centre": "node tests/validation/control-centre.mjs",

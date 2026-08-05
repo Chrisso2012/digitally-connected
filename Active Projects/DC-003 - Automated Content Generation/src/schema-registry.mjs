@@ -47,6 +47,10 @@ const SCHEMA_FILES = {
   // control-centre.schema.json $refs it by $id (DC-003-I025 extends the
   // Control Centre's own jobDetail.publishing to embed it).
   publisherResult: "publisher-result.schema.json",
+  // DC-003-I027 — the approved, platform-specific publishing instruction
+  // the Social Publisher Service executes exactly. No $refs to or from
+  // any other schema, so its position here is not order-sensitive.
+  socialPublishingManifest: "social-publishing-manifest.schema.json",
   // DC-003-I024 — the Control Centre's in-memory read model. Must be
   // compiled AFTER finishedCarousel/productionMetrics/publisherResult
   // above (object key order = compile order in validator.mjs) since it
