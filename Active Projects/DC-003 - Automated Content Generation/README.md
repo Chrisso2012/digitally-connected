@@ -6080,6 +6080,331 @@ mutation beyond the one legitimate write import performs (persisting an
 already-valid, already-approved-elsewhere Delivery Report into its own
 permanent I029 store).
 
+## Automated Delivery Office (DC-003-I029.2)
+
+I029.1 built a transport with nothing yet to carry through it in an
+automated way. I029.2 is the first real Bridge Transport provider: it
+takes one approved Engineering Work Order, runs Claude Code
+programmatically against this repository, and records one structured
+Engineering Delivery Report — **Delivery Office execution only**.
+Strategy Office review is not automated by this milestone, and this
+runner can never approve its own work.
+
+```
+Engineering Work Order Store
+        ↓
+Automated Delivery Office Service
+        ↓  (eligibility → lock → runner → independent git evidence)
+Delivery Office Runner Adapter (mock by default / Claude Code CLI when --live-runner)
+        ↓
+DC-003 Repository
+        ↓
+Engineering Delivery Report  →  Bridge Transport (I029.1, unmodified)  →  Engineering Delivery Report Store
+```
+
+### Feasibility investigation (required before any code, per this
+milestone's own brief)
+
+- **Mechanism: Claude Code CLI subprocess, not the Agent SDK.** `claude
+  --help` (confirmed against a real, working, non-interactive invocation —
+  `npx --yes @anthropic-ai/claude-code --version` returned `2.1.222`)
+  already exposes every control point this milestone needs, officially
+  documented: `-p`/`--output-format json`/`--json-schema` for reliable
+  structured output; `--allowedTools`/`--disallowedTools`/
+  `--permission-mode`/`--max-budget-usd` for scope and budget; `--bare`/
+  `--strict-mcp-config`/`--setting-sources project` for isolation. Pulling
+  in the Agent SDK would have been this project's first non-`ajv`
+  dependency for no capability the CLI doesn't already provide.
+- **No `--timeout` flag exists on the CLI.** Timeout/interruption is
+  enforced by this milestone's own code — a manual `setTimeout` +
+  SIGTERM-then-SIGKILL sequence in `claude-code-delivery-runner-adapter.mjs`
+  — mirroring this project's own `resolveLiveMaxAttempts()` one-shot-safety
+  pattern (I006/I019) rather than trusting the CLI to self-limit.
+  `executionPolicy.commandTimeoutMs` exists for a future per-command
+  ceiling but is not currently wired into any CLI flag — no such flag was
+  found; documented here rather than faked.
+- **Headless mode loads this user's personal CLAUDE.md/settings/MCP
+  servers/skills by default** — a real feasibility finding, not assumed.
+  Every invocation this milestone makes passes `--bare --strict-mcp-config
+  --setting-sources project` specifically to opt OUT of that default,
+  keeping authority scoped to exactly what the Execution Policy configures
+  rather than this operator's full personal environment.
+- **Authentication is host-managed OAuth in this environment, not a bare
+  `ANTHROPIC_API_KEY`** (confirmed via `CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH`/
+  `CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH` env vars in the investigating
+  session). Whether a freshly-spawned subprocess can inherit that session
+  or needs its own `ANTHROPIC_API_KEY`/`apiKeyHelper` (via `--bare`) is
+  **genuinely unverified** — resolving it requires a real invocation, which
+  this milestone's own brief prohibits during implementation. This is
+  exactly what the Initial Real-Runner Verification Gate below exists to
+  determine, once, under separate authorisation.
+- **Execution environment: the Windows host, not `n8n-test`.** Node.js
+  (`v24.18.1`) and an npx-resolvable Claude Code CLI are confirmed working
+  on the host; `n8n-test` was not touched or tested for this — doing so
+  would need its own new credential, exactly the kind of expansion this
+  milestone's brief says to stop and report on rather than build. No new
+  container, service, or credential was needed anywhere in this milestone.
+- **No new schema was needed.** The Structured Runner Result (below) maps
+  directly onto the existing `engineering-delivery-report.schema.json`
+  (I029); Bridge Transport (I029.1) is reused completely unmodified.
+
+### Execution Policy (`src/execution-policy.mjs`)
+
+`createExecutionPolicy({ repositoryPath, permittedBranch, ... })` —
+conservative by default: `allowCommits`/`allowPush`/`allowDocker` all
+`false`, `prohibitLiveExternalCalls`/`prohibitInfrastructureChanges` both
+`true`, `maxCostUsd: 2`. Disallowed tools are **computed, not just
+caller-supplied** — `Bash(docker*)`/`Bash(git push*)`/`Bash(git commit*)`/
+`WebFetch`/`WebSearch` are always denied unless their governing flag is
+explicitly turned on. `repositoryPath`/`permittedBranch` are always
+explicit arguments, matching this codebase's own "storeDirectory is
+always explicit" convention.
+
+**Repository-evidence finding, worth recording:**
+`engineering-work-order.schema.json` has no structured field for a Work
+Order to *request* narrower execution authority — only a free-text
+`constraints` array. The brief's own "a Work Order may narrow
+permissions further, it may never broaden the configured maximum
+authority" is honoured by `resolveEffectivePolicy()` as a currently
+honest no-op: `constraints` are surfaced verbatim into the Claude
+instruction for Claude itself to read and respect, never mechanically
+parsed into policy flags — inventing a parsing contract the schema
+doesn't define would be new scope. A future milestone that wants real
+per-Work-Order narrowing needs a real schema field to parse.
+
+### Work Order Eligibility
+
+Checked, in order, **before** the lock is acquired or the runner is ever
+invoked — an ineligible Work Order never reaches Claude Code:
+
+1. `status` is `"ready"` (schema-valid load already guarantees this field
+   exists and `approved_at` is set for any non-draft status).
+2. The repository's real current commit matches the Work Order's own
+   `repository_commit`, unless the caller explicitly passes
+   `allowNewerStartingCommit: true`.
+3. The repository is on the configured `permittedBranch` **before**
+   execution (§10 Git Safety's own "before execution" requirement,
+   checked here rather than only after the fact).
+4. The working tree is clean **before** execution.
+5. Every `wo_...` in `dependencies` has at least one Delivery Report with
+   status `"completed"`.
+6. No existing Delivery Report for this Work Order already has status
+   `"completed"` (`DuplicateDeliveryError`).
+7. The Execution Lock (below) is not already held for this Work Order
+   (`ExecutionLockAlreadyHeldError`).
+
+"No previous transport record proves it is currently in progress" (the
+brief's own §4 wording) is satisfied by the Execution Lock alone — no new
+Bridge Transport record type was invented for this; the lock **is** the
+one and only "currently in progress" signal this milestone needs
+(I029.1's own record schema was never touched, per the brief's own "stop
+and report before altering its schema" instruction).
+
+### Execution Lock (`src/delivery-execution-lock.mjs`)
+
+The first lock-like component in this codebase — deliberately NOT routed
+through the schema/Storage-Adapter machinery every domain object here
+uses (a lock is ephemeral concurrency-control plumbing, never authored by
+the Strategy Office, never a permanent record), mirroring
+`content-asset-repository.mjs`'s own (I018) precedent for departing from
+the standard pattern when justified. One small JSON file per locked Work
+Order, atomic acquisition (temp-file + read-back-verify + rename, the
+same discipline every `local-json-*-adapter.mjs` already applies).
+`acquire()`/`release()` are exported by `work_order_id` pattern
+(path-traversal-safe, same regex every other store's `checkIdentifier()`
+uses). A stale lock (older than `staleAfterMs`, default 1 hour) is only
+ever superseded by a real, subsequent `acquire()` — never silently
+cleared by a read — and the new lock record's own
+`superseded_stale_lock` field names the previous lock's token/timestamp,
+so the override is always traceable. `release()` requires the exact
+`lockToken` `acquire()` returned; it refuses (never silently no-ops) to
+remove a lock it does not own or one that was never held.
+
+### Delivery Runner Adapter contract
+
+`src/delivery-office-runner-adapter.mjs` — `{ name,
+executeWorkOrder({ workOrder, repository, executionPolicy }) }`, mirroring
+every other Adapter contract-checker in this codebase (shape check, not a
+base class). `assertValidRunnerResult()` enforces the Structured Runner
+Result shape on **every** adapter's return value — mock or real — so
+`automated-delivery-office-service.mjs` never has to trust an adapter
+blindly (this is what makes the mock's own `"malformed"` mode meaningful:
+the mock returns a bad shape on purpose, and this function is what must
+catch it).
+
+**Structured Runner Result** (extends the brief's own illustrative
+example with `verification.testsSummary`/`fixturesSummary` — real
+`{passed, failed, total}` counts, needed to populate
+`engineering-delivery-report.schema.json`'s own `tests`/`fixtures`
+fields without this service re-running the whole Docker test suite
+itself on every execution):
+
+```json
+{
+  "status": "completed | failed | timeout | interrupted",
+  "workOrderId": "wo_...",
+  "startedAt": "...", "completedAt": "...",
+  "exitCode": 0, "sessionReference": "... | null",
+  "repository": { "startingCommit": "...", "endingCommit": "...", "branch": "main", "workingTree": "clean | dirty" },
+  "verification": { "testsPassed": true, "fixturesPassed": true, "testsSummary": {"passed":0,"failed":0,"total":0}, "fixturesSummary": {"passed":0,"failed":0,"total":0} },
+  "deliveryEvidence": { "commit": "... | null", "pushStatus": "pushed | not_pushed | not_applicable", "summary": "bounded, ≤500 chars" }
+}
+```
+
+Never stored or returned: API keys, full stdout/stderr, hidden
+reasoning, complete command output, raw prompts, environment dumps,
+credentials, stack traces.
+
+### Mock Delivery Office Runner Adapter
+
+`src/delivery-office-mock-runner-adapter.mjs` — the **only** runner
+adapter any automated test or the CLI's default mode ever uses. No
+subprocess, no timers, fully deterministic (`options.mode` selects the
+exact scenario instantly, never actually waiting/hanging) — mirrors
+`bridge-transport-mock-adapter.mjs`'s own `options.mode` pattern.
+Scenarios: `success` (default) | `failed` | `timeout` | `interrupted` |
+`adapter-error` (throws) | `malformed` (returns a bad shape on purpose) |
+`dirty-repository` | `tests-failed` | `fixtures-failed`.
+`"duplicate Work Order"`/`"lock conflict"` (from the brief's own §12
+list) are eligibility/lock-layer concerns that never reach a runner
+adapter at all — covered at the service layer instead.
+
+### Claude Code Delivery Runner Adapter (real, never used by an automated test)
+
+`src/claude-code-delivery-runner-adapter.mjs` — `buildDeliveryInstruction()`
+translates a Work Order's own fields (milestone, title, objective,
+constraints, dependencies, review criteria, expected starting commit,
+authority/safety rules, required self-report format) into the Claude
+instruction — nothing else; never conversation history, never a stored
+new permanent domain object (the Work Order remains the canonical
+intent). `buildClaudeArgs()` builds the full `claude` argv (an array,
+never a shell string — `spawn()` never uses `shell: true`, so no
+argument, including free-text instruction content, is ever
+shell-interpreted). `--json-schema` constrains Claude's own **self-report**
+(`completed`, `testsSummary`, `fixturesSummary`, `committed`, `commit`,
+`pushed`, a ≤500-char `summary`) — `parseClaudeSelfReport()` extracts it
+defensively (tries the documented/most-likely `--output-format json`
+envelope shapes; throws `MalformedRunnerResultError` rather than
+silently inventing a "completed" result if none match — **the exact
+envelope shape has not been observed against a real invocation**, since
+none is authorised during this milestone's implementation; confirming it
+for real is exactly what the verification gate below is for).
+
+`src/delivery-office-runner-config.mjs` — `loadDeliveryOfficeRunnerConfig()`
+defaults to `npx --yes @anthropic-ai/claude-code` (confirmed working from
+a non-interactive shell during the investigation), or a caller-supplied
+`CLAUDE_CODE_COMMAND` pointing straight at an already-installed binary.
+`describeAuthenticationAvailability()` reports the auth mechanism **by
+name only, never a value** — `ANTHROPIC_API_KEY` if set, otherwise
+"OAuth (host-managed) — unverified for a headless subprocess."
+
+**Independent git evidence** (`src/repository-git-evidence.mjs`, shared
+by both this adapter and the service below): `readGitState()`,
+`readUpstreamCommit()` (null, never throws, when no upstream is
+configured), `computeChangedFiles()` (`git diff --name-status` between
+two real commits — `A` → created, `M`/`R` → modified, `D` not
+represented, since the schema has no `files_deleted` field). This
+adapter fills its own `repository.*` fields from a REAL git check
+immediately after the subprocess exits — never from Claude's own
+self-report.
+
+### Automated Delivery Office Service (`src/automated-delivery-office-service.mjs`)
+
+The only module that executes one approved Work Order end to end. **Never
+approves a Delivery Report** — every status it can produce
+(`completed`/`partial`/`failed`) is delivery *evidence*, not a Strategy
+Office decision; a completed runner process is not automatically an
+approved implementation.
+
+**Independent verification, not blind trust in the runner's own
+self-report** — this is the central design decision of this service.
+After the runner adapter returns (or throws), the service re-reads real
+git state itself and uses **that**, never the runner's own self-reported
+`repository.*`, to decide the Delivery Report's own
+`commit`/`push_status`/`working_tree`/`files_created`/`files_modified`.
+A `"completed"` verdict requires ALL of: the runner's own self-report
+says success and tests/fixtures passed, the working tree is
+independently clean, the repository ended on the intended branch, a real
+new commit actually exists, and — only when the policy allows pushing —
+the push actually landed on the remote tracking branch. Any mismatch
+downgrades to `"partial"` (real committed progress, just not fully
+corroborated) or `"failed"` (no progress captured in git history at
+all). Re-running the whole Docker test suite from inside this service on
+every execution was considered and rejected — it would make every unit
+test in this milestone itself require Docker and duplicate rather than
+verify what the runner's own subprocess already ran; test/fixture
+evidence is taken from the runner's own (already schema-validated)
+self-report instead.
+
+**Bridge Transport integration reuses I029.1 completely unmodified — this
+service never calls `deliveryReportStore.save()` directly.** The
+constructed Delivery Report is written to an explicit
+`deliveryReportDropDir` (mirroring Bridge Transport's own `destinationDir`
+"outgoing queue drop" convention) and then persisted the *only* way any
+Delivery Report ever reaches the store in this codebase:
+`importDeliveryReport()` from `bridge-transport-service.mjs`, unchanged —
+which both saves it and records the Bridge Transport history in one call.
+This applies to every outcome, not just success — a failed execution
+still produces a real Delivery Report the Strategy Office can see.
+
+The Execution Lock is always released via `finally` — a normal exception
+anywhere in this flow (including a store validation bug) is the "handled
+failure" case the brief's own §5 describes; only a genuine process-level
+crash could leave a lock orphaned, an inherent limitation of any
+lock-file mechanism.
+
+### CLI (`tests/validation/delivery-office-runner.mjs`, `npm run delivery-office`)
+
+```bash
+npm run delivery-office -- inspect --repo=<repositoryPath> [--branch=<name>]
+npm run delivery-office -- execute <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <bridgeTransportStoreDirectory> --repo=<repositoryPath> --lock=<lockDirectory> --drop=<deliveryReportDropDir> [--branch=<name>] [--live-runner] [--allow-newer-commit] [--allow-push] [--allow-commits] [--allow-docker] [--max-cost-usd=<n>]
+npm run delivery-office -- status <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> --lock=<lockDirectory>
+```
+
+**Default is always the mock runner — real execution requires the
+unmistakable `--live-runner` flag**, invokes exactly one Work Order, no
+automatic retry, no second Work Order, no Strategy Office approval of any
+kind. `inspect` reports the selected mechanism, repository/branch,
+resolved Execution Policy, and credential availability **by name only** —
+never a live check, never a value.
+
+### Control Centre integration (additive/optional, read-only)
+
+Paired with the SAME Engineering store pair `engineeringSummary` already
+requires (null when that pair isn't supplied) plus an independent,
+optional `deliveryOfficeLockDir` for lock visibility (`--delivery-office-lock=<dir>`
+on the `dashboard` subcommand — mirrors `exportsRootDir`'s own "checked,
+not zero" discipline: omitted means `lock_status.checked: false`, never a
+guessed zero). Reports `queued_work_orders`, `running_work_order`,
+`last_delivery_report`, `awaiting_review`, `failed_executions`,
+`lock_status`, `runner_availability` (a structural env-presence signal
+only). **No Claude Code invocation of any kind occurs from the Control
+Centre.**
+
+### Initial Real-Runner Verification Gate
+
+**No real Claude Code execution occurred during this milestone's
+implementation, and none is authorised by this README.** Before any live
+Work Order is ever executed, per the brief: confirm the full suite still
+passes; confirm the exact runner mechanism/version; confirm
+authentication availability by name only; confirm the exact repository
+permission scope and allowed tools; confirm no production-provider
+credential is forwarded unnecessarily; create one harmless test Work
+Order on a disposable branch or isolated fixture repository; report the
+expected cost/duration; obtain fresh Strategy Office and CEO approval;
+execute exactly once, no retry, never against production `main` for the
+first attempt.
+
+### Explicitly out of scope (per this milestone's own brief)
+
+Direct integration with any external conversation/chat surface, Strategy
+Office automation, automatic review or approval, automatic correction
+Work Orders, multiple simultaneous Work Orders, scheduling, polling,
+webhooks, n8n workflow creation, GitHub Actions, visible Claude Desktop
+UI automation, browser automation, production deployment, live content
+generation/rendering/publishing, automatic rollback, self-approval,
+roadmap decisions.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -6461,7 +6786,8 @@ milestone).
 | Social Analytics (post-publication performance snapshots for Instagram + LinkedIn, sourced only from Publisher Results, immutable time-series) | Done (DC-003-I028) — `src/social-analytics-snapshot.mjs`, `src/social-analytics-store.mjs` + adapter files, `src/instagram-insights-adapter.mjs`, `src/linkedin-post-analytics-adapter.mjs` + mock adapters/configs, CLI `npm run social:analytics`; see "Social Analytics (DC-003-I028)"; new `schemas/social-analytics-snapshot.schema.json`; `publisher-result.schema.json` (I025) and every I008–I012/I014/I015/I021/I022/I025/I026/I027 module unchanged; Control Centre's `socialAnalyticsStore` dependency is additive/optional (never a breaking required field, unlike I025's own precedent); mock remains the default without `--live`; **no live Instagram/LinkedIn/Meta analytics request made — proposed budgets Instagram 1, LinkedIn organization 1, LinkedIn member 5, each requiring its own separate future approval; no platform has been live-connected yet for either publishing or analytics** |
 | Engineering Work Management (structured Strategy Office <-> Delivery Office objects: Work Order, Delivery Report, read-only join service, Control Centre section) | Done (DC-003-I029) — `src/engineering-work-order.mjs`, `src/engineering-work-order-store.mjs` + adapter files, `src/engineering-delivery-report.mjs`, `src/engineering-delivery-report-store.mjs` + adapter files, `src/engineering-work-management-service.mjs`, CLI `npm run engineering`; see "Engineering Work Management (DC-003-I029)"; new `schemas/engineering-work-order.schema.json` and `schemas/engineering-delivery-report.schema.json`; no Claude/ChatGPT/MCP/n8n/API/message-transport integration of any kind — defines the engineering language only; Control Centre's paired `engineeringWorkOrderStore`/`engineeringDeliveryReportStore` dependency is additive/optional, mirroring I028's own `socialAnalyticsStore` precedent; no workflow-transition functions exist (`work create` only ever produces `draft`/`ready`); every prior module (I008–I028) confirmed untouched |
 | Bridge Transport (moves Engineering Work Orders out / Engineering Delivery Reports in, mock-only clean extension point) | Done (DC-003-I029.1) — `src/bridge-transport-record.mjs`, `src/bridge-transport-store.mjs` + adapter files, `src/bridge-transport-mock-adapter.mjs`, `src/bridge-transport-service.mjs`, CLI `npm run bridge`; see "Bridge Transport (DC-003-I029.1)"; new `schemas/bridge-transport-record.schema.json`; no Claude/ChatGPT/MCP/n8n/API/networking of any kind — transport only, no engineering decisions, no prompt generation; `direction` is derived from `object_type`, never caller-supplied; Control Centre's `bridgeTransportStore` dependency is additive/optional, mirroring I028/I029's own precedent; kept deliberately lean (14 new files) — every I029 module (Work Order/Delivery Report Stores, CLI, Control Centre) reused completely unmodified |
-| Unit test suite | Done — 1330 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Automated Delivery Office (first real Bridge Transport provider — executes one approved Work Order through a replaceable Runner Adapter, mock by default, records one Delivery Report) | Done (DC-003-I029.2) — `src/execution-policy.mjs`, `src/delivery-execution-lock.mjs`, `src/delivery-office-runner-adapter.mjs`, `src/delivery-office-mock-runner-adapter.mjs`, `src/claude-code-delivery-runner-adapter.mjs`, `src/delivery-office-runner-config.mjs`, `src/repository-git-evidence.mjs`, `src/automated-delivery-office-service.mjs`, CLI `npm run delivery-office`; see "Automated Delivery Office (DC-003-I029.2)"; no new schema — reuses I029's Work Order/Delivery Report and I029.1's Bridge Transport completely unmodified; no automated test invokes Claude or the network; default is always mock, real execution gated behind explicit `--live-runner`; independent git re-verification, never blind trust in the runner's own self-report, decides the final Delivery Report status; Control Centre's `deliveryOfficeLockDir` is additive/optional; **no real Claude Code execution occurred — pending the Initial Real-Runner Verification Gate and fresh Strategy Office + CEO approval** |
+| Unit test suite | Done — 1441 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

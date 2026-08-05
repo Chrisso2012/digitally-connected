@@ -398,3 +398,50 @@ test("dashboard --bridge=<dir> shows real Bridge Transport data end to end", () 
     assert.match(result.stdout, /Last Transport\s+bt_/);
   });
 });
+
+// --- Delivery Office (DC-003-I029.2) ---------------------------------------
+
+test("dashboard omits the Engineering flags by default and reports Delivery Office as unknown", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Delivery Office\n\n\s+unknown/);
+  });
+});
+
+test("dashboard with Engineering flags but no --delivery-office-lock= reports lock status as unknown, other fields real", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir, base }) => {
+    const workOrderDir = path.join(base, "work-orders");
+    const deliveryReportDir = path.join(base, "delivery-reports");
+
+    const seedScript = `
+      import { createLocalJsonEngineeringWorkOrderStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-engineering-work-order-store-adapter.mjs"))};
+      import { createEngineeringWorkOrderStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-work-order-store.mjs"))};
+      import { createEngineeringWorkOrder } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-work-order.mjs"))};
+
+      const store = createEngineeringWorkOrderStore({ adapter: createLocalJsonEngineeringWorkOrderStoreAdapter({ storageDir: ${JSON.stringify(workOrderDir)} }) });
+      store.save(createEngineeringWorkOrder({
+        milestone: "DC-003-I029.2",
+        title: "CLI dashboard test",
+        objective: "Exercise the Delivery Office dashboard section.",
+        reviewCriteria: ["c1"],
+        status: "ready",
+        approvedAt: "2026-08-05T00:00:00.000Z",
+      }));
+    `;
+    const seed = spawnSync(process.execPath, ["--input-type=module", "-e", seedScript], { encoding: "utf-8", env: CLEAN_ENV });
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const result = runCli(
+      "dashboard",
+      carouselDir,
+      metricsDir,
+      publisherResultDir,
+      `--engineering-work-orders=${workOrderDir}`,
+      `--engineering-delivery-reports=${deliveryReportDir}`
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Queued Work Orders\s+1/);
+    assert.match(result.stdout, /Lock Status\s+unknown/);
+  });
+});

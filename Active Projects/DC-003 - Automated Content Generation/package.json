@@ -33,6 +33,7 @@
     "social:analytics": "node tests/validation/social-analytics.mjs",
     "engineering": "node tests/validation/engineering.mjs",
     "bridge": "node tests/validation/bridge.mjs",
+    "delivery-office": "node tests/validation/delivery-office-runner.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

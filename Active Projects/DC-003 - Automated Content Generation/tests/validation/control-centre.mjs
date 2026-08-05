@@ -115,6 +115,7 @@ const NAMED_FLAG_PREFIXES = {
   engineeringWorkOrdersDirectory: "--engineering-work-orders=",
   engineeringDeliveryReportsDirectory: "--engineering-delivery-reports=",
   bridgeTransportStoreDirectory: "--bridge=",
+  deliveryOfficeLockDirectory: "--delivery-office-lock=",
 };
 
 function extractNamedFlags(args) {
@@ -137,6 +138,7 @@ function usageAndExit() {
     "  (append --engineering-work-orders=<dir> --engineering-delivery-reports=<dir> to the dashboard command to include Engineering, DC-003-I029)"
   );
   console.error("  (append --bridge=<dir> to the dashboard command to include Bridge Transport, DC-003-I029.1)");
+  console.error("  (append --delivery-office-lock=<dir> to the dashboard command to include Delivery Office lock status, DC-003-I029.2)");
   console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
@@ -260,6 +262,24 @@ function printBridgeSection(bridge) {
   console.log(`  Bridge Healthy             ${bridge.healthy}`);
 }
 
+function printDeliveryOfficeSection(deliveryOffice) {
+  console.log("Delivery Office");
+  console.log();
+  if (deliveryOffice === null) {
+    console.log("  unknown (no --engineering-work-orders=<dir> --engineering-delivery-reports=<dir> supplied)");
+    return;
+  }
+  console.log(`  Queued Work Orders         ${deliveryOffice.queued_work_orders}`);
+  console.log(`  Running Work Order         ${deliveryOffice.running_work_order ?? "(none)"}`);
+  console.log(`  Awaiting Review            ${deliveryOffice.awaiting_review}`);
+  console.log(`  Failed Executions          ${deliveryOffice.failed_executions}`);
+  console.log(`  Last Delivery Report       ${deliveryOffice.last_delivery_report?.delivery_report_id ?? "(none)"}`);
+  console.log(
+    `  Lock Status                ${deliveryOffice.lock_status.checked ? `active=${deliveryOffice.lock_status.active_locks} stale=${deliveryOffice.lock_status.stale_locks}` : "unknown (no --delivery-office-lock=<dir> supplied)"}`
+  );
+  console.log(`  Runner Availability        ${deliveryOffice.runner_availability.mechanism} (configured=${deliveryOffice.runner_availability.configured})`);
+}
+
 function printDashboard(overview) {
   console.log(RULE);
   console.log("DC-003 CONTROL CENTRE");
@@ -278,6 +298,8 @@ function printDashboard(overview) {
   printEngineeringSection(overview.engineering);
   console.log();
   printBridgeSection(overview.bridge);
+  console.log();
+  printDeliveryOfficeSection(overview.delivery_office);
 }
 
 function printJobDetail(detail) {
@@ -377,7 +399,8 @@ function buildService(
   socialAnalyticsStoreDirectory,
   engineeringWorkOrdersDirectory,
   engineeringDeliveryReportsDirectory,
-  bridgeTransportStoreDirectory
+  bridgeTransportStoreDirectory,
+  deliveryOfficeLockDirectory
 ) {
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir: carouselStoreDirectory }) });
   const productionMetricsStore = createProductionMetricsStore({ adapter: createLocalJsonProductionMetricsStoreAdapter({ storageDir: metricsStoreDirectory }) });
@@ -402,6 +425,7 @@ function buildService(
     engineeringWorkOrderStore,
     engineeringDeliveryReportStore,
     bridgeTransportStore,
+    deliveryOfficeLockDir: deliveryOfficeLockDirectory ?? null,
     exportsRootDir: exportsRootDir ?? null,
   });
 }
@@ -409,7 +433,13 @@ function buildService(
 const [subcommand, ...rawRest] = process.argv.slice(2);
 if (!subcommand) usageAndExit();
 const {
-  flags: { socialAnalyticsStoreDirectory, engineeringWorkOrdersDirectory, engineeringDeliveryReportsDirectory, bridgeTransportStoreDirectory },
+  flags: {
+    socialAnalyticsStoreDirectory,
+    engineeringWorkOrdersDirectory,
+    engineeringDeliveryReportsDirectory,
+    bridgeTransportStoreDirectory,
+    deliveryOfficeLockDirectory,
+  },
   rest,
 } = extractNamedFlags(rawRest);
 
@@ -425,7 +455,8 @@ try {
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
-      bridgeTransportStoreDirectory
+      bridgeTransportStoreDirectory,
+      deliveryOfficeLockDirectory
     );
     printDashboard(service.getOverview());
   } else if (subcommand === "health") {
@@ -439,7 +470,8 @@ try {
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
-      bridgeTransportStoreDirectory
+      bridgeTransportStoreDirectory,
+      deliveryOfficeLockDirectory
     );
     printHealthSection(service.getOverview().health);
   } else if (subcommand === "jobs") {
@@ -453,7 +485,8 @@ try {
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
-      bridgeTransportStoreDirectory
+      bridgeTransportStoreDirectory,
+      deliveryOfficeLockDirectory
     );
     printRecentJobsSection(service.getOverview().recent_jobs);
   } else if (subcommand === "activity") {
@@ -467,7 +500,8 @@ try {
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
-      bridgeTransportStoreDirectory
+      bridgeTransportStoreDirectory,
+      deliveryOfficeLockDirectory
     );
     printRecentActivitySection(service.getOverview().recent_activity);
   } else if (subcommand === "job") {
@@ -481,7 +515,8 @@ try {
       socialAnalyticsStoreDirectory,
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
-      bridgeTransportStoreDirectory
+      bridgeTransportStoreDirectory,
+      deliveryOfficeLockDirectory
     );
     printJobDetail(service.getJobDetail(carouselId));
   } else {

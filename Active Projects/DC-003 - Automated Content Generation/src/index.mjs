@@ -511,3 +511,41 @@ export {
   DuplicateBridgeTransportError,
   InvalidBridgeTransportDependenciesError,
 } from "./bridge-transport-errors.mjs";
+
+// DC-003-I029.2 — Automated Delivery Office: the first real Bridge
+// Transport provider. Executes one approved Engineering Work Order
+// through a Delivery Office Runner Adapter (mock by default; a real
+// Claude Code CLI subprocess adapter only when explicitly constructed and
+// gated behind `--live-runner`), collects independent git evidence, and
+// records one Engineering Delivery Report through I029.1's own Bridge
+// Transport Service, unmodified. Never approves its own work — Strategy
+// Office review remains entirely manual. See "Automated Delivery Office
+// (DC-003-I029.2)" in the README.
+export { readGitState, readUpstreamCommit, computeChangedFiles, defaultRunGit } from "./repository-git-evidence.mjs";
+export { createExecutionPolicy, resolveEffectivePolicy } from "./execution-policy.mjs";
+export { createDeliveryExecutionLock } from "./delivery-execution-lock.mjs";
+export { assertValidDeliveryOfficeRunnerAdapter, assertValidRunnerResult, RUNNER_RESULT_STATUSES } from "./delivery-office-runner-adapter.mjs";
+export { createMockDeliveryOfficeRunnerAdapter } from "./delivery-office-mock-runner-adapter.mjs";
+export {
+  createClaudeCodeDeliveryRunnerAdapter,
+  buildDeliveryInstruction,
+  buildClaudeArgs,
+  parseClaudeSelfReport,
+  CLAUDE_SELF_REPORT_JSON_SCHEMA,
+} from "./claude-code-delivery-runner-adapter.mjs";
+export { loadDeliveryOfficeRunnerConfig, describeAuthenticationAvailability } from "./delivery-office-runner-config.mjs";
+export { createAutomatedDeliveryOfficeService } from "./automated-delivery-office-service.mjs";
+export {
+  InvalidExecutionLockIdentifierError,
+  ExecutionLockAlreadyHeldError,
+  ExecutionLockNotHeldError,
+  ExecutionLockOwnershipError,
+  ExecutionLockPersistenceError,
+  InvalidDeliveryOfficeRunnerAdapterError,
+  InvalidExecutionPolicyError,
+  WorkOrderNotEligibleError,
+  DuplicateDeliveryError,
+  RunnerExecutionFailedError,
+  MalformedRunnerResultError,
+  InvalidAutomatedDeliveryOfficeDependenciesError,
+} from "./delivery-office-errors.mjs";

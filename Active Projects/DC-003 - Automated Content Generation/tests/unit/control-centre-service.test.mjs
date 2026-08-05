@@ -18,6 +18,7 @@ import { createEngineeringDeliveryReportStore } from "../../src/engineering-deli
 import { createEngineeringDeliveryReport } from "../../src/engineering-delivery-report.mjs";
 import { createBridgeTransportStore } from "../../src/bridge-transport-store.mjs";
 import { createBridgeTransportRecord } from "../../src/bridge-transport-record.mjs";
+import { createDeliveryExecutionLock } from "../../src/delivery-execution-lock.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError } from "../../src/control-centre-errors.mjs";
 import { CarouselNotFoundError } from "../../src/finished-carousel-store-errors.mjs";
@@ -1001,3 +1002,125 @@ test("the Control Centre never makes a network request to compute overview.bridg
     globalThis.fetch = originalFetch;
   }
 });
+
+// --- overview.delivery_office (DC-003-I029.2) ------------------------------
+
+test("overview.delivery_office is null when the Engineering store pair was never supplied, even with a lock dir", () =>
+  withTempDir((lockDir) => {
+    const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, deliveryOfficeLockDir: lockDir });
+    assert.equal(service.getOverview().delivery_office, null);
+  }));
+
+test("overview.delivery_office reports queued/awaiting-review counts and the latest Delivery Report, lock_status.checked false without a lock dir", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+
+  const readyWorkOrder = workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_cc0000000000001" }));
+  const deliveredWorkOrder = workOrderStore.save(
+    buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_cc0000000000002" })
+  );
+  deliveryReportStore.save(
+    createEngineeringDeliveryReport(
+      {
+        workOrderId: deliveredWorkOrder.work_order_id,
+        milestone: "DC-003-I029",
+        status: "failed",
+        commit: null,
+        pushStatus: "not_applicable",
+        workingTree: "clean",
+        tests: { passed: 0, failed: 0, total: 0 },
+        fixtures: { passed: 0, failed: 0, total: 0 },
+        liveRequests: { occurred: false, details: null },
+      },
+      { idGenerator: () => "dr_cc0000000000001", now: () => "2026-08-05T02:00:00.000Z" }
+    )
+  );
+
+  const service = createControlCentreService({
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    engineeringWorkOrderStore: workOrderStore,
+    engineeringDeliveryReportStore: deliveryReportStore,
+  });
+  const deliveryOffice = service.getOverview().delivery_office;
+
+  assert.equal(deliveryOffice.queued_work_orders, 1, "only the never-delivered Work Order counts as queued");
+  assert.equal(deliveryOffice.awaiting_review, 1, "the delivered-but-not-approved Work Order is awaiting review");
+  assert.equal(deliveryOffice.failed_executions, 1);
+  assert.equal(deliveryOffice.last_delivery_report.delivery_report_id, "dr_cc0000000000001");
+  assert.equal(deliveryOffice.lock_status.checked, false);
+  assert.equal(deliveryOffice.running_work_order, null);
+  assert.equal(typeof deliveryOffice.runner_availability.configured, "boolean");
+});
+
+test("overview.delivery_office.lock_status reflects a real active lock, and running_work_order names it", () =>
+  withTempDir((lockDir) => {
+    const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+    const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+    const workOrder = workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_cc0000000000003" }));
+    createDeliveryExecutionLock({ lockDir }).acquire(workOrder.work_order_id);
+
+    const service = createControlCentreService({
+      finishedCarouselStore,
+      productionMetricsStore,
+      publisherResultStore,
+      engineeringWorkOrderStore: workOrderStore,
+      engineeringDeliveryReportStore: deliveryReportStore,
+      deliveryOfficeLockDir: lockDir,
+    });
+    const deliveryOffice = service.getOverview().delivery_office;
+    assert.equal(deliveryOffice.lock_status.checked, true);
+    assert.equal(deliveryOffice.lock_status.active_locks, 1);
+    assert.equal(deliveryOffice.lock_status.stale_locks, 0);
+    assert.equal(deliveryOffice.running_work_order, workOrder.work_order_id);
+  }));
+
+test("a broken Engineering store pair degrades overview.delivery_office to an honest zeroed summary rather than throwing", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+  const brokenWorkOrderStore = {
+    ...workOrderStore,
+    list() {
+      throw new Error("simulated store failure");
+    },
+  };
+
+  const service = createControlCentreService({
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    engineeringWorkOrderStore: brokenWorkOrderStore,
+    engineeringDeliveryReportStore: deliveryReportStore,
+  });
+  const deliveryOffice = service.getOverview().delivery_office;
+  assert.equal(deliveryOffice.queued_work_orders, 0);
+  assert.equal(deliveryOffice.lock_status.checked, false);
+  assert.equal(deliveryOffice.last_delivery_report, null);
+});
+
+test("the Control Centre never invokes Claude Code to compute overview.delivery_office", () =>
+  withTempDir((lockDir) => {
+    const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+    const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+    workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_cc0000000000004" }));
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new Error("must not be called");
+    };
+    try {
+      const service = createControlCentreService({
+        finishedCarouselStore,
+        productionMetricsStore,
+        publisherResultStore,
+        engineeringWorkOrderStore: workOrderStore,
+        engineeringDeliveryReportStore: deliveryReportStore,
+        deliveryOfficeLockDir: lockDir,
+      });
+      service.getOverview();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }));

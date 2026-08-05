@@ -53,6 +53,8 @@ import { loadRendererConfig } from "./renderer-config.mjs";
 import { loadGoogleDrivePublisherConfig } from "./google-drive-publisher-config.mjs";
 import { createEngineeringWorkManagementService } from "./engineering-work-management-service.mjs";
 import { getQueue as getBridgeQueue } from "./bridge-transport-service.mjs";
+import { createDeliveryExecutionLock } from "./delivery-execution-lock.mjs";
+import { loadDeliveryOfficeRunnerConfig } from "./delivery-office-runner-config.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "./control-centre-errors.mjs";
 
 const DEFAULT_RECENT_JOBS_LIMIT = 10;
@@ -223,6 +225,11 @@ function sumCost(metricsSummaries) {
  * fields.bridgeTransportStore — optional (DC-003-I029.1), standalone (not
  *   paired) — see bridge-transport-store.mjs. When omitted, `bridge` is
  *   null.
+ * fields.deliveryOfficeLockDir — optional (DC-003-I029.2) string, an
+ *   Execution Lock directory (see delivery-execution-lock.mjs). When
+ *   omitted, `delivery_office.lock_status.checked` is honestly false.
+ *   `delivery_office` itself is null unless the Engineering store pair
+ *   above is also supplied.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -248,6 +255,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     engineeringWorkOrderStore = null,
     engineeringDeliveryReportStore = null,
     bridgeTransportStore = null,
+    deliveryOfficeLockDir = null,
     exportsRootDir = null,
   } = fields;
   assertDependencies({
@@ -730,15 +738,80 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  // DC-003-I029.2 — read-only, additive. `deliveryOfficeLockDir` is not
+  // paired with the Engineering stores the way engineeringDeliveryReportStore
+  // is paired with engineeringWorkOrderStore — it is its own independent
+  // optional signal (mirrors exportsRootDir's own "checked, not zero"
+  // discipline): when omitted, lock_status.checked is honestly false
+  // rather than 0 active locks being reported as fact.
+  function computeLockStatus() {
+    if (!deliveryOfficeLockDir) return { checked: false, activeLocks: 0, staleLocks: 0, runningWorkOrder: null };
+    try {
+      const locks = createDeliveryExecutionLock({ lockDir: deliveryOfficeLockDir }).list();
+      const active = locks.filter((l) => !l.stale);
+      const stale = locks.filter((l) => l.stale);
+      return { checked: true, activeLocks: active.length, staleLocks: stale.length, runningWorkOrder: active.length > 0 ? active[0].workOrderId : null };
+    } catch {
+      return { checked: false, activeLocks: 0, staleLocks: 0, runningWorkOrder: null };
+    }
+  }
+
+  // DC-003-I029.2 — read-only, additive, paired with the SAME Engineering
+  // store pair engineeringSummary already requires (null when that pair
+  // was never supplied — no separate opt-in). No Claude Code invocation
+  // of any kind — runner_availability is a structural env-presence signal
+  // only, exactly mirroring checkAnthropicHealth()'s own "read config,
+  // never a live call" discipline above.
+  function computeDeliveryOffice() {
+    if (!engineeringWorkOrderStore || !engineeringDeliveryReportStore) return null;
+    try {
+      const workOrders = createEngineeringWorkManagementService({
+        workOrderStore: engineeringWorkOrderStore,
+        deliveryReportStore: engineeringDeliveryReportStore,
+      }).listWorkOrders();
+      const queuedWorkOrders = workOrders.filter((w) => w.derived_state === "Ready").length;
+      const awaitingReview = workOrders.filter((w) => w.derived_state === "Awaiting Review").length;
+
+      const deliveryReportSummaries = engineeringDeliveryReportStore.list();
+      const failedExecutions = deliveryReportSummaries.filter((r) => r.status === "failed").length;
+      const latestReportSummary = deliveryReportSummaries.length > 0 ? deliveryReportSummaries[deliveryReportSummaries.length - 1] : null;
+      const lastDeliveryReport = latestReportSummary ? engineeringDeliveryReportStore.get(latestReportSummary.delivery_report_id) : null;
+
+      const lockStatus = computeLockStatus();
+      const runnerConfig = loadDeliveryOfficeRunnerConfig(env);
+
+      return {
+        queued_work_orders: queuedWorkOrders,
+        running_work_order: lockStatus.runningWorkOrder,
+        last_delivery_report: lastDeliveryReport,
+        awaiting_review: awaitingReview,
+        failed_executions: failedExecutions,
+        lock_status: { checked: lockStatus.checked, active_locks: lockStatus.activeLocks, stale_locks: lockStatus.staleLocks },
+        runner_availability: { configured: runnerConfig.configured, mechanism: `${runnerConfig.command} (${runnerConfig.source})` },
+      };
+    } catch {
+      return {
+        queued_work_orders: 0,
+        running_work_order: null,
+        last_delivery_report: null,
+        awaiting_review: 0,
+        failed_executions: 0,
+        lock_status: { checked: false, active_locks: 0, stale_locks: 0 },
+        runner_availability: { configured: false, mechanism: "unknown" },
+      };
+    }
+  }
+
   /**
    * Assembles the full "overview" read model: system health, dashboard
-   * totals, recent jobs, recent activity, engineering status, and bridge
-   * transport status, all from one consistent snapshot of the stores.
-   * Never throws for a broken store — a store read failure is folded into
-   * that store's own health check instead (see computeHealth()); it only
-   * throws ControlCentreAssemblyError if this module's own assembly logic
-   * produces something that doesn't match control-centre.schema.json (a
-   * bug in this file, not a data problem).
+   * totals, recent jobs, recent activity, engineering status, bridge
+   * transport status, and Delivery Office status, all from one consistent
+   * snapshot of the stores. Never throws for a broken store — a store
+   * read failure is folded into that store's own health check instead
+   * (see computeHealth()); it only throws ControlCentreAssemblyError if
+   * this module's own assembly logic produces something that doesn't
+   * match control-centre.schema.json (a bug in this file, not a data
+   * problem).
    */
   function getOverview() {
     const core = assembleCore();
@@ -752,6 +825,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       recent_activity: computeActivity(core.recentFull),
       engineering: computeEngineering(),
       bridge: computeBridge(),
+      delivery_office: computeDeliveryOffice(),
     };
 
     return validateAndFreeze(overview);

@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -17,7 +17,8 @@
         "recent_jobs": { "type": "array", "items": { "$ref": "#/$defs/jobSummary" } },
         "recent_activity": { "type": "array", "items": { "$ref": "#/$defs/activityEntry" } },
         "engineering": { "$ref": "#/$defs/engineeringSummary" },
-        "bridge": { "$ref": "#/$defs/bridgeSummary" }
+        "bridge": { "$ref": "#/$defs/bridgeSummary" },
+        "delivery_office": { "$ref": "#/$defs/deliveryOfficeSummary" }
       }
     },
     {
@@ -322,6 +323,47 @@
             },
             "latest_delivery_report": {
               "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/engineering-delivery-report.schema.json" }]
+            }
+          }
+        }
+      ]
+    },
+    "deliveryOfficeSummary": {
+      "description": "DC-003-I029.2 — sourced entirely from the Engineering Work Order Store, the Engineering Delivery Report Store, and (when supplied) the Execution Lock directory. Read-only, additive, optional, paired with the SAME Engineering store pair engineeringSummary already requires — null when that pair was never supplied. No Claude Code invocation of any kind occurs from the Control Centre.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["queued_work_orders", "running_work_order", "last_delivery_report", "awaiting_review", "failed_executions", "lock_status", "runner_availability"],
+          "additionalProperties": false,
+          "properties": {
+            "queued_work_orders": { "type": "integer", "minimum": 0 },
+            "running_work_order": { "type": ["string", "null"], "pattern": "^wo_[A-Za-z0-9]+$" },
+            "last_delivery_report": {
+              "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/engineering-delivery-report.schema.json" }]
+            },
+            "awaiting_review": { "type": "integer", "minimum": 0 },
+            "failed_executions": { "type": "integer", "minimum": 0 },
+            "lock_status": {
+              "type": "object",
+              "description": "checked is false when no Execution Lock directory was supplied to the Control Centre — active/stale_locks are honestly 0 (unknown), never guessed.",
+              "required": ["checked", "active_locks", "stale_locks"],
+              "additionalProperties": false,
+              "properties": {
+                "checked": { "type": "boolean" },
+                "active_locks": { "type": "integer", "minimum": 0 },
+                "stale_locks": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "runner_availability": {
+              "type": "object",
+              "description": "A structural signal only (an invocation mechanism exists) — never a live authentication check. See delivery-office-runner-config.mjs.",
+              "required": ["configured", "mechanism"],
+              "additionalProperties": false,
+              "properties": {
+                "configured": { "type": "boolean" },
+                "mechanism": { "type": "string" }
+              }
             }
           }
         }
