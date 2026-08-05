@@ -1,10 +1,12 @@
-// Unit tests for repository-git-evidence.mjs (DC-003-I029.2). Every test
-// injects a fake `runGit` — no real `git` binary is required (this
-// project's own Docker test image has none installed).
+// Unit tests for repository-git-evidence.mjs (DC-003-I029.2, extended by
+// DC-003-I029.3 with isAncestorCommit() and readGitState()'s own
+// untrackedFiles/conflictedFiles parsing). Every test injects a fake
+// `runGit` — no real `git` binary is required (this project's own Docker
+// test image has none installed).
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readGitState, readUpstreamCommit, computeChangedFiles } from "../../src/repository-git-evidence.mjs";
+import { readGitState, readUpstreamCommit, computeChangedFiles, isAncestorCommit } from "../../src/repository-git-evidence.mjs";
 
 function fakeRunGit(responses) {
   const calls = [];
@@ -31,7 +33,7 @@ test("readGitState(): reports a clean tree when `git status --porcelain` is empt
     "status --porcelain": "",
   });
   const state = readGitState("/repo", runGit);
-  assert.deepEqual(state, { commit: "abc1234", branch: "main", workingTreeClean: true });
+  assert.deepEqual(state, { commit: "abc1234", branch: "main", workingTreeClean: true, untrackedFiles: [], conflictedFiles: [] });
 });
 
 test("readGitState(): reports a dirty tree for any non-empty status output", () => {
@@ -93,4 +95,52 @@ test("computeChangedFiles(): classifies A as created, M and R (rename) as modifi
 test("computeChangedFiles(): returns empty arrays when the diff output itself is empty", () => {
   const runGit = fakeRunGit({ "diff --name-status abc1234 def5678": "" });
   assert.deepEqual(computeChangedFiles("/repo", "abc1234", "def5678", runGit), { filesCreated: [], filesModified: [] });
+});
+
+// --- readGitState(): untrackedFiles / conflictedFiles (DC-003-I029.3) -----
+
+test("readGitState(): parses untracked files from '??' porcelain lines", () => {
+  const runGit = fakeRunGit({
+    "rev-parse HEAD": "abc1234",
+    "rev-parse --abbrev-ref HEAD": "main",
+    "status --porcelain": "?? new-file.txt\n?? another.env\n",
+  });
+  const state = readGitState("/repo", runGit);
+  assert.deepEqual(state.untrackedFiles, ["new-file.txt", "another.env"]);
+  assert.equal(state.workingTreeClean, false);
+});
+
+test("readGitState(): parses unresolved merge-conflict markers (UU/AA/DD/etc.)", () => {
+  const runGit = fakeRunGit({
+    "rev-parse HEAD": "abc1234",
+    "rev-parse --abbrev-ref HEAD": "main",
+    "status --porcelain": "UU conflicted.mjs\n M clean-change.mjs\n",
+  });
+  const state = readGitState("/repo", runGit);
+  assert.deepEqual(state.conflictedFiles, ["conflicted.mjs"]);
+});
+
+test("readGitState(): untrackedFiles/conflictedFiles are empty arrays for a clean tree", () => {
+  const runGit = fakeRunGit({ "rev-parse HEAD": "abc1234", "rev-parse --abbrev-ref HEAD": "main", "status --porcelain": "" });
+  const state = readGitState("/repo", runGit);
+  assert.deepEqual(state.untrackedFiles, []);
+  assert.deepEqual(state.conflictedFiles, []);
+});
+
+// --- isAncestorCommit (DC-003-I029.3) --------------------------------
+
+test("isAncestorCommit(): true when git confirms the ancestry", () => {
+  const runGit = fakeRunGit({ "merge-base --is-ancestor aaa1111 bbb2222": "" });
+  assert.equal(isAncestorCommit("/repo", "aaa1111", "bbb2222", runGit), true);
+});
+
+test("isAncestorCommit(): false when git reports non-ancestry (a thrown non-zero exit)", () => {
+  const runGit = fakeRunGit({ "merge-base --is-ancestor aaa1111 bbb2222": new Error("not an ancestor") });
+  assert.equal(isAncestorCommit("/repo", "aaa1111", "bbb2222", runGit), false);
+});
+
+test("isAncestorCommit(): false, never throws, when either commit is missing", () => {
+  const runGit = fakeRunGit({});
+  assert.equal(isAncestorCommit("/repo", null, "bbb2222", runGit), false);
+  assert.equal(isAncestorCommit("/repo", "aaa1111", null, runGit), false);
 });

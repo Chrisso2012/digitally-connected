@@ -18,6 +18,10 @@ import { InvalidBridgeTransportRecordInputError, BridgeTransportRecordValidation
 const OBJECT_TYPES = {
   engineering_work_order: { direction: "outgoing", idPattern: /^wo_[A-Za-z0-9]+$/ },
   engineering_delivery_report: { direction: "incoming", idPattern: /^dr_[A-Za-z0-9]+$/ },
+  // DC-003-I029.3 — additive; direction is "outgoing" like a Work Order,
+  // since a Strategy Review flows FROM the Strategy Office (toward the
+  // Delivery Office or the CEO escalation path), not back to it.
+  engineering_strategy_review: { direction: "outgoing", idPattern: /^esr_[A-Za-z0-9]+$/ },
 };
 const STATUSES = ["pending", "delivered", "rejected"];
 const CHECKSUM_PATTERN = /^[0-9a-f]{64}$/;

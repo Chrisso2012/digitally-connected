@@ -1,0 +1,67 @@
+{
+  "strategy_review_id": "esr_9f2a7b6c1d3e4f50",
+  "work_order_id": "wo_7a1b2c3d4e5f6071",
+  "delivery_report_id": "dr_1a2b3c4d5e6f7081",
+  "milestone": "DC-003-I029.3",
+  "reviewed_at": "2026-08-05T12:00:00.000Z",
+  "reviewer": {
+    "type": "strategy-review-agent",
+    "provider": "mock"
+  },
+  "decision": "approved",
+  "criteria": [
+    {
+      "criterion_index": 1,
+      "criterion": "Existing tests remain green.",
+      "result": "pass",
+      "evidence": [
+        {
+          "source": "independent-verification",
+          "summary": "1441/1441 tests passed."
+        }
+      ],
+      "reason": null
+    },
+    {
+      "criterion_index": 2,
+      "criterion": "No scope creep beyond the Work Order's own objective.",
+      "result": "pass",
+      "evidence": [
+        {
+          "source": "independent-verification",
+          "summary": "Changed files match the Work Order's own constraints."
+        }
+      ],
+      "reason": null
+    }
+  ],
+  "repository_evidence": {
+    "starting_commit": "aaa1111bbb2222ccc3333",
+    "ending_commit": "ddd4444eee5555fff6666",
+    "branch": "main",
+    "working_tree": "clean",
+    "push_status": "not_applicable",
+    "verifiable": true
+  },
+  "verification": {
+    "tests": {
+      "status": "passed",
+      "passed": 1441,
+      "failed": 0,
+      "total": 1441,
+      "source": "independent-verification"
+    },
+    "fixtures": {
+      "status": "passed",
+      "passed": 19,
+      "failed": 0,
+      "total": 19,
+      "source": "independent-verification"
+    }
+  },
+  "risks": [],
+  "correction": null,
+  "ceo_escalation": null,
+  "summary": "Delivery matches the Work Order's own review criteria exactly; independent verification confirms a clean, tested, in-scope result.",
+  "notes": null
+}

@@ -63,13 +63,19 @@ const SCHEMA_FILES = {
   // Engineering section embeds the latest one).
   engineeringWorkOrder: "engineering-work-order.schema.json",
   engineeringDeliveryReport: "engineering-delivery-report.schema.json",
-  // DC-003-I029.1 — one immutable transport event moving a Work Order out
-  // or a Delivery Report in. Must be registered BEFORE controlCentre
-  // below, since control-centre.schema.json $refs it by $id.
+  // DC-003-I029.1, extended by DC-003-I029.3 — one immutable transport
+  // event moving a Work Order out, a Delivery Report in, or (as of
+  // I029.3) a Strategy Review out. Must be registered BEFORE
+  // controlCentre below, since control-centre.schema.json $refs it by
+  // $id.
   bridgeTransportRecord: "bridge-transport-record.schema.json",
-  // DC-003-I024, extended by DC-003-I028/I029/I029.1 — the Control
+  // DC-003-I029.3 — one immutable review of one Delivery Report against
+  // the Work Order it answers. Must be registered BEFORE controlCentre
+  // below, since control-centre.schema.json $refs it by $id.
+  engineeringStrategyReview: "engineering-strategy-review.schema.json",
+  // DC-003-I024, extended by DC-003-I028/I029/I029.1/I029.3 — the Control
   // Centre's in-memory read model. Must be compiled AFTER
-  // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport/bridgeTransportRecord
+  // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport/bridgeTransportRecord/engineeringStrategyReview
   // above (object key order = compile order in validator.mjs) since it
   // $refs all of them by $id.
   controlCentre: "control-centre.schema.json",
@@ -78,7 +84,7 @@ const SCHEMA_FILES = {
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
 
 /**
- * Loads all fifteen schemas and returns them keyed by identifier, e.g.
+ * Loads all nineteen schemas and returns them keyed by identifier, e.g.
  * `registry.topicPackage`. Fails fast on the first missing or malformed
  * schema file.
  */

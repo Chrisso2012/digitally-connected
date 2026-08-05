@@ -55,6 +55,8 @@ import { createEngineeringWorkManagementService } from "./engineering-work-manag
 import { getQueue as getBridgeQueue } from "./bridge-transport-service.mjs";
 import { createDeliveryExecutionLock } from "./delivery-execution-lock.mjs";
 import { loadDeliveryOfficeRunnerConfig } from "./delivery-office-runner-config.mjs";
+import { createStrategyReviewLock } from "./strategy-review-lock.mjs";
+import { describeAuthenticationAvailability as describeOpenAiAuthenticationAvailability } from "./strategy-review-config.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "./control-centre-errors.mjs";
 
 const DEFAULT_RECENT_JOBS_LIMIT = 10;
@@ -83,6 +85,7 @@ function assertDependencies({
   engineeringWorkOrderStore,
   engineeringDeliveryReportStore,
   bridgeTransportStore,
+  strategyReviewStore,
 }) {
   if (
     !finishedCarouselStore ||
@@ -160,6 +163,19 @@ function assertDependencies({
       "fields.bridgeTransportStore, when supplied, must be a Bridge Transport Store — see createBridgeTransportStore() in bridge-transport-store.mjs"
     );
   }
+  // DC-003-I029.3 — optional, standalone (not paired with the Engineering
+  // pair) — decision counts only need the Strategy Review Store itself;
+  // reviews_awaiting_execution additionally uses the Engineering pair
+  // when that is ALSO supplied, but never requires it.
+  if (
+    strategyReviewStore !== null &&
+    strategyReviewStore !== undefined &&
+    (typeof strategyReviewStore.list !== "function" || typeof strategyReviewStore.get !== "function")
+  ) {
+    throw new InvalidControlCentreDependenciesError(
+      "fields.strategyReviewStore, when supplied, must be an Engineering Strategy Review Store — see createEngineeringStrategyReviewStore() in engineering-strategy-review-store.mjs"
+    );
+  }
 }
 
 // Reuses I022's own "metadata.json present, parseable, carousel_id
@@ -230,6 +246,14 @@ function sumCost(metricsSummaries) {
  *   omitted, `delivery_office.lock_status.checked` is honestly false.
  *   `delivery_office` itself is null unless the Engineering store pair
  *   above is also supplied.
+ * fields.strategyReviewStore — optional (DC-003-I029.3), standalone (not
+ *   paired) — see engineering-strategy-review-store.mjs. Decision counts
+ *   need only this store; `reviews_awaiting_execution` additionally uses
+ *   the Engineering pair above when that is ALSO supplied. `strategy_review`
+ *   itself is null unless this store is supplied.
+ * fields.strategyReviewLockDir — optional (DC-003-I029.3) string, a
+ *   Strategy Review Lock directory (see strategy-review-lock.mjs). When
+ *   omitted, `strategy_review.review_currently_locked` is honestly null.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -256,6 +280,8 @@ export function createControlCentreService(fields = {}, options = {}) {
     engineeringDeliveryReportStore = null,
     bridgeTransportStore = null,
     deliveryOfficeLockDir = null,
+    strategyReviewStore = null,
+    strategyReviewLockDir = null,
     exportsRootDir = null,
   } = fields;
   assertDependencies({
@@ -266,6 +292,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     engineeringWorkOrderStore,
     engineeringDeliveryReportStore,
     bridgeTransportStore,
+    strategyReviewStore,
   });
 
   const now = options.now ?? (() => new Date().toISOString());
@@ -696,10 +723,26 @@ export function createControlCentreService(fields = {}, options = {}) {
   function computeEngineering() {
     if (!engineeringWorkOrderStore || !engineeringDeliveryReportStore) return null;
     try {
-      return createEngineeringWorkManagementService({
+      // DC-003-I029.3 — getStatus() gained additive review-status fields
+      // (approved_by_review/etc., latest_strategy_review) once a
+      // strategyReviewStore is passed to createEngineeringWorkManagementService().
+      // This section deliberately never passes one and explicitly picks
+      // only its own original fields, so engineeringSummary's own schema
+      // (additionalProperties: false) never has to change — review status
+      // belongs in the separate strategy_review section (computeStrategyReview()
+      // below), not duplicated here.
+      const status = createEngineeringWorkManagementService({
         workOrderStore: engineeringWorkOrderStore,
         deliveryReportStore: engineeringDeliveryReportStore,
       }).getStatus();
+      return {
+        current_milestone: status.current_milestone,
+        last_completed_milestone: status.last_completed_milestone,
+        outstanding_work_orders: status.outstanding_work_orders,
+        awaiting_review: status.awaiting_review,
+        repository_status: status.repository_status,
+        latest_delivery_report: status.latest_delivery_report,
+      };
     } catch {
       return {
         current_milestone: null,
@@ -802,16 +845,87 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  // DC-003-I029.3 — read-only, additive, standalone. Decision counts come
+  // straight from strategyReviewStore.list() (already includes every
+  // review's own decision on its summary); reviews_awaiting_execution is
+  // only computed when the Engineering pair is ALSO supplied (delegates
+  // to Engineering Work Management's own "Awaiting Review" derived-state
+  // count — one source of truth, not a second implementation). No OpenAI
+  // invocation of any kind — reviewer_availability is a structural
+  // env-presence signal only, mirroring computeDeliveryOffice()'s own
+  // runner_availability discipline.
+  function computeReviewLockStatus() {
+    if (!strategyReviewLockDir) return { checked: false, locked: null };
+    try {
+      const locks = createStrategyReviewLock({ lockDir: strategyReviewLockDir }).list();
+      const active = locks.find((l) => !l.stale);
+      return { checked: true, locked: active ? active.deliveryReportId : null };
+    } catch {
+      return { checked: false, locked: null };
+    }
+  }
+
+  function computeStrategyReview() {
+    if (!strategyReviewStore) return null;
+    try {
+      const summaries = strategyReviewStore.list();
+      const approvedDeliveries = summaries.filter((r) => r.decision === "approved").length;
+      const correctionsRequired = summaries.filter((r) => r.decision === "correction_required").length;
+      const ceoDecisionsRequired = summaries.filter((r) => r.decision === "ceo_decision_required").length;
+      const rejectedDeliveries = summaries.filter((r) => r.decision === "rejected").length;
+      const latestReview = summaries.length > 0 ? strategyReviewStore.get(summaries[summaries.length - 1].strategy_review_id) : null;
+
+      let reviewsAwaitingExecution = null;
+      if (engineeringWorkOrderStore && engineeringDeliveryReportStore) {
+        try {
+          const workOrders = createEngineeringWorkManagementService({
+            workOrderStore: engineeringWorkOrderStore,
+            deliveryReportStore: engineeringDeliveryReportStore,
+            strategyReviewStore,
+          }).listWorkOrders();
+          reviewsAwaitingExecution = workOrders.filter((w) => w.derived_state === "Awaiting Review").length;
+        } catch {
+          reviewsAwaitingExecution = null;
+        }
+      }
+
+      const lockStatus = computeReviewLockStatus();
+      const openAiAuth = describeOpenAiAuthenticationAvailability(env);
+
+      return {
+        reviews_awaiting_execution: reviewsAwaitingExecution,
+        review_currently_locked: lockStatus.checked ? lockStatus.locked : null,
+        latest_review: latestReview,
+        approved_deliveries: approvedDeliveries,
+        corrections_required: correctionsRequired,
+        ceo_decisions_required: ceoDecisionsRequired,
+        rejected_deliveries: rejectedDeliveries,
+        reviewer_availability: { configured: openAiAuth.available, mechanism: openAiAuth.mechanism },
+      };
+    } catch {
+      return {
+        reviews_awaiting_execution: null,
+        review_currently_locked: null,
+        latest_review: null,
+        approved_deliveries: 0,
+        corrections_required: 0,
+        ceo_decisions_required: 0,
+        rejected_deliveries: 0,
+        reviewer_availability: { configured: false, mechanism: "OPENAI_API_KEY" },
+      };
+    }
+  }
+
   /**
    * Assembles the full "overview" read model: system health, dashboard
    * totals, recent jobs, recent activity, engineering status, bridge
-   * transport status, and Delivery Office status, all from one consistent
-   * snapshot of the stores. Never throws for a broken store — a store
-   * read failure is folded into that store's own health check instead
-   * (see computeHealth()); it only throws ControlCentreAssemblyError if
-   * this module's own assembly logic produces something that doesn't
-   * match control-centre.schema.json (a bug in this file, not a data
-   * problem).
+   * transport status, Delivery Office status, and Strategy Review status,
+   * all from one consistent snapshot of the stores. Never throws for a
+   * broken store — a store read failure is folded into that store's own
+   * health check instead (see computeHealth()); it only throws
+   * ControlCentreAssemblyError if this module's own assembly logic
+   * produces something that doesn't match control-centre.schema.json (a
+   * bug in this file, not a data problem).
    */
   function getOverview() {
     const core = assembleCore();
@@ -826,6 +940,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       engineering: computeEngineering(),
       bridge: computeBridge(),
       delivery_office: computeDeliveryOffice(),
+      strategy_review: computeStrategyReview(),
     };
 
     return validateAndFreeze(overview);

@@ -15,12 +15,23 @@ export function defaultRunGit(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf-8" });
 }
 
-/** Current commit, branch, and clean/dirty working tree — one snapshot. */
+const CONFLICT_CODES = ["UU", "AA", "DD", "AU", "UA", "UD", "DU"];
+
+/**
+ * Current commit, branch, and clean/dirty working tree — one snapshot.
+ * Also parses `git status --porcelain` for untracked files (`??`) and
+ * unresolved merge-conflict markers (DC-003-I029.3 additions — purely
+ * additive extra properties; every existing consumer that only
+ * destructures {commit, branch, workingTreeClean} is unaffected).
+ */
 export function readGitState(repositoryPath, runGit = defaultRunGit) {
   const commit = runGit(["rev-parse", "HEAD"], repositoryPath).trim();
   const branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"], repositoryPath).trim();
   const statusOutput = runGit(["status", "--porcelain"], repositoryPath).trim();
-  return { commit, branch, workingTreeClean: statusOutput === "" };
+  const statusLines = statusOutput === "" ? [] : statusOutput.split("\n");
+  const untrackedFiles = statusLines.filter((line) => line.startsWith("??")).map((line) => line.slice(3).trim());
+  const conflictedFiles = statusLines.filter((line) => CONFLICT_CODES.includes(line.slice(0, 2))).map((line) => line.slice(3).trim());
+  return { commit, branch, workingTreeClean: statusOutput === "", untrackedFiles, conflictedFiles };
 }
 
 /** The remote-tracking branch's own commit, or null when none is configured — never throws. */
@@ -29,6 +40,25 @@ export function readUpstreamCommit(repositoryPath, runGit = defaultRunGit) {
     return runGit(["rev-parse", "@{u}"], repositoryPath).trim();
   } catch {
     return null;
+  }
+}
+
+/**
+ * DC-003-I029.3 — true when `ancestorCommit` is a real ancestor of (or
+ * equal to) `commit` in this repository's own history. false on any git
+ * failure (never throws) — a genuine "cannot determine" case, which
+ * callers should treat as unverifiable rather than as a confirmed
+ * fast-forward. Used to detect a likely non-fast-forward history rewrite
+ * (a force-push/rebase signature) between a Work Order's own starting
+ * commit and a Delivery Report's own ending commit.
+ */
+export function isAncestorCommit(repositoryPath, ancestorCommit, commit, runGit = defaultRunGit) {
+  if (!ancestorCommit || !commit) return false;
+  try {
+    runGit(["merge-base", "--is-ancestor", ancestorCommit, commit], repositoryPath);
+    return true;
+  } catch {
+    return false;
   }
 }
 

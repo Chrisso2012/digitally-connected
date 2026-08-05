@@ -6405,6 +6405,339 @@ UI automation, browser automation, production deployment, live content
 generation/rendering/publishing, automatic rollback, self-approval,
 roadmap decisions.
 
+## Automated Strategy Review (DC-003-I029.3)
+
+I029.2 automated the Delivery Office side (Work Order → Claude Code →
+Delivery Report). I029.3 automates the **first** Strategy Office review
+stage: it takes one completed Engineering Delivery Report, independently
+re-verifies the repository evidence behind it, and returns one
+evidence-based **Engineering Strategy Review** — `approved`,
+`correction_required`, `ceo_decision_required`, or `rejected`. **This
+reviews evidence, it does not run the organisation**: it cannot merge or
+deploy code, cannot make a live production call, cannot alter the
+roadmap, and cannot approve its own work.
+
+```
+Engineering Work Order + Engineering Delivery Report
+        ↓
+Strategy Review Evidence Collector (independent git/branch/tree/push/test/fixture re-verification)
+        ↓
+Strategy Review Agent Adapter (mock by default / OpenAI Responses API when --live-review)
+        ↓
+Deterministic Authority Gates (pre- AND post-invocation — the model can only be overridden toward more caution, never less)
+        ↓
+Engineering Strategy Review  →  Bridge Transport (I029.1, additively extended)  →  Engineering Strategy Review Store
+```
+
+### Core principle: evidence over prose
+
+The Strategy Review Agent reviews evidence; **it does not trust the
+Delivery Report's own claims, and it does not trust Claude's prose
+alone.** `strategy-review-evidence-collector.mjs` re-derives branch,
+commit, working-tree cleanliness, upstream/push state, and changed-file
+scope directly from `git` at review time (reusing
+`repository-git-evidence.mjs` unmodified, extended with `isAncestorCommit()`
+for history-rewrite detection and `readGitState()`'s own new
+untracked/conflicted-file parsing) — the repository can have moved since
+the delivery was recorded, so nothing about its *current* state is ever
+taken on the Delivery Report's word. Test/fixture evidence is the one
+deliberate exception: re-running the full suite on every review is
+expensive, so it is **policy-gated** (`rerunTests`/`rerunFixtures`,
+default `false`) rather than automatic — when not rerun, the Delivery
+Report's own counts are used, but every such evidence entry is labelled
+`source: "delivery-report"` (never `"independent-verification"`), so the
+trust level is never silently upgraded.
+
+### Deterministic Authority Gates — the model cannot override these
+
+`strategy-review-authority-gates.mjs` enforces this milestone's own
+mandatory CEO-escalation conditions in code the OpenAI model never sees,
+influences, or can weaken. Two passes over the **same** evidence-based
+checks:
+
+- **Pre-review** (`evaluatePreReviewGates`) — run *before* the adapter is
+  ever invoked. An unambiguous escalation case (unverifiable repository,
+  unresolved merge conflict, a possible non-fast-forward history rewrite,
+  a credential-shaped file touched, an infrastructure or
+  architecture-sensitive file changed, a recorded live external-provider
+  request, the wrong branch, too many changed files) skips the adapter
+  call entirely — the review is escalated deterministically and no OpenAI
+  request is spent on a case that was never going to be approved anyway.
+- **Post-review** (`applyPostReviewGates`) — run *after* the adapter
+  returns a validated proposal. Re-checks the same conditions (defense in
+  depth) and additionally catches a proposal/evidence mismatch — most
+  importantly, **an "approved" proposal is always overridden to
+  `ceo_decision_required` if the (independently known) test or fixture
+  evidence shows a failure** — a failure can never be waived, regardless
+  of what the model writes in its own summary. Gates can only make the
+  outcome *more* cautious: a model that already proposed `rejected` is
+  never downgraded to `ceo_decision_required` just because a gate also
+  tripped, and a model already respecting `policy.allowRoutineApproval=false`
+  by proposing `ceo_decision_required` itself is left alone.
+
+### Engineering Strategy Review Schema
+
+`schemas/engineering-strategy-review.schema.json` (`esr_` prefix) — one
+immutable review of one Delivery Report against one Work Order.
+`criteria[]` must have exactly one entry per Work Order `review_criteria`
+entry, in the same order — enforced twice: the domain factory
+(`src/engineering-strategy-review.mjs`) cross-checks every criterion's
+own text and position against the Work Order's own array verbatim (a
+criterion can never be invented, reworded, or reordered), and the
+adapter-boundary validator (`strategy-review-agent-adapter.mjs`'s own
+`assertValidReviewProposal()`) independently confirms every index 1..N is
+covered exactly once before the factory ever sees the proposal. Decision/
+evidence consistency is enforced in code, not just structurally by the
+schema: `approved` is impossible while any criterion result is
+`fail`/`insufficient_evidence`; `correction_required` requires at least
+one such criterion and a correction specification referencing only those
+indices; `ceo_decision_required` requires a non-empty escalation reason;
+`rejected` requires `correction` to be `null`. Every evidence
+summary/risk/reason is bounded (`maxLength`); no raw diff, transcript,
+prompt, environment dump, or provider response body has a field to live
+in.
+
+### Engineering Strategy Review Store
+
+`engineering-strategy-review-store-adapter.mjs` + local-JSON adapter +
+`engineering-strategy-review-store.mjs` — byte-for-byte mirrors the
+I015/I023/I025/I028/I029 domain-store/storage-adapter pattern:
+`save`/`get`/`list`/`exists`, plus `findByWorkOrder()`/
+`findByDeliveryReport()`/`latestByWorkOrder()`. No `replace()` — a review
+is a point-in-time, immutable verdict. **`save()` refuses a second review
+for the same Delivery Report** (`DuplicateDeliveryReportReviewError`) — no
+versioning exists yet, per this milestone's own brief. Atomic writes,
+path-traversal-safe identifiers, corruption fails explicitly — same
+discipline as every other store in this codebase.
+
+### Strategy Review Lock
+
+`src/strategy-review-lock.mjs` — a smallest dedicated lock keyed on
+`delivery_report_id` (`dr_...`), **not** a parameterised reuse of I029.2's
+own `delivery-execution-lock.mjs`: that file hardcodes both its
+identifier pattern and its error message text to Work Orders, and
+Strategy Office's own review of this milestone explicitly scoped I029.2
+changes away entirely. This is therefore a deliberate, near-identical
+duplicate — same atomic-acquisition discipline (temp-file +
+read-back-verify + rename), same non-silent stale-lock/release rules —
+with zero risk of altering I029.2's own tested behaviour.
+
+### Strategy Review Agent Adapter
+
+`src/strategy-review-agent-adapter.mjs` — provider-neutral `{ name,
+reviewDelivery({ workOrder, deliveryReport, evidence, policy }) }`
+contract, mirroring `delivery-office-runner-adapter.mjs`'s own precedent.
+`assertValidReviewProposal()` enforces the normalised **Review Proposal**
+shape on every adapter's return value — mock or real — so the service
+never has to trust an adapter blindly. A criterion's own *text* is never
+proposed by the adapter, only its index/result/evidence/reason; the
+service re-attaches the real text from the Work Order itself, making it
+structurally impossible for an adapter to invent or reword a criterion.
+
+**Mock adapter** (`strategy-review-mock-adapter.mjs`) — the only adapter
+any automated test or the CLI's default mode ever uses. Deterministic
+`options.mode`: `approved` (default) | `correction-required` |
+`ceo-escalation` | `rejected` | `malformed` | `missing-criterion` |
+`duplicate-criterion` | `unsupported-decision` | `unsafe-approval`
+(proposes approval regardless of the real evidence handed to it —
+proving the *service's own gates*, not the adapter, are what catch it) |
+`timeout` | `provider-failure`.
+
+**OpenAI adapter** (`openai-strategy-review-adapter.mjs`, real, never used
+by an automated test) — calls OpenAI's Responses API directly via Node's
+built-in `fetch`, no SDK dependency (mirrors `llm-transport-http.mjs`'s
+own "raw fetch, one HTTP call" discipline exactly). Mechanism confirmed
+against OpenAI's own current documentation during this milestone's
+feasibility investigation (fetched live, doc-only, no API key used):
+`POST /v1/responses`, structured output via `text.format = {type:
+"json_schema", name, schema, strict: true}` (the older `response_format`
+key is deprecated for this endpoint), `max_output_tokens`, **no `tools`
+field at all** — tools omitted entirely means no tool execution is
+possible. The response's structured JSON lands at
+`output[].content[].text` (parsed as JSON); usage at
+`usage.input_tokens`/`output_tokens`/`total_tokens`. **This has not been
+confirmed against a real live call** — the Initial Live Review
+Verification Gate below is what confirms it for real, once, under
+separate authorisation. Classifies authentication (401/403), rate-limit
+(429), server (5xx), and client (other 4xx, via a bounded
+`strategy-review-error-diagnostics.mjs` diagnostic — status/errorType/
+code/requestId/message only, redacted, never the raw body/headers/API
+key) failures distinctly, mirroring `llm-error-diagnostics.mjs`'s own
+(I019.1) precedent.
+
+### Review Policy
+
+`src/strategy-review-policy.mjs` — conservative by default:
+`rerunTests`/`rerunFixtures` both `false`, `allowDeliveryBranchDifferFromMain`
+`false`, `allowRoutineApproval`/`allowCorrectionSpecifications`/
+`allowAutomaticRejection` all `true` (a caller can turn any of them off
+to force everything through CEO review). **`maxOpenAiRequests` is a
+hardcoded constant (`1`), not a configurable field** — mirrors I029.2's
+own `resolveLiveMaxAttempts()`/one-shot-ceiling discipline exactly; a
+caller who wants more requests must change the code, not the config.
+
+**Repository-evidence finding, worth recording:** `engineering-work-order
+.schema.json` has no structured field for a Work Order to *request*
+narrower review authority — same gap I029.2 already documented for
+execution authority. Not invented here either.
+
+### OpenAI Configuration
+
+`src/strategy-review-config.mjs` reads `OPENAI_API_KEY`,
+`STRATEGY_REVIEW_MODEL`, `OPENAI_API_BASE_URL`,
+`STRATEGY_REVIEW_TIMEOUT_MS`, `STRATEGY_REVIEW_MAX_OUTPUT_TOKENS`,
+`STRATEGY_REVIEW_MAX_INPUT_CHARS`, `STRATEGY_REVIEW_MAX_ATTEMPTS` — a
+genuinely new credential family (confirmed via repository investigation:
+`LLM_API_KEY` is already Anthropic-specific, committed to
+`LLM_PROVIDER=anthropic` naming, not reusable). `STRATEGY_REVIEW_MAX_ATTEMPTS`
+is read for reporting only — it can never actually raise how many live
+OpenAI requests one review makes; see Review Policy above.
+`describeAuthenticationAvailability()` reports the mechanism **by name
+only, never a value**.
+
+### Strategy Review Evidence Collector
+
+`src/strategy-review-evidence-collector.mjs` — see "Core principle"
+above. Also detects: untracked files, unresolved merge-conflict markers
+(`git status --porcelain`'s own `UU`/`AA`/`DD`/etc. codes), a possible
+non-fast-forward history rewrite (`isAncestorCommit()` — the Work Order's
+own starting commit must still be a real ancestor of the current commit),
+and credential-shaped/infrastructure/architecture-sensitive touched files
+via bounded filename-pattern matching (documented as heuristic, not
+exhaustive, in the module's own header comment). File lists are bounded
+to 200 entries (`filesCreatedTruncated`/etc. flags say so honestly rather
+than silently dropping entries).
+
+### Automated Strategy Review Service
+
+`src/automated-strategy-review-service.mjs` — the only module that
+reviews one Delivery Report end to end. Eligibility (checked before the
+lock or the adapter): the Delivery Report must reference the given Work
+Order, the Work Order must not already be `approved`/`archived`, and no
+Strategy Review may already exist for that Delivery Report. **Never
+approves or mutates the original Work Order** — every decision this
+service can produce is a recommendation, not a Strategy Office action
+taken. An adapter that throws (timeout, provider failure, malformed
+output) still produces a real, persisted review — escalated to
+`ceo_decision_required` with the failure reason recorded — never silently
+dropped, mirroring I029.2's own `runnerFailure` handling.
+
+**Bridge Transport integration reuses I029.1's own generic
+`createBridgeTransportRecord()` + `transportStore.save()` directly — not
+`bridge-transport-service.mjs`'s own `exportWorkOrder()`/
+`importDeliveryReport()`, both of which are hardcoded to their own
+specific object types.** Per Strategy Office's own explicit scoping of
+this milestone's I029.1 changes to `bridge-transport-record.schema.json`
+and `bridge-transport-record.mjs` only, `bridge-transport-service.mjs`
+itself was never touched. The constructed review is written to an
+explicit `reviewExportDir` (mirroring Bridge Transport's own
+`destinationDir` "outgoing queue drop" convention) and recorded as one
+real, queryable **outgoing** transport event (`direction: "outgoing"` —
+a Strategy Review flows *from* the Strategy Office toward the Delivery
+Office or the CEO escalation path, the opposite of a Delivery Report's
+own `incoming` direction, per Strategy Office's own explicit correction
+during this milestone's approval).
+
+The Strategy Review Lock is always released via `finally` — the same
+"only a genuine process-level crash could leave a lock orphaned" limitation
+I029.2 already documented for its own lock.
+
+### Bridge Transport compatibility (I029.1, additively extended)
+
+`bridge-transport-record.schema.json`'s `object_type` enum gained one
+new value, `engineering_strategy_review` (`esr_` pattern, `direction:
+"outgoing"`), and `bridge-transport-record.mjs`'s own `OBJECT_TYPES` map
+gained the matching entry — **the only two files changed**, exactly as
+Strategy Office approved. Every existing `engineering_work_order`/
+`engineering_delivery_report` record, field, and behaviour is
+byte-for-byte unchanged (see `bridge-transport-record.test.mjs`'s own
+explicit regression test).
+
+### Engineering Work Management integration (additive)
+
+`engineering-work-management-service.mjs` gained an **optional**
+`strategyReviewStore` field. When supplied, "Awaiting Review" is refined
+into "Approved by Strategy Review" / "Correction Required" / "CEO
+Decision Required" / "Rejected" using the most recent review's own
+`decision`; `getStatus()` gains `approved_by_review`/
+`correction_required`/`ceo_decision_required`/`rejected_by_review`
+(`null` when the store isn't supplied — never a guessed zero) and
+`latest_strategy_review`. When omitted, every pre-I029.3 behaviour —
+including "Awaiting Review" itself — is completely unchanged; this is why
+no pre-existing caller needed modification.
+
+### Control Centre integration (additive, read-only)
+
+`strategy_review` is **standalone**, not paired with the Engineering
+store pair the way `delivery_office` is — decision counts need only the
+Strategy Review Store itself; `reviews_awaiting_execution` is computed
+*additionally* when the Engineering pair is *also* supplied (delegates to
+Engineering Work Management's own derived-state count — one source of
+truth). An independent, optional `strategyReviewLockDir`
+(`--strategy-review-lock=<dir>` on the CLI's `dashboard` subcommand)
+reports `review_currently_locked`, mirroring `exportsRootDir`'s own
+"checked, not zero" discipline. **No OpenAI invocation of any kind occurs
+from the Control Centre.**
+
+### CLI (`tests/validation/strategy-review-agent.mjs`, `npm run strategy-review`)
+
+```bash
+npm run strategy-review -- inspect [--repo=<repositoryPath>] [--branch=<name>]
+npm run strategy-review -- review <workOrderId> <deliveryReportId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <strategyReviewStoreDirectory> <bridgeTransportStoreDirectory> <repositoryPath> --lock=<lockDirectory> --export=<reviewExportDir> [--branch=<name>] [--live-review] [--rerun-tests] [--rerun-fixtures] [--allow-delivery-branch-differ]
+npm run strategy-review -- get <strategyReviewId> <strategyReviewStoreDirectory>
+npm run strategy-review -- work <workOrderId> <strategyReviewStoreDirectory>
+npm run strategy-review -- status <deliveryReportId> <strategyReviewStoreDirectory> --lock=<lockDirectory>
+```
+
+**Default is always the mock adapter — real review requires the
+unmistakable `--live-review` flag**, reviews exactly one Delivery Report,
+no automatic retry, no second review, no repository mutation, no
+automatic correction Work Order. `inspect` reports the selected
+mechanism/model, the fixed one-request ceiling, the resolved Review
+Policy, and credential availability **by name only** — never a live
+check, never a value.
+
+### Initial Live Review Verification Gate
+
+**No live OpenAI request occurred during this milestone's implementation,
+and none is authorised by this README.** Before any live review of an
+active Delivery Report, per the brief: confirm the full suite still
+passes; confirm the exact adapter/model; confirm API-key availability by
+name only; confirm the exact evidence sent and every size limit; confirm
+no raw codebase/credentials/transcripts are included; confirm the request
+maximum is exactly one; confirm no tools are enabled; confirm the timeout
+and output-token cap; use a harmless historical fixture Work Order and
+Delivery Report, never an active production milestone; bound the expected
+API cost; obtain fresh Strategy Office and CEO approval; execute exactly
+once; do not automatically act on the result; compare it manually against
+a real Strategy Office review; stop.
+
+### Explicitly out of scope (per this milestone's own brief)
+
+Direct injection into any external conversation/chat surface, consumer
+ChatGPT automation, automatic creation or execution of correction Work
+Orders, automatic merge or deployment, automatic roadmap updates,
+automatic CEO approval, n8n workflows, webhooks, background OpenAI
+execution, polling, scheduling, multiple concurrent reviews, reviewing
+multiple Delivery Reports in one call, repository mutation, Claude
+invocation, live content generation/rendering/publishing, credential
+provisioning, production deployment, automated rollback, self-modifying
+review rules.
+
+### Limitations, stated plainly
+
+- **Correction Work Orders are not created automatically.** A
+  `correction_required` decision includes a bounded correction
+  specification; nothing in this milestone turns that into a new
+  Engineering Work Order or executes it. That remains a future milestone.
+- **No direct connection to any consumer ChatGPT conversation exists.**
+  This service is invoked locally (CLI or a future caller within this
+  repository) — it has no channel to, and no awareness of, any external
+  chat surface.
+- **The full Work Order → Delivery → Review loop is not yet automatic.**
+  Each stage (I029.2's runner, I029.3's reviewer) is invoked
+  independently; nothing here chains one into the next.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -6787,7 +7120,8 @@ milestone).
 | Engineering Work Management (structured Strategy Office <-> Delivery Office objects: Work Order, Delivery Report, read-only join service, Control Centre section) | Done (DC-003-I029) — `src/engineering-work-order.mjs`, `src/engineering-work-order-store.mjs` + adapter files, `src/engineering-delivery-report.mjs`, `src/engineering-delivery-report-store.mjs` + adapter files, `src/engineering-work-management-service.mjs`, CLI `npm run engineering`; see "Engineering Work Management (DC-003-I029)"; new `schemas/engineering-work-order.schema.json` and `schemas/engineering-delivery-report.schema.json`; no Claude/ChatGPT/MCP/n8n/API/message-transport integration of any kind — defines the engineering language only; Control Centre's paired `engineeringWorkOrderStore`/`engineeringDeliveryReportStore` dependency is additive/optional, mirroring I028's own `socialAnalyticsStore` precedent; no workflow-transition functions exist (`work create` only ever produces `draft`/`ready`); every prior module (I008–I028) confirmed untouched |
 | Bridge Transport (moves Engineering Work Orders out / Engineering Delivery Reports in, mock-only clean extension point) | Done (DC-003-I029.1) — `src/bridge-transport-record.mjs`, `src/bridge-transport-store.mjs` + adapter files, `src/bridge-transport-mock-adapter.mjs`, `src/bridge-transport-service.mjs`, CLI `npm run bridge`; see "Bridge Transport (DC-003-I029.1)"; new `schemas/bridge-transport-record.schema.json`; no Claude/ChatGPT/MCP/n8n/API/networking of any kind — transport only, no engineering decisions, no prompt generation; `direction` is derived from `object_type`, never caller-supplied; Control Centre's `bridgeTransportStore` dependency is additive/optional, mirroring I028/I029's own precedent; kept deliberately lean (14 new files) — every I029 module (Work Order/Delivery Report Stores, CLI, Control Centre) reused completely unmodified |
 | Automated Delivery Office (first real Bridge Transport provider — executes one approved Work Order through a replaceable Runner Adapter, mock by default, records one Delivery Report) | Done (DC-003-I029.2) — `src/execution-policy.mjs`, `src/delivery-execution-lock.mjs`, `src/delivery-office-runner-adapter.mjs`, `src/delivery-office-mock-runner-adapter.mjs`, `src/claude-code-delivery-runner-adapter.mjs`, `src/delivery-office-runner-config.mjs`, `src/repository-git-evidence.mjs`, `src/automated-delivery-office-service.mjs`, CLI `npm run delivery-office`; see "Automated Delivery Office (DC-003-I029.2)"; no new schema — reuses I029's Work Order/Delivery Report and I029.1's Bridge Transport completely unmodified; no automated test invokes Claude or the network; default is always mock, real execution gated behind explicit `--live-runner`; independent git re-verification, never blind trust in the runner's own self-report, decides the final Delivery Report status; Control Centre's `deliveryOfficeLockDir` is additive/optional; **no real Claude Code execution occurred — pending the Initial Real-Runner Verification Gate and fresh Strategy Office + CEO approval** |
-| Unit test suite | Done — 1441 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Automated Strategy Review (first automated Strategy Office review stage — reviews one Delivery Report's independently-verified evidence against its Work Order, mock by default, records one Engineering Strategy Review) | Done (DC-003-I029.3) — `src/engineering-strategy-review.mjs`, `src/engineering-strategy-review-store.mjs` + adapter files, `src/strategy-review-evidence-collector.mjs`, `src/strategy-review-authority-gates.mjs`, `src/strategy-review-policy.mjs`, `src/strategy-review-agent-adapter.mjs`, `src/strategy-review-mock-adapter.mjs`, `src/openai-strategy-review-adapter.mjs`, `src/strategy-review-instruction.mjs`, `src/strategy-review-config.mjs`, `src/strategy-review-error-diagnostics.mjs`, `src/strategy-review-lock.mjs`, `src/automated-strategy-review-service.mjs`, CLI `npm run strategy-review`; see "Automated Strategy Review (DC-003-I029.3)"; new `schemas/engineering-strategy-review.schema.json`; `bridge-transport-record.schema.json`/`.mjs` additively extended with `engineering_strategy_review` (`direction: "outgoing"`) — the only two I029.1 files touched, per Strategy Office's own explicit scope; deterministic authority gates (pre- and post-invocation) mean the OpenAI model can only make an outcome more cautious, never override toward approval; a failed test/fixture always blocks approval regardless of what the model proposes; no automated test invokes OpenAI or the network; default is always mock, real review gated behind explicit `--live-review`, fixed one-request ceiling; Engineering Work Management and Control Centre integrations both additive/optional; **no live OpenAI request occurred — pending the Initial Live Review Verification Gate and fresh Strategy Office + CEO approval**; does not yet create/execute correction Work Orders |
+| Unit test suite | Done — 1611 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

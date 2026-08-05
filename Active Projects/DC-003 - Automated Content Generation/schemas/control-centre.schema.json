@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -18,7 +18,8 @@
         "recent_activity": { "type": "array", "items": { "$ref": "#/$defs/activityEntry" } },
         "engineering": { "$ref": "#/$defs/engineeringSummary" },
         "bridge": { "$ref": "#/$defs/bridgeSummary" },
-        "delivery_office": { "$ref": "#/$defs/deliveryOfficeSummary" }
+        "delivery_office": { "$ref": "#/$defs/deliveryOfficeSummary" },
+        "strategy_review": { "$ref": "#/$defs/strategyReviewSummary" }
       }
     },
     {
@@ -358,6 +359,45 @@
             "runner_availability": {
               "type": "object",
               "description": "A structural signal only (an invocation mechanism exists) — never a live authentication check. See delivery-office-runner-config.mjs.",
+              "required": ["configured", "mechanism"],
+              "additionalProperties": false,
+              "properties": {
+                "configured": { "type": "boolean" },
+                "mechanism": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "strategyReviewSummary": {
+      "description": "DC-003-I029.3 — sourced from the Engineering Strategy Review Store (standalone — decision counts need only this store) and, when the Engineering Work Order/Delivery Report pair is ALSO supplied, from Engineering Work Management for reviews_awaiting_execution. Read-only, additive, optional. No OpenAI invocation of any kind occurs from the Control Centre.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["reviews_awaiting_execution", "review_currently_locked", "latest_review", "approved_deliveries", "corrections_required", "ceo_decisions_required", "rejected_deliveries", "reviewer_availability"],
+          "additionalProperties": false,
+          "properties": {
+            "reviews_awaiting_execution": {
+              "description": "null when the Engineering Work Order/Delivery Report pair was not supplied — never checked, never a guessed zero.",
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "review_currently_locked": {
+              "description": "null when either nothing is locked or no review lock directory was supplied.",
+              "type": ["string", "null"],
+              "pattern": "^dr_[A-Za-z0-9]+$"
+            },
+            "latest_review": {
+              "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/engineering-strategy-review.schema.json" }]
+            },
+            "approved_deliveries": { "type": "integer", "minimum": 0 },
+            "corrections_required": { "type": "integer", "minimum": 0 },
+            "ceo_decisions_required": { "type": "integer", "minimum": 0 },
+            "rejected_deliveries": { "type": "integer", "minimum": 0 },
+            "reviewer_availability": {
+              "type": "object",
               "required": ["configured", "mechanism"],
               "additionalProperties": false,
               "properties": {

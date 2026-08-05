@@ -549,3 +549,64 @@ export {
   MalformedRunnerResultError,
   InvalidAutomatedDeliveryOfficeDependenciesError,
 } from "./delivery-office-errors.mjs";
+
+// DC-003-I029.3 — Automated Strategy Review Agent: reviews one completed
+// Engineering Delivery Report against the Engineering Work Order it
+// answers, using independently-collected repository evidence (never
+// trusting the Delivery Report's own claims alone) and a Strategy Review
+// Agent Adapter (mock by default; a real OpenAI Responses API adapter
+// only behind explicit `--live-review`). Returns one of
+// approved/correction_required/ceo_decision_required/rejected — the
+// OpenAI model can never override the deterministic authority gates in
+// strategy-review-authority-gates.mjs. Reviews Delivery Office execution
+// evidence only; it does not automate Strategy Office review itself, does
+// not merge/deploy/mutate the repository, and does not yet create or
+// execute a correction Work Order. See "Automated Strategy Review
+// (DC-003-I029.3)" in the README.
+export { createEngineeringStrategyReview } from "./engineering-strategy-review.mjs";
+export { assertValidEngineeringStrategyReviewStoreAdapter } from "./engineering-strategy-review-store-adapter.mjs";
+export { createLocalJsonEngineeringStrategyReviewStoreAdapter } from "./local-json-engineering-strategy-review-store-adapter.mjs";
+export { createEngineeringStrategyReviewStore } from "./engineering-strategy-review-store.mjs";
+export {
+  InvalidEngineeringStrategyReviewInputError,
+  EngineeringStrategyReviewValidationError,
+  InvalidEngineeringStrategyReviewStoreAdapterError,
+  InvalidEngineeringStrategyReviewIdentifierError,
+  EngineeringStrategyReviewAlreadyExistsError,
+  EngineeringStrategyReviewNotFoundError,
+  CorruptedEngineeringStrategyReviewError,
+  EngineeringStrategyReviewPersistenceError,
+  DuplicateDeliveryReportReviewError,
+} from "./engineering-strategy-review-errors.mjs";
+export { collectStrategyReviewEvidence } from "./strategy-review-evidence-collector.mjs";
+export { createStrategyReviewPolicy, MAX_OPENAI_REQUESTS } from "./strategy-review-policy.mjs";
+export { evaluateMandatoryEscalationReasons, evaluatePreReviewGates, applyPostReviewGates } from "./strategy-review-authority-gates.mjs";
+export { assertValidStrategyReviewAgentAdapter, assertValidReviewProposal, REVIEW_DECISIONS, CRITERION_RESULTS } from "./strategy-review-agent-adapter.mjs";
+export { createStrategyReviewMockAdapter } from "./strategy-review-mock-adapter.mjs";
+export { createOpenAiStrategyReviewAdapter } from "./openai-strategy-review-adapter.mjs";
+export { buildReviewInstruction, REVIEW_PROPOSAL_JSON_SCHEMA } from "./strategy-review-instruction.mjs";
+export { loadStrategyReviewConfig, describeAuthenticationAvailability as describeOpenAiAuthenticationAvailability } from "./strategy-review-config.mjs";
+export { buildOpenAiSafeDiagnostic } from "./strategy-review-error-diagnostics.mjs";
+export { createStrategyReviewLock } from "./strategy-review-lock.mjs";
+export { createAutomatedStrategyReviewService } from "./automated-strategy-review-service.mjs";
+export {
+  InvalidStrategyReviewPolicyError,
+  EvidenceRelationshipMismatchError,
+  EvidenceCollectionFailedError,
+  InvalidStrategyReviewAgentAdapterError,
+  MalformedReviewProposalError,
+  ReviewAdapterExecutionFailedError,
+  StrategyReviewConfigurationError,
+  StrategyReviewAuthenticationError,
+  StrategyReviewRateLimitError,
+  StrategyReviewTimeoutError,
+  StrategyReviewClientError,
+  StrategyReviewTransportError,
+  InvalidStrategyReviewLockIdentifierError,
+  StrategyReviewLockAlreadyHeldError,
+  StrategyReviewLockNotHeldError,
+  StrategyReviewLockOwnershipError,
+  StrategyReviewLockPersistenceError,
+  DeliveryReportNotEligibleForReviewError,
+  InvalidAutomatedStrategyReviewDependenciesError,
+} from "./strategy-review-errors.mjs";

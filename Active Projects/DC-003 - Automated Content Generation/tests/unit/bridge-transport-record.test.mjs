@@ -73,3 +73,31 @@ test("does not mutate the supplied fields object", () => {
 test("throws BridgeTransportRecordValidationError if a caller-supplied idGenerator produces a malformed id", () => {
   assert.throws(() => createBridgeTransportRecord(baseFields(), { idGenerator: () => "not-a-real-id" }), BridgeTransportRecordValidationError);
 });
+
+// --- DC-003-I029.3 — engineering_strategy_review (additive) ---------------
+
+test("engineering_strategy_review always derives direction 'outgoing' (Strategy Office -> Delivery Office/CEO)", () => {
+  const record = createBridgeTransportRecord(
+    baseFields({ objectType: "engineering_strategy_review", objectId: "esr_test0000000001", source: "engineering-strategy-review-store", destination: "/tmp/outgoing/esr_test0000000001.json" }),
+    { idGenerator: () => "bt_test0000000005" }
+  );
+  assert.equal(record.direction, "outgoing");
+  assert.equal(record.object_type, "engineering_strategy_review");
+});
+
+test("rejects an engineering_strategy_review objectId that doesn't match the esr_ pattern", () => {
+  assert.throws(
+    () => createBridgeTransportRecord(baseFields({ objectType: "engineering_strategy_review", objectId: "wo_wrongprefix0001" })),
+    InvalidBridgeTransportRecordInputError
+  );
+});
+
+test("existing engineering_work_order/engineering_delivery_report behaviour is completely unchanged by the I029.3 addition", () => {
+  const workOrderRecord = createBridgeTransportRecord(baseFields(), { idGenerator: () => "bt_test0000000006" });
+  assert.equal(workOrderRecord.direction, "outgoing");
+  const deliveryReportRecord = createBridgeTransportRecord(
+    baseFields({ objectType: "engineering_delivery_report", objectId: "dr_test0000000002" }),
+    { idGenerator: () => "bt_test0000000007" }
+  );
+  assert.equal(deliveryReportRecord.direction, "incoming");
+});

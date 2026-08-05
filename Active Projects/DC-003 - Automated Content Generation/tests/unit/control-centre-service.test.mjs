@@ -19,6 +19,9 @@ import { createEngineeringDeliveryReport } from "../../src/engineering-delivery-
 import { createBridgeTransportStore } from "../../src/bridge-transport-store.mjs";
 import { createBridgeTransportRecord } from "../../src/bridge-transport-record.mjs";
 import { createDeliveryExecutionLock } from "../../src/delivery-execution-lock.mjs";
+import { createEngineeringStrategyReviewStore } from "../../src/engineering-strategy-review-store.mjs";
+import { createEngineeringStrategyReview } from "../../src/engineering-strategy-review.mjs";
+import { createStrategyReviewLock } from "../../src/strategy-review-lock.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError } from "../../src/control-centre-errors.mjs";
 import { CarouselNotFoundError } from "../../src/finished-carousel-store-errors.mjs";
@@ -1124,3 +1127,117 @@ test("the Control Centre never invokes Claude Code to compute overview.delivery_
       globalThis.fetch = originalFetch;
     }
   }));
+
+// --- overview.strategy_review (DC-003-I029.3) ------------------------------
+
+function buildStrategyReviewStore() {
+  return createEngineeringStrategyReviewStore({ adapter: createInMemoryAdapter("in-memory-strategy-review-adapter") });
+}
+
+function buildStrategyReview(overrides = {}, options = {}) {
+  return createEngineeringStrategyReview(
+    {
+      workOrderId: "wo_cctest00000001",
+      deliveryReportId: "dr_cctest00000001",
+      workOrderReviewCriteria: ["c1"],
+      milestone: "DC-003-I029.3",
+      reviewerProvider: "mock",
+      decision: "approved",
+      criteria: [{ criterionIndex: 1, criterion: "c1", result: "pass", evidence: [], reason: null }],
+      repositoryEvidence: { startingCommit: "aaa1111", endingCommit: "bbb2222", branch: "main", workingTree: "clean", pushStatus: "not_applicable", verifiable: true },
+      verification: {
+        tests: { status: "passed", passed: 1, failed: 0, total: 1, source: "independent-verification" },
+        fixtures: { status: "passed", passed: 1, failed: 0, total: 1, source: "independent-verification" },
+      },
+      summary: "ok",
+      ...overrides,
+    },
+    options
+  );
+}
+
+test("overview.strategy_review is null when no strategyReviewStore was supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  assert.equal(service.getOverview().strategy_review, null);
+});
+
+test("overview.strategy_review reports real decision counts and the latest review — standalone, no Engineering pair required", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const strategyReviewStore = buildStrategyReviewStore();
+  strategyReviewStore.save(buildStrategyReview({}, { idGenerator: () => "esr_cc0000000000001", now: () => "2026-08-05T01:00:00.000Z" }));
+  strategyReviewStore.save(
+    buildStrategyReview(
+      { deliveryReportId: "dr_cctest00000002", decision: "rejected", criteria: [{ criterionIndex: 1, criterion: "c1", result: "fail", evidence: [], reason: "unsafe" }] },
+      { idGenerator: () => "esr_cc0000000000002", now: () => "2026-08-05T02:00:00.000Z" }
+    )
+  );
+
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, strategyReviewStore });
+  const strategyReview = service.getOverview().strategy_review;
+  assert.equal(strategyReview.approved_deliveries, 1);
+  assert.equal(strategyReview.rejected_deliveries, 1);
+  assert.equal(strategyReview.reviews_awaiting_execution, null, "null without the Engineering pair — never checked");
+  assert.equal(strategyReview.latest_review.strategy_review_id, "esr_cc0000000000002");
+  assert.equal(typeof strategyReview.reviewer_availability.configured, "boolean");
+});
+
+test("overview.strategy_review.reviews_awaiting_execution is computed when the Engineering pair is ALSO supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+  const strategyReviewStore = buildStrategyReviewStore();
+  workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_cc0000000000005" }));
+
+  const service = createControlCentreService({
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    engineeringWorkOrderStore: workOrderStore,
+    engineeringDeliveryReportStore: deliveryReportStore,
+    strategyReviewStore,
+  });
+  const strategyReview = service.getOverview().strategy_review;
+  assert.equal(strategyReview.reviews_awaiting_execution, 0, "no Work Order has a Delivery Report yet, so none are awaiting review");
+});
+
+test("overview.strategy_review.review_currently_locked reflects a real active review lock", () =>
+  withTempDir((lockDir) => {
+    const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+    const strategyReviewStore = buildStrategyReviewStore();
+    createStrategyReviewLock({ lockDir }).acquire("dr_cctest00000003");
+
+    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, strategyReviewStore, strategyReviewLockDir: lockDir });
+    const strategyReview = service.getOverview().strategy_review;
+    assert.equal(strategyReview.review_currently_locked, "dr_cctest00000003");
+  }));
+
+test("a broken strategyReviewStore degrades overview.strategy_review to an honest zeroed summary rather than throwing", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const brokenStrategyReviewStore = {
+    ...buildStrategyReviewStore(),
+    list() {
+      throw new Error("simulated store failure");
+    },
+  };
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, strategyReviewStore: brokenStrategyReviewStore });
+  const strategyReview = service.getOverview().strategy_review;
+  assert.equal(strategyReview.approved_deliveries, 0);
+  assert.equal(strategyReview.latest_review, null);
+});
+
+test("the Control Centre never makes a network request to compute overview.strategy_review", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const strategyReviewStore = buildStrategyReviewStore();
+  strategyReviewStore.save(buildStrategyReview());
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("must not be called");
+  };
+  try {
+    const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, strategyReviewStore });
+    service.getOverview();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

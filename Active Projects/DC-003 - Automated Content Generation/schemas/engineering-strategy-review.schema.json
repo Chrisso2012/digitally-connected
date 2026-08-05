@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/engineering-strategy-review.schema.json",
+  "title": "Engineering Strategy Review",
+  "description": "DC-003-I029.3 — one immutable review of one Engineering Delivery Report against the Engineering Work Order it answers, authored by the Automated Strategy Review Agent (mock by default, OpenAI Responses API when explicitly live). Captures evidence-based ASSESSMENT only — every criterion result must trace to real evidence (independent repository verification, the Delivery Report itself, or the Work Order), never a raw transcript, prompt, or provider response body. `decision` is the review's own recommendation, not a Strategy Office/CEO action taken — this object records what the Strategy Review Agent concluded, never that anyone has acted on it.",
+  "type": "object",
+  "required": [
+    "strategy_review_id",
+    "work_order_id",
+    "delivery_report_id",
+    "milestone",
+    "reviewed_at",
+    "reviewer",
+    "decision",
+    "criteria",
+    "repository_evidence",
+    "verification",
+    "risks",
+    "correction",
+    "ceo_escalation",
+    "summary",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "strategy_review_id": { "type": "string", "pattern": "^esr_[A-Za-z0-9]+$" },
+    "work_order_id": { "type": "string", "pattern": "^wo_[A-Za-z0-9]+$" },
+    "delivery_report_id": { "type": "string", "pattern": "^dr_[A-Za-z0-9]+$" },
+    "milestone": { "type": "string", "pattern": "^DC-003-I[0-9]+(\\.[0-9]+)?$" },
+    "reviewed_at": { "type": "string", "format": "date-time" },
+    "reviewer": {
+      "type": "object",
+      "required": ["type", "provider"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "strategy-review-agent" },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free-form, not a closed enum — mirrors bridge-transport-record.schema.json's own free-form transport_type, so a future real provider needs no schema change. Only 'mock' and 'openai' are produced today."
+        }
+      }
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["approved", "correction_required", "ceo_decision_required", "rejected"]
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/criterionAssessment" }
+    },
+    "repository_evidence": { "$ref": "#/$defs/repositoryEvidence" },
+    "verification": { "$ref": "#/$defs/verificationSummary" },
+    "risks": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+    "correction": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/correctionSpecification" }]
+    },
+    "ceo_escalation": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/ceoEscalation" }]
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "notes": { "type": ["string", "null"], "maxLength": 2000 }
+  },
+  "$defs": {
+    "evidenceEntry": {
+      "type": "object",
+      "required": ["source", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["independent-verification", "delivery-report", "work-order", "bridge-transport"],
+          "description": "independent-verification: the collector re-checked this itself (git state, a fresh test/fixture run). delivery-report: taken from the Delivery Report's own self-reported evidence, not independently re-verified at review time. work-order: read directly from the Work Order. bridge-transport: read from transport history."
+        },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "criterionAssessment": {
+      "type": "object",
+      "required": ["criterion_index", "criterion", "result", "evidence", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "criterion_index": { "type": "integer", "minimum": 1 },
+        "criterion": { "type": "string", "minLength": 1 },
+        "result": { "type": "string", "enum": ["pass", "fail", "insufficient_evidence", "not_applicable"] },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidenceEntry" } },
+        "reason": {
+          "type": ["string", "null"],
+          "maxLength": 500,
+          "description": "Required (non-null) for any result other than 'pass' — a passing criterion is self-explanatory from its own evidence."
+        }
+      },
+      "oneOf": [
+        { "properties": { "result": { "const": "pass" } } },
+        { "properties": { "result": { "enum": ["fail", "insufficient_evidence", "not_applicable"] }, "reason": { "type": "string", "minLength": 1 } }, "required": ["reason"] }
+      ]
+    },
+    "repositoryEvidence": {
+      "type": "object",
+      "required": ["starting_commit", "ending_commit", "branch", "working_tree", "push_status", "verifiable"],
+      "additionalProperties": false,
+      "properties": {
+        "starting_commit": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$" },
+        "ending_commit": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$" },
+        "branch": { "type": ["string", "null"] },
+        "working_tree": { "type": "string", "enum": ["clean", "dirty", "unknown"] },
+        "push_status": { "type": "string", "enum": ["pushed", "not_pushed", "not_applicable", "unknown"] },
+        "verifiable": {
+          "type": "boolean",
+          "description": "false only when the evidence collector could not independently inspect the repository at all — a mandatory CEO-escalation condition on its own."
+        }
+      }
+    },
+    "countSummary": {
+      "type": "object",
+      "required": ["status", "passed", "failed", "total", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["passed", "failed", "unknown"] },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "source": { "type": "string", "enum": ["independent-verification", "delivery-report"] }
+      }
+    },
+    "verificationSummary": {
+      "type": "object",
+      "required": ["tests", "fixtures"],
+      "additionalProperties": false,
+      "properties": {
+        "tests": { "$ref": "#/$defs/countSummary" },
+        "fixtures": { "$ref": "#/$defs/countSummary" }
+      }
+    },
+    "correctionSpecification": {
+      "type": "object",
+      "required": ["failed_criteria", "required_outcome", "prohibited_scope_expansion", "verification_required"],
+      "additionalProperties": false,
+      "properties": {
+        "failed_criteria": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 } },
+        "required_outcome": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "prohibited_scope_expansion": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "verification_required": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    },
+    "ceoEscalation": {
+      "type": "object",
+      "required": ["decision_required", "reason", "safe_options", "default_safe_action"],
+      "additionalProperties": false,
+      "properties": {
+        "decision_required": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "safe_options": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+        "default_safe_action": { "type": "string", "const": "stop" }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": { "decision": { "const": "approved" }, "correction": { "type": "null" }, "ceo_escalation": { "type": "null" } },
+      "required": ["decision", "correction", "ceo_escalation"]
+    },
+    {
+      "properties": { "decision": { "const": "correction_required" }, "correction": { "$ref": "#/$defs/correctionSpecification" }, "ceo_escalation": { "type": "null" } },
+      "required": ["decision", "correction", "ceo_escalation"]
+    },
+    {
+      "properties": { "decision": { "const": "ceo_decision_required" }, "ceo_escalation": { "$ref": "#/$defs/ceoEscalation" } },
+      "required": ["decision", "ceo_escalation"]
+    },
+    {
+      "properties": { "decision": { "const": "rejected" }, "correction": { "type": "null" } },
+      "required": ["decision", "correction"]
+    }
+  ]
+}

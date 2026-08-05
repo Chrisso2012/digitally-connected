@@ -34,6 +34,7 @@ const APPROVED_FIXTURES = [
   ["engineeringWorkOrder", "engineering-work-order.example.json"],
   ["engineeringDeliveryReport", "engineering-delivery-report.example.json"],
   ["bridgeTransportRecord", "bridge-transport-record.example.json"],
+  ["engineeringStrategyReview", "engineering-strategy-review.example.json"],
   ["controlCentre", "control-centre.example.json"],
 ];
 

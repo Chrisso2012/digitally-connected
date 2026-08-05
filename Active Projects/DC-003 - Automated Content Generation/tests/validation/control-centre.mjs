@@ -76,6 +76,13 @@ import {
   CorruptedBridgeTransportRecordError,
   BridgeTransportPersistenceError,
 } from "../../src/bridge-transport-errors.mjs";
+import { createLocalJsonEngineeringStrategyReviewStoreAdapter } from "../../src/local-json-engineering-strategy-review-store-adapter.mjs";
+import { createEngineeringStrategyReviewStore } from "../../src/engineering-strategy-review-store.mjs";
+import {
+  InvalidEngineeringStrategyReviewStoreAdapterError,
+  CorruptedEngineeringStrategyReviewError,
+  EngineeringStrategyReviewPersistenceError,
+} from "../../src/engineering-strategy-review-errors.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "../../src/control-centre-errors.mjs";
 
@@ -105,6 +112,9 @@ const KNOWN_ERRORS = [
   InvalidBridgeTransportStoreAdapterError,
   CorruptedBridgeTransportRecordError,
   BridgeTransportPersistenceError,
+  InvalidEngineeringStrategyReviewStoreAdapterError,
+  CorruptedEngineeringStrategyReviewError,
+  EngineeringStrategyReviewPersistenceError,
 ];
 
 // DC-003-I028/I029/I029.1 — named flags, not more positionals, so each can
@@ -116,6 +126,8 @@ const NAMED_FLAG_PREFIXES = {
   engineeringDeliveryReportsDirectory: "--engineering-delivery-reports=",
   bridgeTransportStoreDirectory: "--bridge=",
   deliveryOfficeLockDirectory: "--delivery-office-lock=",
+  strategyReviewStoreDirectory: "--strategy-review=",
+  strategyReviewLockDirectory: "--strategy-review-lock=",
 };
 
 function extractNamedFlags(args) {
@@ -139,6 +151,7 @@ function usageAndExit() {
   );
   console.error("  (append --bridge=<dir> to the dashboard command to include Bridge Transport, DC-003-I029.1)");
   console.error("  (append --delivery-office-lock=<dir> to the dashboard command to include Delivery Office lock status, DC-003-I029.2)");
+  console.error("  (append --strategy-review=<dir> [--strategy-review-lock=<dir>] to the dashboard command to include Strategy Review status, DC-003-I029.3)");
   console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
@@ -280,6 +293,23 @@ function printDeliveryOfficeSection(deliveryOffice) {
   console.log(`  Runner Availability        ${deliveryOffice.runner_availability.mechanism} (configured=${deliveryOffice.runner_availability.configured})`);
 }
 
+function printStrategyReviewSection(strategyReview) {
+  console.log("Strategy Review");
+  console.log();
+  if (strategyReview === null) {
+    console.log("  unknown (no --strategy-review=<dir> supplied)");
+    return;
+  }
+  console.log(`  Reviews Awaiting Execution  ${strategyReview.reviews_awaiting_execution ?? "unknown (no --engineering-work-orders=/--engineering-delivery-reports= supplied)"}`);
+  console.log(`  Currently Locked            ${strategyReview.review_currently_locked ?? "(none / unknown, no --strategy-review-lock=<dir> supplied)"}`);
+  console.log(`  Approved                    ${strategyReview.approved_deliveries}`);
+  console.log(`  Corrections Required        ${strategyReview.corrections_required}`);
+  console.log(`  CEO Decisions Required      ${strategyReview.ceo_decisions_required}`);
+  console.log(`  Rejected                    ${strategyReview.rejected_deliveries}`);
+  console.log(`  Latest Review               ${strategyReview.latest_review?.strategy_review_id ?? "(none)"}`);
+  console.log(`  Reviewer Availability       ${strategyReview.reviewer_availability.mechanism} (configured=${strategyReview.reviewer_availability.configured})`);
+}
+
 function printDashboard(overview) {
   console.log(RULE);
   console.log("DC-003 CONTROL CENTRE");
@@ -300,6 +330,8 @@ function printDashboard(overview) {
   printBridgeSection(overview.bridge);
   console.log();
   printDeliveryOfficeSection(overview.delivery_office);
+  console.log();
+  printStrategyReviewSection(overview.strategy_review);
 }
 
 function printJobDetail(detail) {
@@ -400,7 +432,9 @@ function buildService(
   engineeringWorkOrdersDirectory,
   engineeringDeliveryReportsDirectory,
   bridgeTransportStoreDirectory,
-  deliveryOfficeLockDirectory
+  deliveryOfficeLockDirectory,
+  strategyReviewStoreDirectory,
+  strategyReviewLockDirectory
 ) {
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir: carouselStoreDirectory }) });
   const productionMetricsStore = createProductionMetricsStore({ adapter: createLocalJsonProductionMetricsStoreAdapter({ storageDir: metricsStoreDirectory }) });
@@ -417,6 +451,9 @@ function buildService(
   const bridgeTransportStore = bridgeTransportStoreDirectory
     ? createBridgeTransportStore({ adapter: createLocalJsonBridgeTransportStoreAdapter({ storageDir: bridgeTransportStoreDirectory }) })
     : null;
+  const strategyReviewStore = strategyReviewStoreDirectory
+    ? createEngineeringStrategyReviewStore({ adapter: createLocalJsonEngineeringStrategyReviewStoreAdapter({ storageDir: strategyReviewStoreDirectory }) })
+    : null;
   return createControlCentreService({
     finishedCarouselStore,
     productionMetricsStore,
@@ -426,6 +463,8 @@ function buildService(
     engineeringDeliveryReportStore,
     bridgeTransportStore,
     deliveryOfficeLockDir: deliveryOfficeLockDirectory ?? null,
+    strategyReviewStore,
+    strategyReviewLockDir: strategyReviewLockDirectory ?? null,
     exportsRootDir: exportsRootDir ?? null,
   });
 }
@@ -439,6 +478,8 @@ const {
     engineeringDeliveryReportsDirectory,
     bridgeTransportStoreDirectory,
     deliveryOfficeLockDirectory,
+    strategyReviewStoreDirectory,
+    strategyReviewLockDirectory,
   },
   rest,
 } = extractNamedFlags(rawRest);
@@ -456,7 +497,9 @@ try {
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
       bridgeTransportStoreDirectory,
-      deliveryOfficeLockDirectory
+      deliveryOfficeLockDirectory,
+      strategyReviewStoreDirectory,
+      strategyReviewLockDirectory
     );
     printDashboard(service.getOverview());
   } else if (subcommand === "health") {
@@ -471,7 +514,9 @@ try {
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
       bridgeTransportStoreDirectory,
-      deliveryOfficeLockDirectory
+      deliveryOfficeLockDirectory,
+      strategyReviewStoreDirectory,
+      strategyReviewLockDirectory
     );
     printHealthSection(service.getOverview().health);
   } else if (subcommand === "jobs") {
@@ -486,7 +531,9 @@ try {
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
       bridgeTransportStoreDirectory,
-      deliveryOfficeLockDirectory
+      deliveryOfficeLockDirectory,
+      strategyReviewStoreDirectory,
+      strategyReviewLockDirectory
     );
     printRecentJobsSection(service.getOverview().recent_jobs);
   } else if (subcommand === "activity") {
@@ -501,7 +548,9 @@ try {
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
       bridgeTransportStoreDirectory,
-      deliveryOfficeLockDirectory
+      deliveryOfficeLockDirectory,
+      strategyReviewStoreDirectory,
+      strategyReviewLockDirectory
     );
     printRecentActivitySection(service.getOverview().recent_activity);
   } else if (subcommand === "job") {
@@ -516,7 +565,9 @@ try {
       engineeringWorkOrdersDirectory,
       engineeringDeliveryReportsDirectory,
       bridgeTransportStoreDirectory,
-      deliveryOfficeLockDirectory
+      deliveryOfficeLockDirectory,
+      strategyReviewStoreDirectory,
+      strategyReviewLockDirectory
     );
     printJobDetail(service.getJobDetail(carouselId));
   } else {

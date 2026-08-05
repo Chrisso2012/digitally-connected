@@ -445,3 +445,49 @@ test("dashboard with Engineering flags but no --delivery-office-lock= reports lo
     assert.match(result.stdout, /Lock Status\s+unknown/);
   });
 });
+
+// --- Strategy Review (DC-003-I029.3) ---------------------------------------
+
+test("dashboard omits --strategy-review=<dir> by default and reports Strategy Review as unknown", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Strategy Review\n\n\s+unknown/);
+  });
+});
+
+test("dashboard --strategy-review=<dir> shows real decision counts end to end", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir, base }) => {
+    const strategyReviewDir = path.join(base, "strategy-reviews");
+
+    const seedScript = `
+      import { createLocalJsonEngineeringStrategyReviewStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-engineering-strategy-review-store-adapter.mjs"))};
+      import { createEngineeringStrategyReviewStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-strategy-review-store.mjs"))};
+      import { createEngineeringStrategyReview } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-strategy-review.mjs"))};
+
+      const store = createEngineeringStrategyReviewStore({ adapter: createLocalJsonEngineeringStrategyReviewStoreAdapter({ storageDir: ${JSON.stringify(strategyReviewDir)} }) });
+      store.save(createEngineeringStrategyReview({
+        workOrderId: "wo_clidashboard0001",
+        deliveryReportId: "dr_clidashboard0001",
+        workOrderReviewCriteria: ["c1"],
+        milestone: "DC-003-I029.3",
+        reviewerProvider: "mock",
+        decision: "approved",
+        criteria: [{ criterionIndex: 1, criterion: "c1", result: "pass", evidence: [], reason: null }],
+        repositoryEvidence: { startingCommit: "aaa1111", endingCommit: "bbb2222", branch: "main", workingTree: "clean", pushStatus: "not_applicable", verifiable: true },
+        verification: {
+          tests: { status: "passed", passed: 1, failed: 0, total: 1, source: "independent-verification" },
+          fixtures: { status: "passed", passed: 1, failed: 0, total: 1, source: "independent-verification" },
+        },
+        summary: "ok",
+      }));
+    `;
+    const seed = spawnSync(process.execPath, ["--input-type=module", "-e", seedScript], { encoding: "utf-8", env: CLEAN_ENV });
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir, `--strategy-review=${strategyReviewDir}`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Approved\s+1/);
+    assert.match(result.stdout, /Latest Review\s+esr_/);
+  });
+});

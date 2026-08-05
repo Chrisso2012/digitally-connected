@@ -42,6 +42,7 @@ const REQUIRED_SCHEMA_VERSION_KEYS = [
   "engineering_work_order",
   "engineering_delivery_report",
   "bridge_transport_record",
+  "engineering_strategy_review",
 ];
 // Deliberately loose substring match — this is a safety net against obvious
 // mistakes (pasting a real key into config), not a secrets scanner.

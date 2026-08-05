@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://digitallyconnected.net/schemas/dc-003/bridge-transport-record.schema.json",
   "title": "Bridge Transport Record",
-  "description": "DC-003-I029.1 — one immutable transport event: one Engineering Work Order moved out, or one Engineering Delivery Report moved in. Transport is intentionally dumb — this record proves a move happened and how, never why. `transport_type` is deliberately free-form (not a closed enum) since Bridge Transport must remain provider-neutral and support a future real transport provider without a schema change (mirrors publisher-result.schema.json's own free-form `provider` field for the same reason) — only 'mock' is ever produced by this milestone. `object_type`/`object_id`/`direction` are tied together: an Engineering Work Order only ever travels outgoing (Strategy Office -> Delivery Office); an Engineering Delivery Report only ever travels incoming (Delivery Office -> Strategy Office) — matching this milestone's own architecture diagram, not an invented rule.",
+  "description": "DC-003-I029.1, extended by DC-003-I029.3 — one immutable transport event: one Engineering Work Order moved out, one Engineering Delivery Report moved in, or (as of I029.3) one Engineering Strategy Review moved out. Transport is intentionally dumb — this record proves a move happened and how, never why. `transport_type` is deliberately free-form (not a closed enum) since Bridge Transport must remain provider-neutral and support a future real transport provider without a schema change (mirrors publisher-result.schema.json's own free-form `provider` field for the same reason) — only 'mock' is ever produced. `object_type`/`object_id`/`direction` are tied together, direction always relative to the Strategy Office: an Engineering Work Order only ever travels outgoing (Strategy Office -> Delivery Office); an Engineering Delivery Report only ever travels incoming (Delivery Office -> Strategy Office); an Engineering Strategy Review only ever travels outgoing (Strategy Office -> Delivery Office or the CEO escalation path) — matching each milestone's own architecture diagram, not an invented rule. This I029.3 addition is purely additive — no existing field, enum value, or behaviour for engineering_work_order/engineering_delivery_report changed.",
   "type": "object",
   "required": [
     "transport_record_id",
@@ -20,7 +20,7 @@
   "additionalProperties": false,
   "properties": {
     "transport_record_id": { "type": "string", "pattern": "^bt_[A-Za-z0-9]+$" },
-    "object_type": { "type": "string", "enum": ["engineering_work_order", "engineering_delivery_report"] },
+    "object_type": { "type": "string", "enum": ["engineering_work_order", "engineering_delivery_report", "engineering_strategy_review"] },
     "object_id": { "type": "string" },
     "direction": { "type": "string", "enum": ["outgoing", "incoming"] },
     "transport_type": {
@@ -56,6 +56,13 @@
         "object_type": { "const": "engineering_delivery_report" },
         "object_id": { "type": "string", "pattern": "^dr_[A-Za-z0-9]+$" },
         "direction": { "const": "incoming" }
+      }
+    },
+    {
+      "properties": {
+        "object_type": { "const": "engineering_strategy_review" },
+        "object_id": { "type": "string", "pattern": "^esr_[A-Za-z0-9]+$" },
+        "direction": { "const": "outgoing" }
       }
     }
   ]

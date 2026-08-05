@@ -11,6 +11,9 @@ import { createLocalJsonEngineeringDeliveryReportStoreAdapter } from "../../src/
 import { createEngineeringDeliveryReport } from "../../src/engineering-delivery-report.mjs";
 import { createEngineeringWorkManagementService } from "../../src/engineering-work-management-service.mjs";
 import { InvalidEngineeringWorkManagementDependenciesError } from "../../src/engineering-work-management-errors.mjs";
+import { createEngineeringStrategyReviewStore } from "../../src/engineering-strategy-review-store.mjs";
+import { createLocalJsonEngineeringStrategyReviewStoreAdapter } from "../../src/local-json-engineering-strategy-review-store-adapter.mjs";
+import { createEngineeringStrategyReview } from "../../src/engineering-strategy-review.mjs";
 
 function withTempDirs(fn) {
   const workOrderDir = mkdtempSync(path.join(tmpdir(), "dc003-eng-service-wo-"));
@@ -204,4 +207,105 @@ test("this service never imports node:fs directly and never mutates either store
     service.listDeliveryReports();
     service.getStatus();
     // No assertion needed beyond "did not throw" — save() would have thrown if called.
+  }));
+
+// --- DC-003-I029.3 — strategyReviewStore integration (additive) -----------
+
+function withThreeDirs(fn) {
+  const workOrderDir = mkdtempSync(path.join(tmpdir(), "dc003-eng-service-wo-"));
+  const deliveryReportDir = mkdtempSync(path.join(tmpdir(), "dc003-eng-service-dr-"));
+  const strategyReviewDir = mkdtempSync(path.join(tmpdir(), "dc003-eng-service-sr-"));
+  try {
+    return fn(workOrderDir, deliveryReportDir, strategyReviewDir);
+  } finally {
+    rmSync(workOrderDir, { recursive: true, force: true });
+    rmSync(deliveryReportDir, { recursive: true, force: true });
+    rmSync(strategyReviewDir, { recursive: true, force: true });
+  }
+}
+
+function buildStrategyReviewStore(strategyReviewDir) {
+  return createEngineeringStrategyReviewStore({ adapter: createLocalJsonEngineeringStrategyReviewStoreAdapter({ storageDir: strategyReviewDir }) });
+}
+
+function buildStrategyReview(overrides = {}, options = {}) {
+  return createEngineeringStrategyReview(
+    {
+      workOrderId: "wo_placeholder00001",
+      deliveryReportId: "dr_placeholder00001",
+      workOrderReviewCriteria: ["c1"],
+      milestone: "DC-003-I029",
+      reviewerProvider: "mock",
+      decision: "approved",
+      criteria: [{ criterionIndex: 1, criterion: "c1", result: "pass", evidence: [], reason: null }],
+      repositoryEvidence: { startingCommit: "aaa1111", endingCommit: "bbb2222", branch: "main", workingTree: "clean", pushStatus: "not_applicable", verifiable: true },
+      verification: {
+        tests: { status: "passed", passed: 1, failed: 0, total: 1, source: "independent-verification" },
+        fixtures: { status: "passed", passed: 1, failed: 0, total: 1, source: "independent-verification" },
+      },
+      summary: "ok",
+      ...overrides,
+    },
+    options
+  );
+}
+
+test("without strategyReviewStore, derived_state 'Awaiting Review' is completely unchanged (backward compatible)", () =>
+  withTempDirs((workOrderDir, deliveryReportDir) => {
+    const { workOrderStore, deliveryReportStore } = buildStores(workOrderDir, deliveryReportDir);
+    const workOrder = workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_ewmtest0000001" }));
+    deliveryReportStore.save(buildReport({ workOrderId: workOrder.work_order_id }, { idGenerator: () => "dr_ewmtest0000001" }));
+    const service = createEngineeringWorkManagementService({ workOrderStore, deliveryReportStore });
+    assert.equal(service.getWorkOrder(workOrder.work_order_id).derived_state, "Awaiting Review");
+    assert.equal(service.getWorkOrder(workOrder.work_order_id).latest_strategy_review, null);
+  }));
+
+test("with strategyReviewStore, derived_state reflects the latest review's own decision", () =>
+  withThreeDirs((workOrderDir, deliveryReportDir, strategyReviewDir) => {
+    const { workOrderStore, deliveryReportStore } = buildStores(workOrderDir, deliveryReportDir);
+    const strategyReviewStore = buildStrategyReviewStore(strategyReviewDir);
+    const workOrder = workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_ewmtest0000002" }));
+    const report = deliveryReportStore.save(buildReport({ workOrderId: workOrder.work_order_id }, { idGenerator: () => "dr_ewmtest0000002" }));
+    strategyReviewStore.save(
+      buildStrategyReview({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id, decision: "correction_required", correction: { failedCriteria: [1], requiredOutcome: "x", prohibitedScopeExpansion: "y", verificationRequired: "z" }, criteria: [{ criterionIndex: 1, criterion: "c1", result: "fail", evidence: [], reason: "failed" }] })
+    );
+
+    const service = createEngineeringWorkManagementService({ workOrderStore, deliveryReportStore, strategyReviewStore });
+    assert.equal(service.getWorkOrder(workOrder.work_order_id).derived_state, "Correction Required");
+    assert.equal(service.getWorkOrder(workOrder.work_order_id).latest_strategy_review.decision, "correction_required");
+  }));
+
+test("getStatus() reports null review counts when no strategyReviewStore is supplied", () =>
+  withTempDirs((workOrderDir, deliveryReportDir) => {
+    const { workOrderStore, deliveryReportStore } = buildStores(workOrderDir, deliveryReportDir);
+    const service = createEngineeringWorkManagementService({ workOrderStore, deliveryReportStore });
+    const status = service.getStatus();
+    assert.equal(status.approved_by_review, null);
+    assert.equal(status.latest_strategy_review, null);
+  }));
+
+test("getStatus() reports real review counts and the latest review when strategyReviewStore is supplied", () =>
+  withThreeDirs((workOrderDir, deliveryReportDir, strategyReviewDir) => {
+    const { workOrderStore, deliveryReportStore } = buildStores(workOrderDir, deliveryReportDir);
+    const strategyReviewStore = buildStrategyReviewStore(strategyReviewDir);
+    const workOrder = workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_ewmtest0000003" }));
+    const report = deliveryReportStore.save(buildReport({ workOrderId: workOrder.work_order_id }, { idGenerator: () => "dr_ewmtest0000003" }));
+    const review = strategyReviewStore.save(
+      buildStrategyReview({ workOrderId: workOrder.work_order_id, deliveryReportId: report.delivery_report_id }, { idGenerator: () => "esr_ewmtest0000001" })
+    );
+
+    const service = createEngineeringWorkManagementService({ workOrderStore, deliveryReportStore, strategyReviewStore });
+    const status = service.getStatus();
+    assert.equal(status.approved_by_review, 1);
+    assert.equal(status.correction_required, 0);
+    assert.equal(status.latest_strategy_review.strategy_review_id, review.strategy_review_id);
+  }));
+
+test("throws InvalidEngineeringWorkManagementDependenciesError for a strategyReviewStore missing required methods", () =>
+  withTempDirs((workOrderDir, deliveryReportDir) => {
+    const { workOrderStore, deliveryReportStore } = buildStores(workOrderDir, deliveryReportDir);
+    assert.throws(
+      () => createEngineeringWorkManagementService({ workOrderStore, deliveryReportStore, strategyReviewStore: { name: "not-real" } }),
+      InvalidEngineeringWorkManagementDependenciesError
+    );
   }));
