@@ -31,6 +31,8 @@ const APPROVED_FIXTURES = [
   ["publisherResult", "publisher-result.example.json"],
   ["socialPublishingManifest", "social-publishing-manifest.example.json"],
   ["socialAnalyticsSnapshot", "social-analytics-snapshot.example.json"],
+  ["engineeringWorkOrder", "engineering-work-order.example.json"],
+  ["engineeringDeliveryReport", "engineering-delivery-report.example.json"],
   ["controlCentre", "control-centre.example.json"],
 ];
 

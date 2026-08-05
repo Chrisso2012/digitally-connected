@@ -446,3 +446,42 @@ export {
   LinkedInAnalyticsRequestError,
   LinkedInAnalyticsMalformedResponseError,
 } from "./linkedin-analytics-errors.mjs";
+
+// DC-003-I029 — Engineering Work Management: structured Strategy Office
+// <-> Delivery Office engineering objects (Work Order, Delivery Report),
+// replacing informal markdown briefs/delivery summaries. No networking,
+// no Claude/ChatGPT/MCP/n8n integration — defines the engineering
+// language a future Bridge Layer will exchange. See "Engineering Work
+// Management (DC-003-I029)" in the README.
+export { createEngineeringWorkOrder } from "./engineering-work-order.mjs";
+export { assertValidEngineeringWorkOrderStoreAdapter } from "./engineering-work-order-store-adapter.mjs";
+export { createLocalJsonEngineeringWorkOrderStoreAdapter } from "./local-json-engineering-work-order-store-adapter.mjs";
+export { createEngineeringWorkOrderStore } from "./engineering-work-order-store.mjs";
+export {
+  InvalidEngineeringWorkOrderInputError,
+  EngineeringWorkOrderValidationError,
+  InvalidEngineeringWorkOrderStoreAdapterError,
+  InvalidEngineeringWorkOrderIdentifierError,
+  EngineeringWorkOrderAlreadyExistsError,
+  EngineeringWorkOrderNotFoundError,
+  CorruptedEngineeringWorkOrderError,
+  EngineeringWorkOrderPersistenceError,
+} from "./engineering-work-order-errors.mjs";
+
+export { createEngineeringDeliveryReport } from "./engineering-delivery-report.mjs";
+export { assertValidEngineeringDeliveryReportStoreAdapter } from "./engineering-delivery-report-store-adapter.mjs";
+export { createLocalJsonEngineeringDeliveryReportStoreAdapter } from "./local-json-engineering-delivery-report-store-adapter.mjs";
+export { createEngineeringDeliveryReportStore } from "./engineering-delivery-report-store.mjs";
+export {
+  InvalidEngineeringDeliveryReportInputError,
+  EngineeringDeliveryReportValidationError,
+  InvalidEngineeringDeliveryReportStoreAdapterError,
+  InvalidEngineeringDeliveryReportIdentifierError,
+  EngineeringDeliveryReportAlreadyExistsError,
+  EngineeringDeliveryReportNotFoundError,
+  CorruptedEngineeringDeliveryReportError,
+  EngineeringDeliveryReportPersistenceError,
+} from "./engineering-delivery-report-errors.mjs";
+
+export { createEngineeringWorkManagementService } from "./engineering-work-management-service.mjs";
+export { InvalidEngineeringWorkManagementDependenciesError } from "./engineering-work-management-errors.mjs";

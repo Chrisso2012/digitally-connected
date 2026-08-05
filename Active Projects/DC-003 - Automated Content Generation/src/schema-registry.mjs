@@ -56,11 +56,18 @@ const SCHEMA_FILES = {
   // controlCentre below, since control-centre.schema.json $refs it by $id
   // (the Job Detail's own Social Performance section embeds it).
   socialAnalyticsSnapshot: "social-analytics-snapshot.schema.json",
-  // DC-003-I024, extended by DC-003-I028 — the Control Centre's in-memory
-  // read model. Must be compiled AFTER
-  // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot
+  // DC-003-I029 — structured Strategy Office <-> Delivery Office
+  // engineering objects, replacing informal markdown briefs/delivery
+  // summaries. Must be registered BEFORE controlCentre below, since
+  // control-centre.schema.json $refs the delivery report by $id (the
+  // Engineering section embeds the latest one).
+  engineeringWorkOrder: "engineering-work-order.schema.json",
+  engineeringDeliveryReport: "engineering-delivery-report.schema.json",
+  // DC-003-I024, extended by DC-003-I028/I029 — the Control Centre's
+  // in-memory read model. Must be compiled AFTER
+  // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport
   // above (object key order = compile order in validator.mjs) since it
-  // $refs all four by $id.
+  // $refs all of them by $id.
   controlCentre: "control-centre.schema.json",
 };
 

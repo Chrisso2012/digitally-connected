@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -15,7 +15,8 @@
         "health": { "$ref": "#/$defs/healthReport" },
         "dashboard": { "$ref": "#/$defs/dashboardSummary" },
         "recent_jobs": { "type": "array", "items": { "$ref": "#/$defs/jobSummary" } },
-        "recent_activity": { "type": "array", "items": { "$ref": "#/$defs/activityEntry" } }
+        "recent_activity": { "type": "array", "items": { "$ref": "#/$defs/activityEntry" } },
+        "engineering": { "$ref": "#/$defs/engineeringSummary" }
       }
     },
     {
@@ -288,6 +289,42 @@
         "publishing": { "$ref": "#/$defs/jobPublishing" },
         "social_performance": { "$ref": "#/$defs/socialPerformance" }
       }
+    },
+    "engineeringSummary": {
+      "description": "DC-003-I029 — sourced entirely from the Engineering Work Order Store and Engineering Delivery Report Store, read-only, no store ever modified by the Control Centre. Read-only, additive, optional like `socialPerformance`/`social_analytics` (DC-003-I028) — null when no Engineering stores were supplied, never a guessed/zero value.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["current_milestone", "last_completed_milestone", "outstanding_work_orders", "awaiting_review", "repository_status", "latest_delivery_report"],
+          "additionalProperties": false,
+          "properties": {
+            "current_milestone": { "type": ["string", "null"] },
+            "last_completed_milestone": { "type": ["string", "null"] },
+            "outstanding_work_orders": { "type": "integer", "minimum": 0 },
+            "awaiting_review": { "type": "integer", "minimum": 0 },
+            "repository_status": {
+              "description": "The latest Delivery Report's own commit/push_status/working_tree — never a live `git` call. null only when no Delivery Report has ever been recorded.",
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["commit", "push_status", "working_tree"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "commit": { "type": ["string", "null"] },
+                    "push_status": { "type": "string", "enum": ["pushed", "not_pushed", "not_applicable"] },
+                    "working_tree": { "type": "string", "enum": ["clean", "dirty"] }
+                  }
+                }
+              ]
+            },
+            "latest_delivery_report": {
+              "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/engineering-delivery-report.schema.json" }]
+            }
+          }
+        }
+      ]
     }
   }
 }

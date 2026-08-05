@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/engineering-delivery-report.schema.json",
+  "title": "Engineering Delivery Report",
+  "description": "DC-003-I029 — one completed engineering task, authored by the Delivery Office. Replaces an informal markdown delivery summary with a structured, permanent repository object. Captures engineering EVIDENCE only (test/fixture counts, files touched, commit/push/working-tree state, repository findings) — never conversational text, never a transcript, never a prompt. `status` reuses `finished-carousel.schema.json`'s own `carousel_overall_statuses` vocabulary (completed/partial/failed) rather than inventing a parallel one.",
+  "type": "object",
+  "required": [
+    "delivery_report_id",
+    "work_order_id",
+    "milestone",
+    "status",
+    "commit",
+    "push_status",
+    "working_tree",
+    "tests",
+    "fixtures",
+    "files_created",
+    "files_modified",
+    "repository_findings",
+    "compatibility",
+    "live_requests",
+    "follow_up_required",
+    "delivery_timestamp",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "delivery_report_id": { "type": "string", "pattern": "^dr_[A-Za-z0-9]+$" },
+    "work_order_id": {
+      "type": "string",
+      "pattern": "^wo_[A-Za-z0-9]+$",
+      "description": "The Engineering Work Order this delivery answers. Referential integrity is a store/service-layer concern, not enforced by this schema."
+    },
+    "milestone": { "type": "string", "pattern": "^DC-003-I[0-9]+(\\.[0-9]+)?$" },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed"],
+      "description": "completed: every review criterion was met. partial: some, not all. failed: the task did not deliver. This is the DELIVERY's own claim about itself — it is never 'approved' (Strategy Office review is separate, external evidence this object does not carry — see README 'Status Model')."
+    },
+    "commit": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "The commit this delivery produced. Null only for a 'failed' delivery that produced no commit."
+    },
+    "push_status": { "type": "string", "enum": ["pushed", "not_pushed", "not_applicable"] },
+    "working_tree": { "type": "string", "enum": ["clean", "dirty"] },
+    "tests": { "$ref": "#/$defs/countSummary" },
+    "fixtures": { "$ref": "#/$defs/countSummary" },
+    "files_created": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "files_modified": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "repository_findings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "What the required repository investigation actually found — genuine gaps, reused patterns, confirmed non-duplication. Not a narrative — one finding per entry."
+    },
+    "compatibility": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Modules/milestones explicitly confirmed unchanged by this delivery, e.g. \"I008-I012 unchanged\"."
+    },
+    "live_requests": {
+      "type": "object",
+      "required": ["occurred", "details"],
+      "additionalProperties": false,
+      "properties": {
+        "occurred": { "type": "boolean" },
+        "details": { "type": ["string", "null"] }
+      }
+    },
+    "follow_up_required": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "delivery_timestamp": { "type": "string", "format": "date-time" },
+    "notes": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "countSummary": {
+      "type": "object",
+      "required": ["passed", "failed", "total"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "status": { "const": "completed" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+        "push_status": { "enum": ["pushed", "not_applicable"] }
+      },
+      "required": ["status", "commit", "push_status"]
+    },
+    {
+      "properties": { "status": { "enum": ["partial", "failed"] } },
+      "required": ["status"]
+    }
+  ]
+}

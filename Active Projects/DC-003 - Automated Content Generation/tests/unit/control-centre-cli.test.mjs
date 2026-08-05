@@ -292,3 +292,68 @@ test("job <carouselId> --social-analytics=<dir> shows real Social Performance da
     assert.match(result.stdout, /linkedin\s+collected=false/);
   });
 });
+
+// --- Engineering (DC-003-I029) --------------------------------------------
+
+test("dashboard omits the engineering flags by default and reports Engineering as unknown", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir }) => {
+    const result = runCli("dashboard", carouselDir, metricsDir, publisherResultDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Engineering\n\n\s+unknown/);
+  });
+});
+
+test("dashboard --engineering-work-orders=<dir> --engineering-delivery-reports=<dir> shows real Engineering data end to end", () => {
+  withTempDirs(({ carouselDir, metricsDir, publisherResultDir, base }) => {
+    const workOrderDir = path.join(base, "engineering-work-orders");
+    const deliveryReportDir = path.join(base, "engineering-delivery-reports");
+
+    const recordScript = `
+      import { createLocalJsonEngineeringWorkOrderStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-engineering-work-order-store-adapter.mjs"))};
+      import { createEngineeringWorkOrderStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-work-order-store.mjs"))};
+      import { createEngineeringWorkOrder } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-work-order.mjs"))};
+      import { createLocalJsonEngineeringDeliveryReportStoreAdapter } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "local-json-engineering-delivery-report-store-adapter.mjs"))};
+      import { createEngineeringDeliveryReportStore } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-delivery-report-store.mjs"))};
+      import { createEngineeringDeliveryReport } from ${JSON.stringify(path.join(PROJECT_ROOT, "src", "engineering-delivery-report.mjs"))};
+
+      const workOrderStore = createEngineeringWorkOrderStore({ adapter: createLocalJsonEngineeringWorkOrderStoreAdapter({ storageDir: ${JSON.stringify(workOrderDir)} }) });
+      const workOrder = workOrderStore.save(createEngineeringWorkOrder({
+        milestone: "DC-003-I029",
+        title: "Engineering Work Management",
+        objective: "Formalise Strategy Office <-> Delivery Office communication.",
+        reviewCriteria: ["Immutable objects"],
+        status: "ready",
+        approvedAt: "2026-08-05T10:05:00.000Z",
+      }));
+
+      const deliveryReportStore = createEngineeringDeliveryReportStore({ adapter: createLocalJsonEngineeringDeliveryReportStoreAdapter({ storageDir: ${JSON.stringify(deliveryReportDir)} }) });
+      deliveryReportStore.save(createEngineeringDeliveryReport({
+        workOrderId: workOrder.work_order_id,
+        milestone: "DC-003-I029",
+        status: "completed",
+        commit: "7d88509",
+        pushStatus: "pushed",
+        workingTree: "clean",
+        tests: { passed: 1300, failed: 0, total: 1300 },
+        fixtures: { passed: 17, failed: 0, total: 17 },
+        liveRequests: { occurred: false, details: null },
+      }));
+    `;
+    const seed = spawnSync(process.execPath, ["--input-type=module", "-e", recordScript], { encoding: "utf-8", env: CLEAN_ENV });
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const result = runCli(
+      "dashboard",
+      carouselDir,
+      metricsDir,
+      publisherResultDir,
+      `--engineering-work-orders=${workOrderDir}`,
+      `--engineering-delivery-reports=${deliveryReportDir}`
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Current Milestone\s+DC-003-I029/);
+    assert.match(result.stdout, /Last Completed Milestone\s+DC-003-I029/);
+    assert.match(result.stdout, /Awaiting Review\s+1/);
+    assert.match(result.stdout, /commit=7d88509 push=pushed tree=clean/);
+  });
+});

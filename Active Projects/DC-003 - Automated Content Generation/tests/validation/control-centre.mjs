@@ -55,6 +55,20 @@ import {
   CorruptedSocialAnalyticsSnapshotError,
   SocialAnalyticsPersistenceError,
 } from "../../src/social-analytics-errors.mjs";
+import { createLocalJsonEngineeringWorkOrderStoreAdapter } from "../../src/local-json-engineering-work-order-store-adapter.mjs";
+import { createEngineeringWorkOrderStore } from "../../src/engineering-work-order-store.mjs";
+import {
+  InvalidEngineeringWorkOrderStoreAdapterError,
+  CorruptedEngineeringWorkOrderError,
+  EngineeringWorkOrderPersistenceError,
+} from "../../src/engineering-work-order-errors.mjs";
+import { createLocalJsonEngineeringDeliveryReportStoreAdapter } from "../../src/local-json-engineering-delivery-report-store-adapter.mjs";
+import { createEngineeringDeliveryReportStore } from "../../src/engineering-delivery-report-store.mjs";
+import {
+  InvalidEngineeringDeliveryReportStoreAdapterError,
+  CorruptedEngineeringDeliveryReportError,
+  EngineeringDeliveryReportPersistenceError,
+} from "../../src/engineering-delivery-report-errors.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "../../src/control-centre-errors.mjs";
 
@@ -75,16 +89,32 @@ const KNOWN_ERRORS = [
   InvalidSocialAnalyticsStoreAdapterError,
   CorruptedSocialAnalyticsSnapshotError,
   SocialAnalyticsPersistenceError,
+  InvalidEngineeringWorkOrderStoreAdapterError,
+  CorruptedEngineeringWorkOrderError,
+  EngineeringWorkOrderPersistenceError,
+  InvalidEngineeringDeliveryReportStoreAdapterError,
+  CorruptedEngineeringDeliveryReportError,
+  EngineeringDeliveryReportPersistenceError,
 ];
 
-// DC-003-I028 — a named flag, not another positional, so it can be
+// DC-003-I028/I029 — named flags, not more positionals, so each can be
 // supplied independently of the already-optional [exportsRootDir]
 // positional without any ordering ambiguity.
-function extractSocialAnalyticsFlag(args) {
-  const prefix = "--social-analytics=";
-  const flagArg = args.find((a) => a.startsWith(prefix));
-  const rest = args.filter((a) => !a.startsWith(prefix));
-  return { socialAnalyticsStoreDirectory: flagArg ? flagArg.slice(prefix.length) : null, rest };
+const NAMED_FLAG_PREFIXES = {
+  socialAnalyticsStoreDirectory: "--social-analytics=",
+  engineeringWorkOrdersDirectory: "--engineering-work-orders=",
+  engineeringDeliveryReportsDirectory: "--engineering-delivery-reports=",
+};
+
+function extractNamedFlags(args) {
+  const flags = {};
+  let rest = args;
+  for (const [key, prefix] of Object.entries(NAMED_FLAG_PREFIXES)) {
+    const flagArg = rest.find((a) => a.startsWith(prefix));
+    flags[key] = flagArg ? flagArg.slice(prefix.length) : null;
+    rest = rest.filter((a) => !a.startsWith(prefix));
+  }
+  return { flags, rest };
 }
 
 const RULE = "=".repeat(50);
@@ -92,6 +122,9 @@ const RULE = "=".repeat(50);
 function usageAndExit() {
   console.error("Usage:");
   console.error("  (append --social-analytics=<dir> to any command below to include Social Performance, DC-003-I028)");
+  console.error(
+    "  (append --engineering-work-orders=<dir> --engineering-delivery-reports=<dir> to the dashboard command to include Engineering, DC-003-I029)"
+  );
   console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
@@ -184,6 +217,23 @@ function printRecentActivitySection(entries) {
   }
 }
 
+function printEngineeringSection(engineering) {
+  console.log("Engineering");
+  console.log();
+  if (engineering === null) {
+    console.log("  unknown (no --engineering-work-orders=<dir> --engineering-delivery-reports=<dir> supplied)");
+    return;
+  }
+  console.log(`  Current Milestone          ${engineering.current_milestone ?? "(none)"}`);
+  console.log(`  Last Completed Milestone   ${engineering.last_completed_milestone ?? "(none)"}`);
+  console.log(`  Outstanding Work Orders    ${engineering.outstanding_work_orders}`);
+  console.log(`  Awaiting Review            ${engineering.awaiting_review}`);
+  console.log(
+    `  Repository Status          ${engineering.repository_status ? `commit=${engineering.repository_status.commit} push=${engineering.repository_status.push_status} tree=${engineering.repository_status.working_tree}` : "(no delivery reports yet)"}`
+  );
+  console.log(`  Latest Delivery Report     ${engineering.latest_delivery_report?.delivery_report_id ?? "(none)"}`);
+}
+
 function printDashboard(overview) {
   console.log(RULE);
   console.log("DC-003 CONTROL CENTRE");
@@ -198,6 +248,8 @@ function printDashboard(overview) {
   printRecentJobsSection(overview.recent_jobs);
   console.log();
   printRecentActivitySection(overview.recent_activity);
+  console.log();
+  printEngineeringSection(overview.engineering);
 }
 
 function printJobDetail(detail) {
@@ -289,51 +341,110 @@ function printSocialPerformanceBlock(socialPerformance) {
   }
 }
 
-function buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory) {
+function buildService(
+  carouselStoreDirectory,
+  metricsStoreDirectory,
+  publisherResultStoreDirectory,
+  exportsRootDir,
+  socialAnalyticsStoreDirectory,
+  engineeringWorkOrdersDirectory,
+  engineeringDeliveryReportsDirectory
+) {
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir: carouselStoreDirectory }) });
   const productionMetricsStore = createProductionMetricsStore({ adapter: createLocalJsonProductionMetricsStoreAdapter({ storageDir: metricsStoreDirectory }) });
   const publisherResultStore = createPublisherResultStore({ adapter: createLocalJsonPublisherResultStoreAdapter({ storageDir: publisherResultStoreDirectory }) });
   const socialAnalyticsStore = socialAnalyticsStoreDirectory
     ? createSocialAnalyticsStore({ adapter: createLocalJsonSocialAnalyticsStoreAdapter({ storageDir: socialAnalyticsStoreDirectory }) })
     : null;
+  const engineeringWorkOrderStore = engineeringWorkOrdersDirectory
+    ? createEngineeringWorkOrderStore({ adapter: createLocalJsonEngineeringWorkOrderStoreAdapter({ storageDir: engineeringWorkOrdersDirectory }) })
+    : null;
+  const engineeringDeliveryReportStore = engineeringDeliveryReportsDirectory
+    ? createEngineeringDeliveryReportStore({ adapter: createLocalJsonEngineeringDeliveryReportStoreAdapter({ storageDir: engineeringDeliveryReportsDirectory }) })
+    : null;
   return createControlCentreService({
     finishedCarouselStore,
     productionMetricsStore,
     publisherResultStore,
     socialAnalyticsStore,
+    engineeringWorkOrderStore,
+    engineeringDeliveryReportStore,
     exportsRootDir: exportsRootDir ?? null,
   });
 }
 
 const [subcommand, ...rawRest] = process.argv.slice(2);
 if (!subcommand) usageAndExit();
-const { socialAnalyticsStoreDirectory, rest } = extractSocialAnalyticsFlag(rawRest);
+const {
+  flags: { socialAnalyticsStoreDirectory, engineeringWorkOrdersDirectory, engineeringDeliveryReportsDirectory },
+  rest,
+} = extractNamedFlags(rawRest);
 
 try {
   if (subcommand === "dashboard") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
+    const service = buildService(
+      carouselStoreDirectory,
+      metricsStoreDirectory,
+      publisherResultStoreDirectory,
+      exportsRootDir,
+      socialAnalyticsStoreDirectory,
+      engineeringWorkOrdersDirectory,
+      engineeringDeliveryReportsDirectory
+    );
     printDashboard(service.getOverview());
   } else if (subcommand === "health") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
+    const service = buildService(
+      carouselStoreDirectory,
+      metricsStoreDirectory,
+      publisherResultStoreDirectory,
+      exportsRootDir,
+      socialAnalyticsStoreDirectory,
+      engineeringWorkOrdersDirectory,
+      engineeringDeliveryReportsDirectory
+    );
     printHealthSection(service.getOverview().health);
   } else if (subcommand === "jobs") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
+    const service = buildService(
+      carouselStoreDirectory,
+      metricsStoreDirectory,
+      publisherResultStoreDirectory,
+      exportsRootDir,
+      socialAnalyticsStoreDirectory,
+      engineeringWorkOrdersDirectory,
+      engineeringDeliveryReportsDirectory
+    );
     printRecentJobsSection(service.getOverview().recent_jobs);
   } else if (subcommand === "activity") {
     const [carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
+    const service = buildService(
+      carouselStoreDirectory,
+      metricsStoreDirectory,
+      publisherResultStoreDirectory,
+      exportsRootDir,
+      socialAnalyticsStoreDirectory,
+      engineeringWorkOrdersDirectory,
+      engineeringDeliveryReportsDirectory
+    );
     printRecentActivitySection(service.getOverview().recent_activity);
   } else if (subcommand === "job") {
     const [carouselId, carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir] = rest;
     if (!carouselId || !carouselStoreDirectory || !metricsStoreDirectory || !publisherResultStoreDirectory) usageAndExit();
-    const service = buildService(carouselStoreDirectory, metricsStoreDirectory, publisherResultStoreDirectory, exportsRootDir, socialAnalyticsStoreDirectory);
+    const service = buildService(
+      carouselStoreDirectory,
+      metricsStoreDirectory,
+      publisherResultStoreDirectory,
+      exportsRootDir,
+      socialAnalyticsStoreDirectory,
+      engineeringWorkOrdersDirectory,
+      engineeringDeliveryReportsDirectory
+    );
     printJobDetail(service.getJobDetail(carouselId));
   } else {
     usageAndExit();

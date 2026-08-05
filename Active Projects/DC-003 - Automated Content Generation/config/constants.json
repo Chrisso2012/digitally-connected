@@ -39,7 +39,9 @@
     "production_metrics": "met_",
     "publisher_result": "pub_",
     "social_publishing_manifest": "spm_",
-    "social_analytics_snapshot": "sas_"
+    "social_analytics_snapshot": "sas_",
+    "engineering_work_order": "wo_",
+    "engineering_delivery_report": "dr_"
   },
   "content_request_source_types": ["article"],
   "content_request_design_count": 6

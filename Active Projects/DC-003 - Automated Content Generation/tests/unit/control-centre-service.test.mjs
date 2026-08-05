@@ -12,6 +12,10 @@ import { createPublisherResult } from "../../src/publisher-result.mjs";
 import { approveCarousel, rejectCarousel, publishCarousel } from "../../src/carousel-approval.mjs";
 import { createSocialAnalyticsStore } from "../../src/social-analytics-store.mjs";
 import { createSocialAnalyticsSnapshot } from "../../src/social-analytics-snapshot.mjs";
+import { createEngineeringWorkOrderStore } from "../../src/engineering-work-order-store.mjs";
+import { createEngineeringWorkOrder } from "../../src/engineering-work-order.mjs";
+import { createEngineeringDeliveryReportStore } from "../../src/engineering-delivery-report-store.mjs";
+import { createEngineeringDeliveryReport } from "../../src/engineering-delivery-report.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError } from "../../src/control-centre-errors.mjs";
 import { CarouselNotFoundError } from "../../src/finished-carousel-store-errors.mjs";
@@ -94,6 +98,37 @@ function buildStores() {
 
 function buildSocialAnalyticsStore() {
   return createSocialAnalyticsStore({ adapter: createInMemoryAdapter("in-memory-social-analytics-adapter") });
+}
+
+function buildEngineeringStores() {
+  const workOrderStore = createEngineeringWorkOrderStore({ adapter: createInMemoryAdapter("in-memory-engineering-work-order-adapter") });
+  const deliveryReportStore = createEngineeringDeliveryReportStore({ adapter: createInMemoryAdapter("in-memory-engineering-delivery-report-adapter") });
+  return { workOrderStore, deliveryReportStore };
+}
+
+function buildWorkOrder(overrides = {}, options = {}) {
+  return createEngineeringWorkOrder(
+    { milestone: "DC-003-I029", title: "t", objective: "o", reviewCriteria: ["c1"], ...overrides },
+    options
+  );
+}
+
+function buildDeliveryReport(overrides = {}, options = {}) {
+  return createEngineeringDeliveryReport(
+    {
+      workOrderId: overrides.workOrderId ?? "wo_placeholder00001",
+      milestone: "DC-003-I029",
+      status: "completed",
+      commit: "7d88509",
+      pushStatus: "pushed",
+      workingTree: "clean",
+      tests: { passed: 1, failed: 0, total: 1 },
+      fixtures: { passed: 1, failed: 0, total: 1 },
+      liveRequests: { occurred: false, details: null },
+      ...overrides,
+    },
+    options
+  );
 }
 
 function buildSnapshot(overrides = {}) {
@@ -773,6 +808,105 @@ test("the Control Centre never makes a network request to compute social_perform
     const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore });
     service.getOverview();
     service.getJobDetail("car_01J9X9C7");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// --- Engineering (DC-003-I029) -----------------------------------------
+
+test("throws InvalidControlCentreDependenciesError when only one of the paired engineering stores is supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const { workOrderStore } = buildEngineeringStores();
+  assert.throws(
+    () => createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore, engineeringWorkOrderStore: workOrderStore }),
+    InvalidControlCentreDependenciesError
+  );
+});
+
+test("overview.engineering is null when neither engineering store was supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const service = createControlCentreService({ finishedCarouselStore, productionMetricsStore, publisherResultStore });
+  assert.equal(service.getOverview().engineering, null);
+});
+
+test("overview.engineering assembles real counts and the latest delivery report when both stores are supplied", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+
+  const readyOrder = buildWorkOrder(
+    { milestone: "DC-003-I028", status: "ready", approvedAt: "2026-08-01T00:00:00.000Z" },
+    { idGenerator: () => "wo_cc0000000000001", now: () => "2026-08-01T00:00:00.000Z" }
+  );
+  const deliveredOrder = buildWorkOrder(
+    { milestone: "DC-003-I029", status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" },
+    { idGenerator: () => "wo_cc0000000000002", now: () => "2026-08-05T00:00:00.000Z" }
+  );
+  workOrderStore.save(readyOrder);
+  workOrderStore.save(deliveredOrder);
+  deliveryReportStore.save(
+    buildDeliveryReport(
+      { workOrderId: deliveredOrder.work_order_id, milestone: "DC-003-I029" },
+      { idGenerator: () => "dr_cc0000000000001", now: () => "2026-08-05T12:00:00.000Z" }
+    )
+  );
+
+  const service = createControlCentreService({
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    engineeringWorkOrderStore: workOrderStore,
+    engineeringDeliveryReportStore: deliveryReportStore,
+  });
+  const engineering = service.getOverview().engineering;
+
+  assert.equal(engineering.current_milestone, "DC-003-I029");
+  assert.equal(engineering.last_completed_milestone, "DC-003-I029");
+  assert.equal(engineering.outstanding_work_orders, 1);
+  assert.equal(engineering.awaiting_review, 1);
+  assert.equal(engineering.latest_delivery_report.delivery_report_id, "dr_cc0000000000001");
+});
+
+test("a broken engineering store degrades overview.engineering to an honest zeroed summary rather than throwing", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+  const brokenWorkOrderStore = {
+    ...workOrderStore,
+    list() {
+      throw new Error("simulated store failure");
+    },
+  };
+
+  const service = createControlCentreService({
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    engineeringWorkOrderStore: brokenWorkOrderStore,
+    engineeringDeliveryReportStore: deliveryReportStore,
+  });
+  const engineering = service.getOverview().engineering;
+  assert.equal(engineering.current_milestone, null);
+  assert.equal(engineering.outstanding_work_orders, 0);
+});
+
+test("the Control Centre never makes a network request to compute overview.engineering", () => {
+  const { finishedCarouselStore, productionMetricsStore, publisherResultStore } = buildStores();
+  const { workOrderStore, deliveryReportStore } = buildEngineeringStores();
+  workOrderStore.save(buildWorkOrder({ status: "ready", approvedAt: "2026-08-05T00:00:00.000Z" }, { idGenerator: () => "wo_cc0000000000003" }));
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("must not be called");
+  };
+  try {
+    const service = createControlCentreService({
+      finishedCarouselStore,
+      productionMetricsStore,
+      publisherResultStore,
+      engineeringWorkOrderStore: workOrderStore,
+      engineeringDeliveryReportStore: deliveryReportStore,
+    });
+    service.getOverview();
   } finally {
     globalThis.fetch = originalFetch;
   }

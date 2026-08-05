@@ -5799,6 +5799,164 @@ provider billing analytics. Those questions — *why did it happen, what
 should we publish next, did it create revenue* — belong to later Content
 Intelligence and attribution milestones, not this one.
 
+## Engineering Work Management (DC-003-I029)
+
+Formalises communication between the Strategy Office and the Delivery
+Office by replacing informal markdown briefs/delivery summaries with
+structured, permanent repository objects.
+
+```
+Strategy Office
+       ↓
+Engineering Work Order
+       ↓
+Engineering Work Queue
+       ↓
+Delivery Office
+       ↓
+Engineering Delivery Report
+       ↓
+Engineering Delivery Store
+       ↓
+Strategy Review Queue
+       ↓
+Future Bridge Layer
+```
+
+**I029 defines the engineering language only — it does not perform
+communication.** No Claude integration, no ChatGPT integration, no MCP, no
+n8n, no API communication, no message transport of any kind. Every store
+and CLI in this section is a local JSON file store, exactly like every
+other store in this codebase.
+
+**Repository investigation, confirmed before writing any code:** no
+structured milestone brief or delivery report object existed anywhere in
+this repository prior to this milestone — `Project Brief.md` at the repo
+root is an empty placeholder, and every one of I001–I028's own briefs and
+delivery summaries existed only as chat messages and (informally) this
+project's own README prose/Implementation-status rows. This confirms the
+brief's own premise directly. Also confirmed:
+`publisher-results.mjs`'s (I025) own CLI has **no `create` subcommand** —
+Publisher Results are recorded by the act of publishing itself, never
+typed by hand — the direct precedent for why **Engineering Delivery Report
+has no `report create` CLI subcommand either** (see "CLI" below): a
+delivery report is evidence of completed work, recorded by whoever
+performs the delivery via the domain layer directly, not authored as an
+intent the way a Work Order is.
+
+**Engineering Work Order** (`schemas/engineering-work-order.schema.json`,
+`wo_` prefix) represents one approved engineering task — `milestone`,
+`title`, `objective`, `repository_commit`, `constraints`,
+`review_criteria` (every milestone brief in this project's history has
+had a numbered review checklist; this makes it a structured, queryable
+list), `created_at`, `approved_at`, `status`, `priority`, `dependencies`,
+`notes`.
+
+**Engineering Delivery Report**
+(`schemas/engineering-delivery-report.schema.json`, `dr_` prefix)
+represents one completed engineering task — `work_order_id`, `milestone`,
+`status` (reuses `finished-carousel.schema.json`'s own
+`completed`/`partial`/`failed` vocabulary, not a new one), `commit`,
+`push_status`, `working_tree`, `tests`/`fixtures` count summaries,
+`files_created`/`files_modified`, `repository_findings`, `compatibility`,
+`live_requests`, `follow_up_required`, `delivery_timestamp`, `notes`.
+Captures engineering **evidence** only — there is no field for
+conversational text, a transcript, or a prompt.
+
+### Status model
+
+Six values, matching the schema exactly: `draft`, `ready`, `in_progress`,
+`completed`, `approved`, `archived`. **This milestone invents no workflow
+transitions** — unlike I014's own `carousel-approval.mjs`
+(approve/reject/publish functions), there is no
+`approveWorkOrder()`/`startWorkOrder()`/`completeWorkOrder()` anywhere in
+this codebase. The domain factory (`createEngineeringWorkOrder()`) itself
+accepts any of the six values — the schema must support a future
+milestone (the Bridge Layer) creating a Work Order directly with a status
+beyond draft/ready — but **the CLI's own `work create` subcommand
+restricts itself to `draft`/`ready` only**, per the brief's own explicit
+instruction. `approved_at` is schema-required (non-null) for every status
+except `draft`, and the Strategy Office's own approval is never automated
+— typing `ready` into the CLI *is* that decision, made by a human running
+it.
+
+Neither store has a `replace()`/`update()` — a Work Order or Delivery
+Report, once saved, is never mutated. The **read service**
+(`engineering-work-management-service.mjs`) derives a human-readable
+`derived_state` purely from repository evidence, never a stored mutation:
+- No Delivery Report exists yet for a Work Order → the label is the Work
+  Order's own `status`, verbatim (Draft/Ready/In Progress/Completed/
+  Approved/Archived). An unrecognized status value degrades to
+  **"Future Extension"** rather than throwing.
+- At least one Delivery Report exists and the Work Order's own status is
+  not yet `approved`/`archived` → **"Awaiting Review"** — the one
+  genuinely composite label this service computes.
+- At least one Delivery Report exists and the Work Order's own status IS
+  `approved`/`archived` → the Strategy Office's own recorded decision
+  wins, passed through verbatim.
+
+### Store architecture
+
+Mirrors the I015/I023/I025/I028 domain-store / storage-adapter /
+local-JSON-adapter separation exactly, twice
+(`engineering-work-order-store.mjs` + 2 adapter files;
+`engineering-delivery-report-store.mjs` + 2 adapter files) — one JSON file
+per record, atomic temp-file-write-verify-rename, path-traversal blocked
+by the same identifier-pattern regex every other store in this codebase
+uses, duplicate identifiers rejected, corrupted records fail explicitly.
+`findByWorkOrder()` on the Delivery Report Store is the one addition
+beyond I015/I023's own shape, needed to join a Work Order to its reports.
+Both stores order `list()` chronologically. Never committed to Git.
+
+### CLI (`tests/validation/engineering.mjs`, `npm run engineering`)
+
+```bash
+npm run engineering -- work list <workOrderStoreDirectory>
+npm run engineering -- work get <workOrderId> <workOrderStoreDirectory>
+npm run engineering -- work create <milestone> <draft|ready> <workOrderStoreDirectory> \
+    --title=<t> --objective=<o> --review-criteria=<c1|c2|...> \
+    [--priority=low|medium|high] [--constraints=<c1|c2|...>] \
+    [--commit=<hash>] [--depends-on=<wo_a,wo_b>] [--notes=<n>] [--approved-at=<iso>]
+npm run engineering -- report list <deliveryReportStoreDirectory>
+npm run engineering -- report get <deliveryReportId> <deliveryReportStoreDirectory>
+npm run engineering -- status <workOrderStoreDirectory> <deliveryReportStoreDirectory>
+```
+
+No networking anywhere in this file. `work create` is the only writer;
+every other subcommand is read-only (see "Repository investigation" above
+for why `report create` doesn't exist).
+
+### Control Centre integration
+
+Additive/optional, mirroring I028's own `socialAnalyticsStore` pattern —
+`engineeringWorkOrderStore`/`engineeringDeliveryReportStore` are supplied
+as a matched pair (both or neither; supplying only one is a rejected
+wiring bug, not a partial configuration) and the overview's new
+`engineering` field is `null` when they're absent, never a guessed value.
+When supplied, the Control Centre delegates entirely to
+`createEngineeringWorkManagementService()` — one source of truth for what
+"Engineering status" means, not a second implementation — surfacing
+current milestone, last completed milestone, outstanding work orders,
+awaiting-review count, repository status (the **latest Delivery Report's
+own** `commit`/`push_status`/`working_tree` — never a live `git` call;
+this milestone has no filesystem/network access of its own beyond its
+stores), and the latest Delivery Report embedded whole. Read-only: the
+Control Centre never calls either store's own `save()`. CLI: append
+`--engineering-work-orders=<dir> --engineering-delivery-reports=<dir>` to
+the `dashboard` subcommand.
+
+### Future Bridge Layer
+
+I029 deliberately stops at the repository boundary. A future milestone
+(explicitly out of scope here) would build the actual transport that lets
+a real Strategy Office system and a real Delivery Office system exchange
+these objects — Claude integration, ChatGPT integration, MCP, n8n, GitHub
+Actions, webhooks, polling, scheduling, notifications, automatic
+approvals, automatic milestone creation, repository mutation by the
+bridge, conversation history, prompt storage, and LLM requests are all
+explicitly out of scope for I029 itself. This milestone only prepares the
+structured objects that transport will one day carry.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -6178,7 +6336,8 @@ milestone).
 | Windows Production Asset Export (second, human-facing delivery copy of an approved I021 archive package into a Windows-visible folder) | Done (DC-003-I026) — `src/windows-production-export-service.mjs`, `src/windows-production-export-config.mjs`, CLI `npm run export:windows`; see "Windows Production Asset Export (DC-003-I026)"; I021 completely unmodified (its real `executeProductionAssetExport()` called directly for the archive step); Windows delivery is a plain, byte-verified filesystem copy, never a second CDN download; `n8n-test` recreated with one new writable bind mount, all prior config/workflows/credentials confirmed intact; live-verified locally against the real `car_9c026a104e3745c3` package, zero external API calls |
 | Social Publisher (publishes an approved carousel to Instagram carousel + LinkedIn multi-image posts, per an approved Social Publishing Manifest) | Done (DC-003-I027) — `src/social-publisher-service.mjs`, `src/social-publishing-manifest.mjs`, `src/instagram-carousel-publisher-adapter.mjs`, `src/linkedin-multi-image-publisher-adapter.mjs` + mock adapters/configs, CLI `npm run publish:social`; see "Social Publisher (DC-003-I027)"; new `schemas/social-publishing-manifest.schema.json` closes the confirmed "no approved platform copy exists anywhere" gap; `publisher-result.schema.json` (I025) needed zero changes; I021/I022/I025/I014 all unchanged; mock remains the default without `--live`; duplicate-publish prevention and sequential per-destination publishing with immediate Publisher Result recording (never batched); Control Centre's `jobPublishing` gained an additive `by_provider` breakdown; **no live Instagram/LinkedIn/Facebook/Meta request made — proposed budgets Instagram 8, LinkedIn 13, each requiring its own separate future approval** |
 | Social Analytics (post-publication performance snapshots for Instagram + LinkedIn, sourced only from Publisher Results, immutable time-series) | Done (DC-003-I028) — `src/social-analytics-snapshot.mjs`, `src/social-analytics-store.mjs` + adapter files, `src/instagram-insights-adapter.mjs`, `src/linkedin-post-analytics-adapter.mjs` + mock adapters/configs, CLI `npm run social:analytics`; see "Social Analytics (DC-003-I028)"; new `schemas/social-analytics-snapshot.schema.json`; `publisher-result.schema.json` (I025) and every I008–I012/I014/I015/I021/I022/I025/I026/I027 module unchanged; Control Centre's `socialAnalyticsStore` dependency is additive/optional (never a breaking required field, unlike I025's own precedent); mock remains the default without `--live`; **no live Instagram/LinkedIn/Meta analytics request made — proposed budgets Instagram 1, LinkedIn organization 1, LinkedIn member 5, each requiring its own separate future approval; no platform has been live-connected yet for either publishing or analytics** |
-| Unit test suite | Done — 1202 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Engineering Work Management (structured Strategy Office <-> Delivery Office objects: Work Order, Delivery Report, read-only join service, Control Centre section) | Done (DC-003-I029) — `src/engineering-work-order.mjs`, `src/engineering-work-order-store.mjs` + adapter files, `src/engineering-delivery-report.mjs`, `src/engineering-delivery-report-store.mjs` + adapter files, `src/engineering-work-management-service.mjs`, CLI `npm run engineering`; see "Engineering Work Management (DC-003-I029)"; new `schemas/engineering-work-order.schema.json` and `schemas/engineering-delivery-report.schema.json`; no Claude/ChatGPT/MCP/n8n/API/message-transport integration of any kind — defines the engineering language only; Control Centre's paired `engineeringWorkOrderStore`/`engineeringDeliveryReportStore` dependency is additive/optional, mirroring I028's own `socialAnalyticsStore` precedent; no workflow-transition functions exist (`work create` only ever produces `draft`/`ready`); every prior module (I008–I028) confirmed untouched |
+| Unit test suite | Done — 1283 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

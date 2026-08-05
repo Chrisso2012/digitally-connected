@@ -51,6 +51,7 @@ import { deepFreezeClone } from "./immutable.mjs";
 import { loadLlmProviderConfig } from "./llm-provider-config.mjs";
 import { loadRendererConfig } from "./renderer-config.mjs";
 import { loadGoogleDrivePublisherConfig } from "./google-drive-publisher-config.mjs";
+import { createEngineeringWorkManagementService } from "./engineering-work-management-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "./control-centre-errors.mjs";
 
 const DEFAULT_RECENT_JOBS_LIMIT = 10;
@@ -71,7 +72,14 @@ function mostRecentIso(isoStrings) {
   return present.reduce((latest, current) => (current > latest ? current : latest));
 }
 
-function assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore }) {
+function assertDependencies({
+  finishedCarouselStore,
+  productionMetricsStore,
+  publisherResultStore,
+  socialAnalyticsStore,
+  engineeringWorkOrderStore,
+  engineeringDeliveryReportStore,
+}) {
   if (
     !finishedCarouselStore ||
     typeof finishedCarouselStore.list !== "function" ||
@@ -111,6 +119,31 @@ function assertDependencies({ finishedCarouselStore, productionMetricsStore, pub
     throw new InvalidControlCentreDependenciesError(
       "fields.socialAnalyticsStore, when supplied, must be a Social Analytics Store — see createSocialAnalyticsStore() in social-analytics-store.mjs"
     );
+  }
+  // DC-003-I029 — optional, like socialAnalyticsStore: the Engineering
+  // section is supplied as a matched pair (both stores together, or
+  // neither) since the read model always joins them — a caller supplying
+  // only one is a wiring bug, not a legitimate partial configuration.
+  const engineeringStoresSupplied = Boolean(engineeringWorkOrderStore) || Boolean(engineeringDeliveryReportStore);
+  if (engineeringStoresSupplied) {
+    if (
+      !engineeringWorkOrderStore ||
+      typeof engineeringWorkOrderStore.list !== "function" ||
+      typeof engineeringWorkOrderStore.get !== "function"
+    ) {
+      throw new InvalidControlCentreDependenciesError(
+        "fields.engineeringWorkOrderStore must be supplied together with fields.engineeringDeliveryReportStore, and must be an Engineering Work Order Store"
+      );
+    }
+    if (
+      !engineeringDeliveryReportStore ||
+      typeof engineeringDeliveryReportStore.list !== "function" ||
+      typeof engineeringDeliveryReportStore.findByWorkOrder !== "function"
+    ) {
+      throw new InvalidControlCentreDependenciesError(
+        "fields.engineeringDeliveryReportStore must be supplied together with fields.engineeringWorkOrderStore, and must be an Engineering Delivery Report Store"
+      );
+    }
   }
 }
 
@@ -170,6 +203,10 @@ function sumCost(metricsSummaries) {
  *   `social_performance`/`dashboard.social_analytics` signal is honestly
  *   null (never checked), mirroring exportsRootDir's own "unknown, not
  *   zero" convention.
+ * fields.engineeringWorkOrderStore / engineeringDeliveryReportStore —
+ *   optional (DC-003-I029), supplied together or not at all — see
+ *   engineering-work-order-store.mjs / engineering-delivery-report-store.mjs.
+ *   When omitted, `engineering` is null.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -187,8 +224,23 @@ function sumCost(metricsSummaries) {
  * Returns { getOverview, getJobDetail }.
  */
 export function createControlCentreService(fields = {}, options = {}) {
-  const { finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore = null, exportsRootDir = null } = fields;
-  assertDependencies({ finishedCarouselStore, productionMetricsStore, publisherResultStore, socialAnalyticsStore });
+  const {
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    socialAnalyticsStore = null,
+    engineeringWorkOrderStore = null,
+    engineeringDeliveryReportStore = null,
+    exportsRootDir = null,
+  } = fields;
+  assertDependencies({
+    finishedCarouselStore,
+    productionMetricsStore,
+    publisherResultStore,
+    socialAnalyticsStore,
+    engineeringWorkOrderStore,
+    engineeringDeliveryReportStore,
+  });
 
   const now = options.now ?? (() => new Date().toISOString());
   const env = options.env ?? process.env;
@@ -605,14 +657,44 @@ export function createControlCentreService(fields = {}, options = {}) {
     return deepFreezeClone(model);
   }
 
+  // DC-003-I029 — read-only, additive. Delegates the actual join/derive
+  // logic entirely to createEngineeringWorkManagementService() (the same
+  // module tests/validation/engineering.mjs's own `status` subcommand
+  // uses) rather than re-implementing it here — one source of truth for
+  // "what does Engineering status mean." null when either store was never
+  // supplied; on a genuine read failure from an already-supplied store,
+  // degrades to an honest all-zero/null summary rather than throwing —
+  // mirrors this module's own "a secondary store's own failure never
+  // crashes the whole read model" discipline (see
+  // findPublisherResultsForCarousel()'s own comment above).
+  function computeEngineering() {
+    if (!engineeringWorkOrderStore || !engineeringDeliveryReportStore) return null;
+    try {
+      return createEngineeringWorkManagementService({
+        workOrderStore: engineeringWorkOrderStore,
+        deliveryReportStore: engineeringDeliveryReportStore,
+      }).getStatus();
+    } catch {
+      return {
+        current_milestone: null,
+        last_completed_milestone: null,
+        outstanding_work_orders: 0,
+        awaiting_review: 0,
+        repository_status: null,
+        latest_delivery_report: null,
+      };
+    }
+  }
+
   /**
    * Assembles the full "overview" read model: system health, dashboard
-   * totals, recent jobs, and recent activity, all from one consistent
-   * snapshot of the stores. Never throws for a broken store — a store read
-   * failure is folded into that store's own health check instead (see
-   * computeHealth()); it only throws ControlCentreAssemblyError if this
-   * module's own assembly logic produces something that doesn't match
-   * control-centre.schema.json (a bug in this file, not a data problem).
+   * totals, recent jobs, recent activity, and engineering status, all from
+   * one consistent snapshot of the stores. Never throws for a broken
+   * store — a store read failure is folded into that store's own health
+   * check instead (see computeHealth()); it only throws
+   * ControlCentreAssemblyError if this module's own assembly logic
+   * produces something that doesn't match control-centre.schema.json (a
+   * bug in this file, not a data problem).
    */
   function getOverview() {
     const core = assembleCore();
@@ -624,6 +706,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       dashboard: computeDashboard(core),
       recent_jobs: core.recentSummaries.slice(0, recentJobsLimit).map((summary) => computeJobSummary(summary, core.publishedCarouselIds)),
       recent_activity: computeActivity(core.recentFull),
+      engineering: computeEngineering(),
     };
 
     return validateAndFreeze(overview);
