@@ -2,7 +2,7 @@
 
 ## OC-001: Manual Operations Controller
 
-Status: **workflow authored, not yet imported or executed.** The original repository-visibility blocker (container mounted into an unrelated, actively-developed DC-004 branch) is now resolved — a dedicated, permanently-`main` runtime clone exists and is mounted read-only into `n8n-test`. A second, previously-undiscovered blocker was found while verifying that fix: see "Current Blockers" below before attempting a live run.
+Status: **the Operations Bridge chain is now verified working end-to-end inside `n8n-test`, in mock mode, via `docker exec` — the workflow JSON itself is authored and updated to match, but has not yet been imported into n8n proper** (n8n MCP has been disconnected throughout). See "Current Blockers" for exactly what remains, and "End-to-end verification (2026-08-06)" for the real evidence.
 
 ---
 
@@ -101,17 +101,18 @@ automatic queueing or retry.
 ## Exact Operations Bridge command
 
 ```sh
+DC003_DIR="/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation"
 RUN_DIR=/tmp/dc005-oc001-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}
 mkdir -p "$RUN_DIR"
-cd /data/dc003-repo
+cd "$DC003_DIR"
 node tests/validation/operations-bridge.mjs run \
   "{{ $json.work_order_id }}" \
   /home/node/.n8n/dc003/engineering/work-orders \
   /home/node/.n8n/dc003/engineering/delivery-reports \
   /home/node/.n8n/dc003/engineering/strategy-reviews \
   /home/node/.n8n/dc003/engineering/bridge \
-  /data/dc003-repo \
-  --repo=/data/dc003-repo \
+  "$DC003_DIR" \
+  --repo="$DC003_DIR" \
   --delivery-lock=/home/node/.n8n/dc003/engineering/locks/delivery \
   --review-lock=/home/node/.n8n/dc003/engineering/locks/review \
   --drop=/home/node/.n8n/dc003/engineering/drop \
@@ -122,6 +123,14 @@ cat "$RUN_DIR/stdout.json"
 echo "DC005_EXIT_CODE=$DC005_EXIT_CODE"
 cat "$RUN_DIR/stderr.log" 1>&2
 ```
+
+**Updated 2026-08-06** to use `/data/dc003-repo-root` (a repo-root mount)
+instead of the original `/data/dc003-repo` (a subfolder-only mount) — see
+"Current Blockers" for why the subfolder-only mount can never support this
+command (it has no working `.git`), and "End-to-end verification" below for
+proof this exact command now works. The original `/data/dc003-repo` mount
+still exists, unchanged, for I013/I017's own workflows, which never needed
+git and are unaffected either way.
 
 This is the real, current `operations-bridge.mjs run` positional/flag
 contract, taken directly from the CLI's own source
@@ -360,53 +369,51 @@ is checksum-identical to the runtime clone's own `main`-at-`4ca2429` copy
 on the host, and the original DC-004 checkout was independently confirmed
 unchanged (branch, HEAD, working tree) both before and after.
 
-**Blocker 3 — NEW, found while verifying Blocker 1's own fix: `git` is not
-reachable from inside the container at all, for any DC-003 mount, and
-never has been.** The bind mount only ever covers the project subfolder
-(`.../Active Projects/DC-003 - Automated Content Generation`), never the
-repository root — so `.git` (which lives at the root) has never been part
-of what `n8n-test` can see. `git` refuses to search upward past a mount
-boundary by default (`fatal: not a git repository ... Stopping at
-filesystem boundary`), so any DC-003 CLI that calls real git (I029.2's own
-`readGitState()`, used by `operations-bridge.mjs`, `delivery-office-runner.mjs`,
-and `strategy-review-agent.mjs` — **not** I013/I017's own workflows, which
-never touch git) crashes with an uncaught exception the moment it tries.
-Confirmed directly: seeding a real, eligible Work Order and running
-`operations-bridge.mjs run ... --json` against it inside the recreated
-container produces no JSON at all — a raw `git rev-parse HEAD` stack trace
-on stderr. This is **not a regression from the Blocker 1 fix** — the exact
-same gap existed identically under the OLD mount; it was simply never
-discovered before, because no git-dependent DC-003 CLI had ever actually
-been run through this container prior to this verification pass (every
-I029.2–I029.4.1 smoke test in this project's own history ran against a
-real git repository on the host directly, never through `n8n-test`).
-
-**Not fixed here, deliberately** — the explicit authorization for this
-session's container recreation was "change only the DC-003 repository bind
-mount... preserve everything else exactly," and the correct fix (adding a
-**second**, new bind mount exposing the runtime clone's repository root —
-e.g. `/data/dc003-repo-root:ro` — so a git-dependent CLI can be pointed at
-`/data/dc003-repo-root/Active Projects/DC-003 - Automated Content
-Generation` instead of the existing subfolder-only `/data/dc003-repo`)
-is a second, additional mount, not a change to the one already authorized.
-The existing `/data/dc003-repo` mount must stay exactly as-is regardless —
-I013's and I017's own existing workflows hardcode it as their project-folder
-path and never needed git, so they are unaffected either way. This
-workflow's own Execute Command node (see "Exact Operations Bridge command"
-above) will need updating to the new root-mounted path once that second
-mount is approved and added.
+**Blocker 3 — RESOLVED.** `git` was not reachable from inside the container
+for any DC-003 mount, and never had been (not a regression from the
+Blocker 1 fix — the identical gap existed under the OLD mount too; it was
+simply never discovered, because no git-dependent DC-003 CLI — anything
+from I029.2 onward — had ever actually been run through this container
+before this verification pass; I013/I017's own workflows never call git
+at all, and every prior I029.2–I029.4.1 smoke test in this project's
+history ran against the host directly). Root cause: the bind mount only
+ever covered the project subfolder, never the repository root where
+`.git` lives — `git` refuses to search upward past a Docker mount
+boundary by default. **Fix, explicitly approved and applied:** a
+**second**, additional read-only bind mount exposing the runtime clone's
+full repository root — `digitally-connected-runtime` → `/data/dc003-repo-root:ro`
+— alongside (not replacing) the original `/data/dc003-repo` subfolder
+mount, which I013/I017 still use unchanged. Two further, smaller fixes
+were needed to make that mount actually usable, both applied via
+container-level git config passed as env vars (`GIT_CONFIG_COUNT`/
+`GIT_CONFIG_KEY_N`/`GIT_CONFIG_VALUE_N` — no persisted config file needed,
+survives any future recreation the same way `NODES_EXCLUDE`/`LLM_API_KEY`
+already do): `safe.directory=/data/dc003-repo-root` (git's own "dubious
+ownership" protection otherwise refuses to operate on a bind-mounted
+directory at all) and `core.autocrlf=true` (matching the Windows host's
+own global git setting — without it, every text file in the mount falsely
+appeared 100% modified to the container's own git, since the on-disk CRLF
+line endings didn't match what the container's default-`autocrlf=false`
+git expected against the LF-stored blobs; this was pure line-ending noise,
+never real content divergence). Ports, credentials, volumes, workflows,
+permissions, and every other env var were preserved exactly across all
+three recreations this fix required. See "End-to-end verification" below
+for full proof.
 
 **Blocker 2 — n8n MCP is disconnected.** This workflow could not be created,
-imported, or executed through it. The workflow JSON in this folder was
-hand-authored against the real, current `operations-bridge.mjs` CLI contract
+imported, or executed through it. The workflow JSON in this folder is
+authored against the real, current `operations-bridge.mjs` CLI contract
 and DC-003's own established real-export conventions (I013/I017), and
-validated statically (see "Static verification" below) — but it has not
-been imported into the live `n8n-test` instance, has no real n8n-assigned
+validated both statically (see "Static verification" below) and, now,
+by literally running the exact command it contains via `docker exec` (see
+"End-to-end verification") — but the WORKFLOW ITSELF has still not been
+imported into the live `n8n-test` instance, has no real n8n-assigned
 workflow ID yet (`id: null` in the export, intentionally, so it is never
-mistaken for an already-imported workflow), and has not been executed.
+mistaken for an already-imported workflow), and has not been executed
+through n8n's own UI or engine.
 
-**Manual import steps, once Blocker 3 is resolved:** open the `n8n-test`
-UI at `http://localhost:5678`, use "Import from File", select
+**Manual import steps, now that Blocker 3 is resolved:** open the
+`n8n-test` UI at `http://localhost:5678`, use "Import from File", select
 `workflows/dc005-oc001-manual-operations-controller.json` from this project
 folder, confirm the imported workflow's node graph matches this document,
 edit `work_order_id` in the "Build Work Order Input" node to a real,
@@ -414,6 +421,74 @@ edit `work_order_id` in the "Build Work Order Input" node to a real,
 workflow **inactive** after import (manual-trigger workflows do not require
 activation to run via the editor's own Execute button — same convention
 DC-003's own I013/I017 workflows already use).
+
+---
+
+## End-to-end verification (2026-08-06)
+
+Performed via `docker exec` against the recreated `n8n-test` container —
+not through n8n itself (Blocker 2) — using the exact command this
+workflow's own Execute Command node now contains. Mock mode throughout;
+no live Claude Code or OpenAI request was made at any point.
+
+1. **`git rev-parse HEAD` inside the mounted runtime repository** —
+   succeeded (`4ca2429`), `git branch --show-current` reported `main`,
+   `git status --porcelain` returned zero lines (genuinely clean, once the
+   `core.autocrlf` fix above was applied).
+2. **A real Operations Bridge run** — seeded a real `ready`/approved
+   Engineering Work Order (`wo_d1712a1acf194261`) via `npm run engineering --
+   work create` inside the container, then ran the exact command from
+   "Exact Operations Bridge command" above. Produced exactly one line of
+   valid JSON, exit code `0`: delivery self-reported success but
+   (correctly, independently) verified as `"failed"` (the mock runner
+   never lands a real commit — the same well-understood behaviour
+   documented throughout DC-003's own I029.4/I029.3.1 history), and the
+   Strategy Review correctly resolved to `"correction_required"` via the
+   Delivery Status Authority Gate — proving the full I029.2 → I029.3.1 →
+   I029.4 → I029.4.1 chain genuinely works end-to-end through this
+   container for the first time.
+3. **Control Centre** — ran `control-centre.mjs dashboard` with the
+   matching `--engineering-*`/`--bridge=`/`--strategy-review=` flags
+   against the same persistent directories: correctly showed
+   `Failed Executions: 1`, `Corrections Required: 1`, and the exact
+   `delivery_report_id`/`strategy_review_id` from step 2 as the latest
+   record in each section.
+4. **Duplicate protection** — re-running the identical command against the
+   same Work Order (still not `"completed"`) correctly succeeded again
+   with a NEW delivery/review attempt — this is DC-003's own deliberate
+   design, not a gap: `DuplicateDeliveryError` only fires once a PRIOR
+   delivery has genuinely reached `"completed"` (a failed delivery is
+   meant to be retried after correction). To verify the real rule
+   honestly, a genuinely `"completed"` Delivery Report was seeded directly
+   (via a short `node --input-type=module -e` script importing DC-003's
+   own domain modules from the read-only mount and writing only to the
+   persistent volume — the same technique this project's own test suite
+   already uses to seed fixtures) against the same Work Order, and the
+   command was run a third time: it correctly failed fast with
+   `{"success":false,"error":{"code":"DuplicateDeliveryError", ...}}`,
+   exit code `1`, no new delivery or review record created.
+5. **Read-only enforcement** — both `/data/dc003-repo` and
+   `/data/dc003-repo-root` still reject writes (`touch` fails with
+   "Read-only file system") after all of the above.
+6. **DC-004 checkout** — independently confirmed unchanged (branch, HEAD,
+   clean working tree) before this verification pass and again after.
+
+**This verification data was deliberately left in the persistent store**
+(Work Order `wo_d1712a1acf194261`, its three Delivery Reports, two
+Strategy Reviews, four Bridge Transport records) rather than deleted —
+matching this project's own established precedent (DC-003-I029.1's own
+README: a controlled test execution is "desirable evidence, not something
+to clean up"). It is clearly a test fixture (title: "OC-001 mock
+verification") and does not represent a real engineering delivery.
+
+**What this proves, and what it doesn't:** every piece of DC-003 logic the
+Operations Bridge depends on now demonstrably works when invoked exactly
+the way this n8n workflow will invoke it. What it does NOT prove is that
+n8n's own Execute Command node behaves identically to a bare `docker exec`
+shell (variable interpolation, `continueOnFail`/`onError` handling,
+`$now.toFormat(...)` expression evaluation) — that can only be confirmed
+by actually importing and running the workflow inside n8n itself, which
+still requires Blocker 2 (n8n MCP, or manual UI import) to be resolved.
 
 ---
 
@@ -435,16 +510,22 @@ runtime, since MCP/live access was unavailable):
 - No retry/`retryOnFail` configuration on any node.
 - `active: false`.
 
-**Not performed** (blocked by the two items above, honestly not claimed):
-live import, live execution, mock end-to-end verification against the real
-`n8n-test` instance, duplicate-run verification, Control Centre
-cross-check of an OC-001-produced record, or any live confirmation that
-zero Claude/OpenAI/provider requests occurred during an actual run (no run
-occurred). DC-003's own equivalent guarantees (mock-by-default, no live
-call without an explicit flag this workflow never sends) were verified at
-the DC-003 layer during I029.4/I029.4.1's own delivery, and this workflow
-sends the exact same mock-only command — but that is a structural argument,
-not a fresh live observation of *this* workflow.
+**Updated 2026-08-06 — most of what was "not performed" here now has real
+evidence, just not through n8n itself.** See "End-to-end verification"
+above: mock end-to-end execution, duplicate-run behaviour, and a Control
+Centre cross-check were all performed for real, via `docker exec` against
+the real recreated container, using the literal command this workflow's
+Execute Command node contains. Zero live Claude/OpenAI/provider requests
+were made (mock mode throughout — verified by construction, since no
+`--live-*` flag was ever passed).
+
+**Still genuinely not performed, honestly not claimed:** import into n8n
+itself, and execution through n8n's own engine (Blocker 2, n8n MCP still
+disconnected). The `docker exec` verification above proves DC-003's own
+side of the contract works; it cannot prove n8n's own Execute Command node
+(variable interpolation, `continueOnFail`/`onError`, `$now.toFormat(...)`
+expression evaluation) behaves identically to a bare shell invocation —
+only a real n8n import and run can confirm that.
 
 ---
 
