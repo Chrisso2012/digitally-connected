@@ -6910,7 +6910,7 @@ node tests/validation/operations-bridge.mjs run <workOrderId> <workOrderStoreDir
     --delivery-lock=<lockDirectory> --review-lock=<lockDirectory> --drop=<deliveryReportDropDir> --export=<reviewExportDir>
     [--branch=<name>] [--live-runner] [--live-review] [--allow-newer-commit]
     [--allow-push] [--allow-commits] [--allow-docker] [--max-cost-usd=<n>]
-    [--rerun-tests] [--rerun-fixtures] [--allow-delivery-branch-differ]
+    [--rerun-tests] [--rerun-fixtures] [--allow-delivery-branch-differ] [--json]
 node tests/validation/operations-bridge.mjs status <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <strategyReviewStoreDirectory>
     --delivery-lock=<lockDirectory> --review-lock=<lockDirectory>
 ```
@@ -6922,6 +6922,129 @@ standalone CLIs. Passing only `--live-runner` runs a real delivery
 reviewed by the mock reviewer; passing only `--live-review` runs a mock
 delivery reviewed by the real OpenAI adapter — either combination is
 valid, matching each stage's own existing independent gate.
+
+### Machine-Readable Output Mode (DC-003-I029.4.1)
+
+Found during the DC-005 OC-001 architecture planning exercise: the CLI
+above emitted human-readable text only, with no `--json` flag — unlike
+`content-request.mjs` (I017), which added exactly this for the same
+reason (an n8n workflow consuming its output). An external orchestrator
+would otherwise have had to regex-scrape lines like
+`decision:                   correction_required`, which this project has
+never done anywhere else. `run` now accepts `--json`, mirroring I017's own
+precedent exactly:
+
+- **Omitted (default):** output is unchanged from before this milestone,
+  line for line — every pre-existing label, value, and line order is
+  identical. This milestone only ever *appends* new optional lines after
+  the original seven (`summary`/`risks`/`correction required`/`ceo
+  decision required`, each printed only when the corresponding field is
+  non-null) — see "Backward compatibility" below for how this was verified.
+- **Supplied:** no human-readable text is emitted at all — not the
+  `Automated Operations Bridge — Run` banner, not the adapter-selection
+  lines, nothing — only one line of `JSON.stringify(...)` on stdout,
+  suitable for direct `JSON.parse()`. A thrown eligibility/lock error
+  (`WorkOrderNotEligibleError`, `DuplicateDeliveryError`,
+  `ExecutionLockAlreadyHeldError`, etc.) is reported the same way:
+  `{"success":false,"error":{"code":"...","message":"..."}}` on stdout,
+  never a stack trace, mirroring `content-request.mjs`'s own unified
+  success/failure JSON shape.
+- **A genuine usage error** (missing required positional args/flags) is
+  never JSON-wrapped, `--json` or not — it is a caller mistake, not an
+  execution outcome, and is reported to stderr exactly as it always has
+  been (`Usage: ...`), matching every other CLI in this project.
+
+### Rich Orchestration Result (DC-003-I029.4.1)
+
+Also found during the same planning exercise: `runOperationsBridge()`'s
+own pre-I029.4.1 return value carried only identifiers and status
+values (`workOrderId`, `deliveryReportId`, `deliveryStatus`,
+`deliveryCommit`, `strategyReviewId`, `decision`, and two transport
+record IDs) — nothing a CEO notification could actually use. Building one
+would have needed a second CLI call (`strategy-review-agent.mjs get
+<reviewId> ...`) just to read the review's own summary. The single-call
+philosophy this milestone's own brief asks for meant closing that gap
+instead:
+
+```json
+{
+  "success": true,
+  "workOrderId": "wo_39c197e0d96148c2",
+  "workOrderTitle": "Smoke test JSON mode",
+  "deliveryReportId": "dr_2adb75a903274224",
+  "deliveryStatus": "failed",
+  "deliveryCommit": null,
+  "deliveryTimestamp": "2026-08-06T01:16:53.160Z",
+  "strategyReviewId": "esr_ee8169b9da744639",
+  "decision": "correction_required",
+  "reviewedAt": "2026-08-06T01:16:53.494Z",
+  "summary": "Review resolved before the reviewer was invoked: Delivery Report status is \"failed\", not \"completed\" — only a completed delivery is eligible for routine approval.",
+  "risks": ["Delivery Report status is \"failed\", not \"completed\" — only a completed delivery is eligible for routine approval."],
+  "correction": {
+    "failed_criteria": [1],
+    "required_outcome": "Complete the original Engineering Work Order and produce a Delivery Report with status \"completed\".",
+    "prohibited_scope_expansion": "Remain within the original Engineering Work Order — no scope expansion.",
+    "verification_required": "All mandatory review criteria pass. Repository evidence is independently verified. Delivery Report status is \"completed\". Delivery Report status is \"failed\", not \"completed\" — only a completed delivery is eligible for routine approval."
+  },
+  "ceoEscalation": null,
+  "transportRecordIds": { "delivery": "bt_ae6c46ce1b5a4bab", "review": "bt_eeaeb46113bc4395" }
+}
+```
+
+(Real output, from this milestone's own live smoke test against a
+throwaway git repository — not fabricated.) `correction`/`ceoEscalation`
+are `null` when the decision doesn't carry one — `approved` and
+`rejected` both leave both null; `correction_required` populates
+`correction` only; `ceo_decision_required` populates `ceoEscalation` only.
+
+**Where every field comes from — no second store, no new persistence.**
+`automated-operations-bridge-service.mjs`'s `runOperationsBridge()` calls
+`deliveryOfficeService.getExecutionStatus(workOrderId)` and
+`strategyReviewService.getReviewStatus(deliveryReportId)` — **both
+already-public, read-only methods that existed since I029.4 itself**,
+originally built only for the CLI's own `status` subcommand — after the
+two write calls (`executeApprovedWorkOrder`/`reviewDelivery`) complete,
+and reads `workOrderTitle`/`deliveryTimestamp`/`summary`/`risks`/
+`correction`/`ceoEscalation`/`reviewedAt` off the records those calls
+already independently persisted. **Zero lines of I029.2's or I029.3's own
+business logic were touched to make this possible** — this milestone's
+own scope fence ("Do not change Delivery Office behavior... Do not
+change Strategy Review behavior") is satisfied structurally, not just by
+intent: `automated-delivery-office-service.mjs` and
+`automated-strategy-review-service.mjs` are byte-for-byte unchanged (see
+"Verification" below).
+
+**One structural accommodation the enrichment required, worth recording
+honestly rather than glossing over:** when a Delivery Status Authority
+Gate (I029.3.1) override forces `correction_required` down from a
+model's own `"approved"` proposal, the model's own per-criterion
+assessment (typically all-`pass`) can't be reused —
+`createEngineeringStrategyReview()` requires at least one
+`fail`/`insufficient_evidence` criterion for `correction_required`. This
+was already true before I029.4.1 (the gate logic itself is unchanged);
+I029.4.1 only surfaces the resulting `correction` object that was already
+being computed and persisted — see I029.3.1's own README section for the
+`buildUnassessedCriteria()`/`synthesizeCorrection()` mechanism.
+
+**Nothing was invented.** Every field in the example above is a direct
+read of an already-persisted value — `workOrderTitle` from the Work
+Order's own `title`; `summary`/`risks`/`correction`/`ceoEscalation`/
+`reviewedAt` from the Strategy Review's own already-validated fields;
+`deliveryTimestamp` from the Delivery Report's own `delivery_timestamp`.
+No field was computed, guessed, or derived beyond a straight passthrough
+(the one exception is the CLI-layer `success: true`/`false` wrapper,
+which is presentational — see "Machine-Readable Output Mode" above — not
+part of the service's own return value).
+
+### Backward compatibility (DC-003-I029.4.1)
+
+Verified, not assumed: the same 8 pre-existing `run`-without-`--json`
+tests from I029.4's own CLI test file (adapter-selection banner text,
+line order, exact labels) still pass completely unmodified after this
+milestone — the only lines this milestone ever adds to human-readable
+output are new, optional, and appended after the original seven. The
+`--live-runner`/`--live-review` gate wiring, the `status`/`inspect`
+subcommands, and every other flag are untouched.
 
 ### A genuine architectural gap found by this milestone's own end-to-end smoke test — RESOLVED by DC-003-I029.3.1
 
@@ -6988,6 +7111,35 @@ I029.3's own CLI test precedent. Diff scope: 2 new source files
 `package.json`, `src/index.mjs`, this section's own I029.3 limitations
 bullet) — I029.2/I029.3/every prior module confirmed byte-for-byte
 untouched.
+
+### Verification (DC-003-I029.4.1)
+
+`npm test` 1667/1667 (was 1657, +10: 3 added to
+`automated-operations-bridge-service.test.mjs` + 4 added to
+`operations-bridge-cli.test.mjs` + 3 added to
+`operations-bridge-delivery-status-regression.test.mjs`, extended to
+cover `rejected` and a model-proposed `correction_required` end to end
+through real I029.2+I029.3+I029.4 services, alongside the two scenarios
+it already covered), `npm run validate` 19/19 fixtures (no new schema).
+**Docker Desktop was unreachable for this milestone's own verification
+pass** — the full suite was instead run directly via the host's own
+Node.js (v24.18.1, confirmed available and already used for every manual
+smoke test in this project's I029.x history) — 1651/1667 passed that way,
+with the 16 failures confirmed pre-existing, host-Windows-path/subprocess
+environment artifacts in six OLD test files from I021/I022/I024/I026
+(`control-centre-cli.test.mjs`, `export-production-assets*.test.mjs`,
+`windows-production-export-service.test.mjs`, `publish-production-assets-cli.test.mjs`,
+`generate-live-carousel-cli.test.mjs`) — none of which this milestone
+touched; every one of this milestone's own three test files (27 tests
+total) passed cleanly on the first run. **Live-verified end-to-end**
+against a fresh throwaway git repository: `npm run operations-bridge --
+run ... --json` produced exactly one line of valid, complete JSON (byte
+count and line count both confirmed) — the example in "Rich Orchestration
+Result" above is that real output, not a hand-written illustration.
+Diff scope: 2 modified source files (`automated-operations-bridge-service.mjs`,
+`tests/validation/operations-bridge.mjs`) + 3 modified test files + README
+— I029.2's and I029.3's own source files confirmed byte-for-byte
+untouched; no schema, store, lock, or Control Centre file touched.
 
 ### Explicitly out of scope (per this milestone's own brief)
 
@@ -7381,8 +7533,8 @@ milestone).
 | Bridge Transport (moves Engineering Work Orders out / Engineering Delivery Reports in, mock-only clean extension point) | Done (DC-003-I029.1) — `src/bridge-transport-record.mjs`, `src/bridge-transport-store.mjs` + adapter files, `src/bridge-transport-mock-adapter.mjs`, `src/bridge-transport-service.mjs`, CLI `npm run bridge`; see "Bridge Transport (DC-003-I029.1)"; new `schemas/bridge-transport-record.schema.json`; no Claude/ChatGPT/MCP/n8n/API/networking of any kind — transport only, no engineering decisions, no prompt generation; `direction` is derived from `object_type`, never caller-supplied; Control Centre's `bridgeTransportStore` dependency is additive/optional, mirroring I028/I029's own precedent; kept deliberately lean (14 new files) — every I029 module (Work Order/Delivery Report Stores, CLI, Control Centre) reused completely unmodified |
 | Automated Delivery Office (first real Bridge Transport provider — executes one approved Work Order through a replaceable Runner Adapter, mock by default, records one Delivery Report) | Done (DC-003-I029.2) — `src/execution-policy.mjs`, `src/delivery-execution-lock.mjs`, `src/delivery-office-runner-adapter.mjs`, `src/delivery-office-mock-runner-adapter.mjs`, `src/claude-code-delivery-runner-adapter.mjs`, `src/delivery-office-runner-config.mjs`, `src/repository-git-evidence.mjs`, `src/automated-delivery-office-service.mjs`, CLI `npm run delivery-office`; see "Automated Delivery Office (DC-003-I029.2)"; no new schema — reuses I029's Work Order/Delivery Report and I029.1's Bridge Transport completely unmodified; no automated test invokes Claude or the network; default is always mock, real execution gated behind explicit `--live-runner`; independent git re-verification, never blind trust in the runner's own self-report, decides the final Delivery Report status; Control Centre's `deliveryOfficeLockDir` is additive/optional; **no real Claude Code execution occurred — pending the Initial Real-Runner Verification Gate and fresh Strategy Office + CEO approval** |
 | Automated Strategy Review (first automated Strategy Office review stage — reviews one Delivery Report's independently-verified evidence against its Work Order, mock by default, records one Engineering Strategy Review) | Done (DC-003-I029.3) — `src/engineering-strategy-review.mjs`, `src/engineering-strategy-review-store.mjs` + adapter files, `src/strategy-review-evidence-collector.mjs`, `src/strategy-review-authority-gates.mjs`, `src/strategy-review-policy.mjs`, `src/strategy-review-agent-adapter.mjs`, `src/strategy-review-mock-adapter.mjs`, `src/openai-strategy-review-adapter.mjs`, `src/strategy-review-instruction.mjs`, `src/strategy-review-config.mjs`, `src/strategy-review-error-diagnostics.mjs`, `src/strategy-review-lock.mjs`, `src/automated-strategy-review-service.mjs`, CLI `npm run strategy-review`; see "Automated Strategy Review (DC-003-I029.3)"; new `schemas/engineering-strategy-review.schema.json`; `bridge-transport-record.schema.json`/`.mjs` additively extended with `engineering_strategy_review` (`direction: "outgoing"`) — the only two I029.1 files touched, per Strategy Office's own explicit scope; deterministic authority gates (pre- and post-invocation) mean the OpenAI model can only make an outcome more cautious, never override toward approval; a failed test/fixture always blocks approval regardless of what the model proposes; no automated test invokes OpenAI or the network; default is always mock, real review gated behind explicit `--live-review`, fixed one-request ceiling; Engineering Work Management and Control Centre integrations both additive/optional; **no live OpenAI request occurred — pending the Initial Live Review Verification Gate and fresh Strategy Office + CEO approval**; does not yet create/execute correction Work Orders; **Delivery Status Authority Gate added and live-verified (DC-003-I029.3.1)** — a Delivery Report whose own overall status is `failed`/`partial` can no longer resolve to `approved`, closing a real defect the DC-003-I029.4 end-to-end smoke test found (self-reported-passing test/fixture counters could previously override an independently-verified failed delivery); see "Delivery Status Authority Gate (DC-003-I029.3.1)" |
-| End-to-End Operations Bridge (orchestrates I029.2 + I029.3 into one call: Work Order -> Delivery Office Runner -> Delivery Report -> Strategy Review -> decision) | Done (DC-003-I029.4) — `src/automated-operations-bridge-service.mjs`, `src/operations-bridge-errors.mjs`, CLI `npm run operations-bridge`; see "End-to-End Operations Bridge (DC-003-I029.4)"; no new schema, no new lock, no new eligibility/git/review logic — pure composition of two already-constructed I029.2/I029.3 services; `getOperationsBridgeStatus()` is a separate plain read over existing stores/locks, mirroring both standalone CLIs' own `status` precedent; Control Centre needed zero code changes (confirmed live, a genuine finding, not an oversight); **live end-to-end smoke test against a real throwaway git repository surfaced a genuine, pre-existing I029.3 authority-gate gap** (a "failed" Delivery Report's own status is not itself a mandatory escalation condition) — documented, not fixed, per this milestone's own "no new review logic" scope; no live Claude Code or OpenAI request occurred |
-| Unit test suite | Done — 1657 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| End-to-End Operations Bridge (orchestrates I029.2 + I029.3 into one call: Work Order -> Delivery Office Runner -> Delivery Report -> Strategy Review -> decision) | Done (DC-003-I029.4) — `src/automated-operations-bridge-service.mjs`, `src/operations-bridge-errors.mjs`, CLI `npm run operations-bridge`; see "End-to-End Operations Bridge (DC-003-I029.4)"; no new schema, no new lock, no new eligibility/git/review logic — pure composition of two already-constructed I029.2/I029.3 services; `getOperationsBridgeStatus()` is a separate plain read over existing stores/locks, mirroring both standalone CLIs' own `status` precedent; Control Centre needed zero code changes (confirmed live, a genuine finding, not an oversight); **live end-to-end smoke test against a real throwaway git repository surfaced a genuine, pre-existing I029.3 authority-gate gap** (a "failed" Delivery Report's own status is not itself a mandatory escalation condition) — documented, not fixed, per this milestone's own "no new review logic" scope; no live Claude Code or OpenAI request occurred; **machine-readable `--json` mode and a single-call enriched result added (DC-003-I029.4.1)** — closes the two integration gaps the DC-005 OC-001 architecture investigation found (console-text-only output; a thin result requiring a second CLI call for a CEO notification), both fixed via already-public `getExecutionStatus()`/`getReviewStatus()` reads with zero I029.2/I029.3 changes; see "Machine-Readable Output Mode (DC-003-I029.4.1)" |
+| Unit test suite | Done — 1667 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before), 10 from I029.4.1 — 3 added to `automated-operations-bridge-service.test.mjs` (the single-call enrichment, sourced from fake `getExecutionStatus()`/`getReviewStatus()`) + 4 added to `operations-bridge-cli.test.mjs` (`--json` mode: banner suppression, the unified failure shape, backward-compatible plain-text mode) + 3 added to `operations-bridge-delivery-status-regression.test.mjs` (`rejected` and a model-proposed `correction_required`, both through real I029.2+I029.3+I029.4 services, extending its existing failed/completed coverage) — no existing test file's own assertions were weakened or removed, only extended); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

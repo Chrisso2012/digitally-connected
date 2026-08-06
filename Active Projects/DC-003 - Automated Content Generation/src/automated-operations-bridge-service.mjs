@@ -80,6 +80,13 @@ export function createOperationsBridgeService(fields = {}) {
    * ExecutionLockAlreadyHeldError, DeliveryReportNotEligibleForReviewError,
    * etc. all propagate as themselves, exactly as they would from either
    * standalone CLI.
+   *
+   * Returns { workOrderId, workOrderTitle, deliveryReportId,
+   *   deliveryStatus, deliveryCommit, deliveryTimestamp, strategyReviewId,
+   *   decision, reviewedAt, summary, risks, correction, ceoEscalation,
+   *   transportRecordIds: { delivery, review } } — DC-003-I029.4.1's own
+   *   single-call enrichment; see that comment block below for where each
+   *   field is sourced from.
    */
   async function runOperationsBridge({ workOrderId, allowNewerStartingCommit = false }) {
     const deliveryResult = await deliveryOfficeService.executeApprovedWorkOrder({ workOrderId, allowNewerStartingCommit });
@@ -89,15 +96,41 @@ export function createOperationsBridgeService(fields = {}) {
       deliveryReportId: deliveryResult.deliveryReportId,
     });
 
+    // DC-003-I029.4.1 — enrich the result so an external orchestrator (the
+    // intended DC-005/n8n consumer) never needs a second CLI call to build
+    // a CEO notification. Sourced ENTIRELY from each sub-service's own
+    // already-public, read-only status methods (getExecutionStatus() /
+    // getReviewStatus(), both pre-existing since I029.4) — never a raw
+    // store, never a new read path. This is a read of evidence both
+    // services already independently persisted during the two calls
+    // above; zero lines of I029.2/I029.3 business logic were touched to
+    // make this possible. See README "Rich Orchestration Result
+    // (DC-003-I029.4.1)" for why each field is honestly available this
+    // way (or, for anything that isn't, why not).
+    const executionStatus = deliveryOfficeService.getExecutionStatus(workOrderId);
+    const deliveryReport = executionStatus.deliveryReports.find((report) => report.delivery_report_id === deliveryResult.deliveryReportId) ?? null;
+
+    const reviewStatus = strategyReviewService.getReviewStatus(deliveryResult.deliveryReportId);
+    const review = reviewStatus.reviews.find((r) => r.strategy_review_id === reviewResult.strategyReviewId) ?? null;
+
     return {
       workOrderId,
+      workOrderTitle: executionStatus.workOrder.title,
       deliveryReportId: deliveryResult.deliveryReportId,
       deliveryStatus: deliveryResult.status,
       deliveryCommit: deliveryResult.commit,
-      deliveryTransportRecordId: deliveryResult.transportRecordId,
+      deliveryTimestamp: deliveryReport?.delivery_timestamp ?? null,
       strategyReviewId: reviewResult.strategyReviewId,
       decision: reviewResult.decision,
-      reviewTransportRecordId: reviewResult.transportRecordId,
+      reviewedAt: review?.reviewed_at ?? null,
+      summary: review?.summary ?? null,
+      risks: review?.risks ?? [],
+      correction: review?.correction ?? null,
+      ceoEscalation: review?.ceo_escalation ?? null,
+      transportRecordIds: {
+        delivery: deliveryResult.transportRecordId,
+        review: reviewResult.transportRecordId,
+      },
     };
   }
 

@@ -13,8 +13,14 @@ import assert from "node:assert/strict";
 import { createOperationsBridgeService, getOperationsBridgeStatus } from "../../src/automated-operations-bridge-service.mjs";
 import { InvalidAutomatedOperationsBridgeDependenciesError } from "../../src/operations-bridge-errors.mjs";
 
+// DC-003-I029.4.1 — both fakes also implement getExecutionStatus()/
+// getReviewStatus() now, since runOperationsBridge() calls them (on the
+// SAME already-public methods the standalone CLIs' own `status`
+// subcommand already used) to enrich its own result — never a new method,
+// never a raw store.
 function fakeDeliveryOfficeService(overrides = {}) {
   const calls = [];
+  const deliveryReportId = overrides.deliveryReportId ?? "dr_fake0001";
   return {
     calls,
     executeApprovedWorkOrder: async (args) => {
@@ -22,17 +28,23 @@ function fakeDeliveryOfficeService(overrides = {}) {
       if (overrides.throws) throw overrides.throws;
       return {
         workOrderId: args.workOrderId,
-        deliveryReportId: overrides.deliveryReportId ?? "dr_fake0001",
+        deliveryReportId,
         status: overrides.status ?? "completed",
         commit: overrides.commit ?? "abc1234",
         transportRecordId: overrides.transportRecordId ?? "tr_fakeDelivery0001",
       };
     },
+    getExecutionStatus: (workOrderId) => ({
+      workOrder: { work_order_id: workOrderId, title: overrides.workOrderTitle ?? "Fake Work Order" },
+      deliveryReports: [{ delivery_report_id: deliveryReportId, delivery_timestamp: overrides.deliveryTimestamp ?? "2026-08-05T00:00:00.000Z" }],
+      lock: null,
+    }),
   };
 }
 
 function fakeStrategyReviewService(overrides = {}) {
   const calls = [];
+  const strategyReviewId = overrides.strategyReviewId ?? "rev_fake0001";
   return {
     calls,
     reviewDelivery: async (args) => {
@@ -41,11 +53,25 @@ function fakeStrategyReviewService(overrides = {}) {
       return {
         workOrderId: args.workOrderId,
         deliveryReportId: args.deliveryReportId,
-        strategyReviewId: overrides.strategyReviewId ?? "rev_fake0001",
+        strategyReviewId,
         decision: overrides.decision ?? "approved",
         transportRecordId: overrides.transportRecordId ?? "tr_fakeReview0001",
       };
     },
+    getReviewStatus: (deliveryReportId) => ({
+      deliveryReport: { delivery_report_id: deliveryReportId },
+      reviews: [
+        {
+          strategy_review_id: strategyReviewId,
+          reviewed_at: overrides.reviewedAt ?? "2026-08-05T01:00:00.000Z",
+          summary: overrides.summary ?? "Fake summary.",
+          risks: overrides.risks ?? [],
+          correction: overrides.correction ?? null,
+          ceo_escalation: overrides.ceoEscalation ?? null,
+        },
+      ],
+      lock: null,
+    }),
   };
 }
 
@@ -108,22 +134,93 @@ test("runOperationsBridge passes allowNewerStartingCommit through to the deliver
 });
 
 test("runOperationsBridge returns a combined result with both stages' own identifiers and transport records", async () => {
-  const deliveryOfficeService = fakeDeliveryOfficeService({ deliveryReportId: "dr_abc0001", status: "completed", commit: "c0ffee1", transportRecordId: "tr_delivery0001" });
-  const strategyReviewService = fakeStrategyReviewService({ strategyReviewId: "rev_def0002", decision: "approved", transportRecordId: "tr_review0002" });
+  const deliveryOfficeService = fakeDeliveryOfficeService({
+    deliveryReportId: "dr_abc0001",
+    status: "completed",
+    commit: "c0ffee1",
+    transportRecordId: "tr_delivery0001",
+    workOrderTitle: "Ship the thing",
+    deliveryTimestamp: "2026-08-05T00:30:00.000Z",
+  });
+  const strategyReviewService = fakeStrategyReviewService({
+    strategyReviewId: "rev_def0002",
+    decision: "approved",
+    transportRecordId: "tr_review0002",
+    reviewedAt: "2026-08-05T00:45:00.000Z",
+    summary: "Everything checks out.",
+    risks: [],
+  });
   const service = createOperationsBridgeService({ deliveryOfficeService, strategyReviewService });
 
   const result = await service.runOperationsBridge({ workOrderId: "wo_xyz0001" });
 
   assert.deepEqual(result, {
     workOrderId: "wo_xyz0001",
+    workOrderTitle: "Ship the thing",
     deliveryReportId: "dr_abc0001",
     deliveryStatus: "completed",
     deliveryCommit: "c0ffee1",
-    deliveryTransportRecordId: "tr_delivery0001",
+    deliveryTimestamp: "2026-08-05T00:30:00.000Z",
     strategyReviewId: "rev_def0002",
     decision: "approved",
-    reviewTransportRecordId: "tr_review0002",
+    reviewedAt: "2026-08-05T00:45:00.000Z",
+    summary: "Everything checks out.",
+    risks: [],
+    correction: null,
+    ceoEscalation: null,
+    transportRecordIds: { delivery: "tr_delivery0001", review: "tr_review0002" },
   });
+});
+
+// --- DC-003-I029.4.1: single-call enrichment ------------------------------
+
+test("runOperationsBridge(): surfaces a correction_required review's own correction specification without a second call", async () => {
+  const correction = { failed_criteria: [1], required_outcome: "Do it again.", prohibited_scope_expansion: "No scope creep.", verification_required: "Tests pass." };
+  const deliveryOfficeService = fakeDeliveryOfficeService({ status: "failed", commit: null });
+  const strategyReviewService = fakeStrategyReviewService({ decision: "correction_required", correction, risks: ["Delivery did not complete."] });
+  const service = createOperationsBridgeService({ deliveryOfficeService, strategyReviewService });
+
+  const result = await service.runOperationsBridge({ workOrderId: "wo_xyz0001" });
+
+  assert.equal(result.decision, "correction_required");
+  assert.deepEqual(result.correction, correction);
+  assert.equal(result.ceoEscalation, null);
+  assert.deepEqual(result.risks, ["Delivery did not complete."]);
+});
+
+test("runOperationsBridge(): surfaces a ceo_decision_required review's own escalation without a second call", async () => {
+  const ceoEscalation = { decision_required: "Manual review required.", reason: "Credential file touched.", safe_options: ["Stop."], default_safe_action: "stop" };
+  const strategyReviewService = fakeStrategyReviewService({ decision: "ceo_decision_required", ceoEscalation });
+  const service = createOperationsBridgeService({ deliveryOfficeService: fakeDeliveryOfficeService(), strategyReviewService });
+
+  const result = await service.runOperationsBridge({ workOrderId: "wo_xyz0001" });
+
+  assert.equal(result.decision, "ceo_decision_required");
+  assert.deepEqual(result.ceoEscalation, ceoEscalation);
+  assert.equal(result.correction, null);
+});
+
+test("runOperationsBridge(): the enriched fields are sourced from getExecutionStatus()/getReviewStatus() — never require a new method beyond what the CLI's own status subcommand already used", async () => {
+  let executionStatusCalls = 0;
+  let reviewStatusCalls = 0;
+  const deliveryOfficeService = fakeDeliveryOfficeService();
+  const strategyReviewService = fakeStrategyReviewService();
+  const originalGetExecutionStatus = deliveryOfficeService.getExecutionStatus;
+  deliveryOfficeService.getExecutionStatus = (...args) => {
+    executionStatusCalls += 1;
+    return originalGetExecutionStatus(...args);
+  };
+  const originalGetReviewStatus = strategyReviewService.getReviewStatus;
+  strategyReviewService.getReviewStatus = (...args) => {
+    reviewStatusCalls += 1;
+    return originalGetReviewStatus(...args);
+  };
+  const service = createOperationsBridgeService({ deliveryOfficeService, strategyReviewService });
+
+  await service.runOperationsBridge({ workOrderId: "wo_xyz0001" });
+
+  assert.equal(executionStatusCalls, 1);
+  assert.equal(reviewStatusCalls, 1);
 });
 
 test("runOperationsBridge still invokes review after a non-'completed' delivery — the review is what evaluates a bad delivery, it is never skipped", async () => {

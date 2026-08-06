@@ -93,7 +93,7 @@ function seedReadyWorkOrder(workOrderStore, overrides = {}) {
   );
 }
 
-function buildRealOperationsBridge(dirs, { runGit } = {}) {
+function buildRealOperationsBridge(dirs, { runGit, reviewerAdapter } = {}) {
   const workOrderStore = createEngineeringWorkOrderStore({ adapter: createLocalJsonEngineeringWorkOrderStoreAdapter({ storageDir: dirs.workOrderDir }) });
   const deliveryReportStore = createEngineeringDeliveryReportStore({ adapter: createLocalJsonEngineeringDeliveryReportStoreAdapter({ storageDir: dirs.deliveryReportDir }) });
   const strategyReviewStore = createEngineeringStrategyReviewStore({ adapter: createLocalJsonEngineeringStrategyReviewStoreAdapter({ storageDir: dirs.strategyReviewDir }) });
@@ -121,7 +121,7 @@ function buildRealOperationsBridge(dirs, { runGit } = {}) {
       deliveryReportStore,
       strategyReviewStore,
       transportStore,
-      reviewerAdapter: createStrategyReviewMockAdapter(),
+      reviewerAdapter: reviewerAdapter ?? createStrategyReviewMockAdapter(),
       lock: createStrategyReviewLock({ lockDir: dirs.reviewLockDir }),
       policy: createStrategyReviewPolicy({ repositoryPath: "/fake/repo", permittedBranch: "main" }),
       reviewExportDir: dirs.exportDir,
@@ -173,4 +173,65 @@ test("runOperationsBridge(): a genuinely completed delivery (real commit lands, 
     assert.equal(result.decision, "approved");
     assert.equal(deliveryReportStore.get(result.deliveryReportId).status, "completed");
     assert.equal(strategyReviewStore.get(result.strategyReviewId).decision, "approved");
+  }));
+
+// --- DC-003-I029.4.1: the enriched result end-to-end for every decision ---
+//
+// A "completed" delivery isolates these from the Delivery Status
+// Authority Gate entirely, so the reviewer adapter's own chosen mode is
+// what actually determines the decision — proving the single-call
+// enrichment (summary/risks/correction/ceoEscalation) round-trips
+// correctly through real persistence for every decision the real
+// automated-strategy-review-service.mjs can produce, not just the two
+// already covered above (correction_required via the gate, approved via
+// the mock's own default mode).
+
+test("runOperationsBridge(): a 'rejected' review surfaces its own summary and risks in the single enriched result, with no correction/ceoEscalation invented", () =>
+  withTempDirs(async (dirs) => {
+    const { operationsBridgeService, workOrderStore } = buildRealOperationsBridge(dirs, {
+      runGit: fakeRunGit({ startCommit: "aaa1111", endCommit: "bbb2222" }),
+      reviewerAdapter: createStrategyReviewMockAdapter({ mode: "rejected" }),
+    });
+    const workOrder = seedReadyWorkOrder(workOrderStore);
+
+    const result = await operationsBridgeService.runOperationsBridge({ workOrderId: workOrder.work_order_id });
+
+    assert.equal(result.deliveryStatus, "completed");
+    assert.equal(result.decision, "rejected");
+    assert.ok(result.summary && result.summary.length > 0);
+    assert.equal(result.correction, null);
+    assert.equal(result.ceoEscalation, null);
+  }));
+
+test("runOperationsBridge(): a 'ceo_decision_required' review surfaces its own real ceoEscalation object in the single enriched result", () =>
+  withTempDirs(async (dirs) => {
+    const { operationsBridgeService, workOrderStore } = buildRealOperationsBridge(dirs, {
+      runGit: fakeRunGit({ startCommit: "aaa1111", endCommit: "bbb2222" }),
+      reviewerAdapter: createStrategyReviewMockAdapter({ mode: "ceo-escalation" }),
+    });
+    const workOrder = seedReadyWorkOrder(workOrderStore);
+
+    const result = await operationsBridgeService.runOperationsBridge({ workOrderId: workOrder.work_order_id });
+
+    assert.equal(result.decision, "ceo_decision_required");
+    assert.ok(result.ceoEscalation);
+    assert.ok(result.ceoEscalation.reason.length > 0);
+    assert.equal(result.correction, null);
+  }));
+
+test("runOperationsBridge(): a mock 'correction-required' review (genuine model proposal, not a gate override) surfaces the model's own correction spec", () =>
+  withTempDirs(async (dirs) => {
+    const { operationsBridgeService, workOrderStore } = buildRealOperationsBridge(dirs, {
+      runGit: fakeRunGit({ startCommit: "aaa1111", endCommit: "bbb2222" }),
+      reviewerAdapter: createStrategyReviewMockAdapter({ mode: "correction-required" }),
+    });
+    const workOrder = seedReadyWorkOrder(workOrderStore);
+
+    const result = await operationsBridgeService.runOperationsBridge({ workOrderId: workOrder.work_order_id });
+
+    assert.equal(result.deliveryStatus, "completed");
+    assert.equal(result.decision, "correction_required");
+    assert.ok(result.correction);
+    assert.deepEqual(result.correction.failed_criteria, [1]);
+    assert.equal(result.ceoEscalation, null);
   }));

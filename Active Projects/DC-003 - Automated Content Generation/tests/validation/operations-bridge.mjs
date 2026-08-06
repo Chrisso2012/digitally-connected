@@ -10,13 +10,22 @@
 // flag (`--live-runner`, `--live-review`), independently, exactly like
 // the standalone CLIs.
 //
+// DC-003-I029.4.1 — `run` gained a `--json` mode: one machine-readable
+// JSON line on stdout instead of the human-readable lines below, for an
+// external orchestrator (DC-005/n8n) to `JSON.parse($json.stdout)` —
+// mirrors DC-003-I017's own `content-request.mjs --json` precedent
+// exactly. Additive only: omitting `--json` reproduces the exact
+// pre-I029.4.1 human-readable output, byte-for-byte. See README
+// "Machine-Readable Output Mode (DC-003-I029.4.1)" for the full contract
+// and an example response.
+//
 // Usage:
 //   node tests/validation/operations-bridge.mjs inspect --repo=<repositoryPath> [--branch=<name>]
 //   node tests/validation/operations-bridge.mjs run <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <strategyReviewStoreDirectory> <bridgeTransportStoreDirectory> <repositoryPath>
 //       --delivery-lock=<lockDirectory> --review-lock=<lockDirectory> --drop=<deliveryReportDropDir> --export=<reviewExportDir>
 //       [--branch=<name>] [--live-runner] [--live-review] [--allow-newer-commit]
 //       [--allow-push] [--allow-commits] [--allow-docker] [--max-cost-usd=<n>]
-//       [--rerun-tests] [--rerun-fixtures] [--allow-delivery-branch-differ]
+//       [--rerun-tests] [--rerun-fixtures] [--allow-delivery-branch-differ] [--json]
 //   node tests/validation/operations-bridge.mjs status <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <strategyReviewStoreDirectory>
 //       --delivery-lock=<lockDirectory> --review-lock=<lockDirectory>
 //
@@ -164,7 +173,7 @@ function usageAndExit() {
   console.error("Usage:");
   console.error("  node tests/validation/operations-bridge.mjs inspect --repo=<repositoryPath> [--branch=<name>]");
   console.error(
-    "  node tests/validation/operations-bridge.mjs run <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <strategyReviewStoreDirectory> <bridgeTransportStoreDirectory> <repositoryPath> --delivery-lock=<lockDirectory> --review-lock=<lockDirectory> --drop=<deliveryReportDropDir> --export=<reviewExportDir> [--branch=<name>] [--live-runner] [--live-review] [--allow-newer-commit] [--allow-push] [--allow-commits] [--allow-docker] [--max-cost-usd=<n>] [--rerun-tests] [--rerun-fixtures] [--allow-delivery-branch-differ]"
+    "  node tests/validation/operations-bridge.mjs run <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <strategyReviewStoreDirectory> <bridgeTransportStoreDirectory> <repositoryPath> --delivery-lock=<lockDirectory> --review-lock=<lockDirectory> --drop=<deliveryReportDropDir> --export=<reviewExportDir> [--branch=<name>] [--live-runner] [--live-review] [--allow-newer-commit] [--allow-push] [--allow-commits] [--allow-docker] [--max-cost-usd=<n>] [--rerun-tests] [--rerun-fixtures] [--allow-delivery-branch-differ] [--json]"
   );
   console.error(
     "  node tests/validation/operations-bridge.mjs status <workOrderId> <workOrderStoreDirectory> <deliveryReportStoreDirectory> <strategyReviewStoreDirectory> --delivery-lock=<lockDirectory> --review-lock=<lockDirectory>"
@@ -261,9 +270,19 @@ function buildStores(workOrderStoreDirectory, deliveryReportStoreDirectory, stra
   return { workOrderStore, deliveryReportStore, strategyReviewStore, transportStore };
 }
 
+// DC-003-I029.4.1 — one JSON line, unified success/failure shape, on
+// stdout instead of the human-readable lines below. Mirrors
+// content-request.mjs's own `--json` precedent (DC-003-I017). Read once,
+// globally, before subcommand dispatch, so a thrown error from ANY
+// subcommand is reported in the same shape (see the shared catch block).
+function jsonFailureResult(error) {
+  return { success: false, error: { code: error.name, message: error.message } };
+}
+
 const [subcommand, ...rawRest] = process.argv.slice(2);
 if (!subcommand) usageAndExit();
 const { flags, rest } = extractFlags(rawRest);
+const jsonMode = Boolean(flags.json);
 
 try {
   if (subcommand === "inspect") {
@@ -300,14 +319,20 @@ try {
     const reviewerAdapter = buildReviewerAdapter(flags);
     const transportAdapter = createMockBridgeTransportAdapter();
 
-    console.log("Automated Operations Bridge — Run");
-    console.log();
-    console.log(`  Work Order:        ${workOrderId}`);
-    console.log(`  Runner:            ${runnerAdapter.name}${flags["live-runner"] ? "  (LIVE — real Claude Code execution)" : "  (mock — no Claude Code execution)"}`);
-    console.log(`  Reviewer:          ${reviewerAdapter.name}${flags["live-review"] ? "  (LIVE — real OpenAI request)" : "  (mock — no network)"}`);
-    console.log(`  Repository:        ${executionPolicy.repositoryPath}`);
-    console.log(`  Branch:            ${executionPolicy.permittedBranch}`);
-    console.log();
+    // DC-003-I029.4.1 — suppressed entirely in --json mode: the brief's
+    // own requirement is "no human-readable status text should be
+    // emitted... emit one structured JSON object only" when the flag is
+    // supplied. The pre-existing (non-json) banner is untouched below.
+    if (!jsonMode) {
+      console.log("Automated Operations Bridge — Run");
+      console.log();
+      console.log(`  Work Order:        ${workOrderId}`);
+      console.log(`  Runner:            ${runnerAdapter.name}${flags["live-runner"] ? "  (LIVE — real Claude Code execution)" : "  (mock — no Claude Code execution)"}`);
+      console.log(`  Reviewer:          ${reviewerAdapter.name}${flags["live-review"] ? "  (LIVE — real OpenAI request)" : "  (mock — no network)"}`);
+      console.log(`  Repository:        ${executionPolicy.repositoryPath}`);
+      console.log(`  Branch:            ${executionPolicy.permittedBranch}`);
+      console.log();
+    }
 
     const deliveryOfficeService = createAutomatedDeliveryOfficeService({
       workOrderStore,
@@ -338,14 +363,32 @@ try {
       allowNewerStartingCommit: Boolean(flags["allow-newer-commit"]),
     });
 
-    console.log("Run complete");
-    console.log(`  delivery_report_id:         ${result.deliveryReportId}`);
-    console.log(`  delivery_status:            ${result.deliveryStatus}`);
-    console.log(`  delivery_commit:            ${result.deliveryCommit}`);
-    console.log(`  delivery_transport_record:  ${result.deliveryTransportRecordId}`);
-    console.log(`  strategy_review_id:         ${result.strategyReviewId}`);
-    console.log(`  decision:                   ${result.decision}`);
-    console.log(`  review_transport_record:    ${result.reviewTransportRecordId}`);
+    if (jsonMode) {
+      // One line, the entire enriched result (DC-003-I029.4.1) — see
+      // README "Machine-Readable Output Mode" for the field list and an
+      // example. No console text is emitted in this mode at all.
+      console.log(JSON.stringify({ success: true, ...result }));
+    } else {
+      console.log("Run complete");
+      console.log(`  delivery_report_id:         ${result.deliveryReportId}`);
+      console.log(`  delivery_status:            ${result.deliveryStatus}`);
+      console.log(`  delivery_commit:            ${result.deliveryCommit}`);
+      console.log(`  delivery_transport_record:  ${result.transportRecordIds.delivery}`);
+      console.log(`  strategy_review_id:         ${result.strategyReviewId}`);
+      console.log(`  decision:                   ${result.decision}`);
+      console.log(`  review_transport_record:    ${result.transportRecordIds.review}`);
+      // DC-003-I029.4.1 — additive lines only, printed after every
+      // pre-existing line above; nothing above changed its own text or
+      // order, so this remains byte-for-byte compatible with pre-I029.4.1
+      // output up to this point.
+      if (result.summary) console.log(`  summary:                    ${result.summary}`);
+      if (result.risks.length > 0) {
+        console.log("  risks:");
+        for (const risk of result.risks) console.log(`    - ${risk}`);
+      }
+      if (result.correction) console.log(`  correction required:        ${result.correction.required_outcome}`);
+      if (result.ceoEscalation) console.log(`  ceo decision required:      ${result.ceoEscalation.reason}`);
+    }
   } else if (subcommand === "status") {
     const [workOrderId, workOrderStoreDirectory, deliveryReportStoreDirectory, strategyReviewStoreDirectory] = rest;
     if (!workOrderId || !workOrderStoreDirectory || !deliveryReportStoreDirectory || !strategyReviewStoreDirectory || !flags["delivery-lock"] || !flags["review-lock"]) {
@@ -387,8 +430,12 @@ try {
   process.exit(0);
 } catch (error) {
   if (KNOWN_ERRORS.some((ErrorClass) => error instanceof ErrorClass)) {
-    console.error(`FAIL  ${error.name}`);
-    console.error(`  ${error.message}`);
+    if (jsonMode) {
+      console.log(JSON.stringify(jsonFailureResult(error)));
+    } else {
+      console.error(`FAIL  ${error.name}`);
+      console.error(`  ${error.message}`);
+    }
   } else {
     throw error;
   }

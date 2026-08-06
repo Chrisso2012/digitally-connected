@@ -314,3 +314,103 @@ test("run with --live-review fails fast on adapter construction (no OPENAI_API_K
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /StrategyReviewConfigurationError|OPENAI_API_KEY/);
   }));
+
+// --- DC-003-I029.4.1: --json machine-readable mode -------------------------
+//
+// Full subprocess-level `run --json` completion (approved/correction_
+// required/ceo_decision_required/rejected) needs a real git repository —
+// same git-free constraint as this file's own header explains for every
+// other `run` scenario. That full-lifecycle coverage lives at the service
+// layer instead: automated-operations-bridge-service.test.mjs (fakes,
+// every decision branch, proves the enriched result shape) and
+// operations-bridge-delivery-status-regression.test.mjs (real I029.2 +
+// I029.3 + I029.4 services with an injected fake `runGit`, proving
+// failed->correction_required and completed->approved for real). This
+// section only proves the CLI's own --json wrapper mechanics: it selects
+// JSON output, suppresses all human-readable text, and produces a clean
+// `JSON.parse()`-able failure shape for a real (git-free) thrown error.
+
+test("run --json with missing required flags still prints plain usage text (usage errors are not JSON-wrapped)", () => {
+  const result = runCli("run", "wo_x", "a", "b", "c", "d", "e", "--json");
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Usage:/);
+});
+
+test("run --json for an unknown Work Order id emits exactly one clean JSON line — no banner, no stack trace", () =>
+  withTempDirs(({ workOrderDir, deliveryReportDir, strategyReviewDir, deliveryLockDir, reviewLockDir, dropDir, exportDir, base }) => {
+    // EngineeringWorkOrderNotFoundError throws from workOrderStore.get()
+    // — the very first line of executeApprovedWorkOrder() — before any
+    // git call is ever made, so this is genuinely git-free.
+    const bridgeDir = path.join(base, "bridge");
+    const result = runCli(
+      "run",
+      "wo_doesnotexist00000001",
+      workOrderDir,
+      deliveryReportDir,
+      strategyReviewDir,
+      bridgeDir,
+      base,
+      `--repo=${base}`,
+      `--delivery-lock=${deliveryLockDir}`,
+      `--review-lock=${reviewLockDir}`,
+      `--drop=${dropDir}`,
+      `--export=${exportDir}`,
+      "--json"
+    );
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout, /Automated Operations Bridge — Run/, "the human-readable banner must not print in --json mode");
+    const parsed = JSON.parse(result.stdout.trim());
+    assert.deepEqual(parsed, {
+      success: false,
+      error: { code: "EngineeringWorkOrderNotFoundError", message: parsed.error.message },
+    });
+    assert.doesNotMatch(parsed.error.message, /at file:\/\//, "no raw stack trace ever enters the JSON body");
+  }));
+
+test("run without --json for the same unknown Work Order id keeps the original plain-text failure shape (backward compatibility)", () =>
+  withTempDirs(({ workOrderDir, deliveryReportDir, strategyReviewDir, deliveryLockDir, reviewLockDir, dropDir, exportDir, base }) => {
+    const bridgeDir = path.join(base, "bridge");
+    const result = runCli(
+      "run",
+      "wo_doesnotexist00000001",
+      workOrderDir,
+      deliveryReportDir,
+      strategyReviewDir,
+      bridgeDir,
+      base,
+      `--repo=${base}`,
+      `--delivery-lock=${deliveryLockDir}`,
+      `--review-lock=${reviewLockDir}`,
+      `--drop=${dropDir}`,
+      `--export=${exportDir}`
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /FAIL {2}EngineeringWorkOrderNotFoundError/);
+    assert.equal(result.stdout.trim().startsWith("{"), false, "stdout is never JSON when --json is omitted");
+  }));
+
+test("run --json without --live-runner/--live-review never prints the adapter-selection banner either (fully suppressed, not just reformatted)", () =>
+  withTempDirs(({ workOrderDir, deliveryReportDir, strategyReviewDir, deliveryLockDir, reviewLockDir, dropDir, exportDir, base }) => {
+    const workOrder = seedWorkOrder(workOrderDir);
+    const bridgeDir = path.join(base, "bridge");
+    const result = runCli(
+      "run",
+      workOrder.work_order_id,
+      workOrderDir,
+      deliveryReportDir,
+      strategyReviewDir,
+      bridgeDir,
+      base,
+      `--repo=${base}`,
+      `--delivery-lock=${deliveryLockDir}`,
+      `--review-lock=${reviewLockDir}`,
+      `--drop=${dropDir}`,
+      `--export=${exportDir}`,
+      "--json"
+    );
+    assert.doesNotMatch(result.stdout, /Runner:|Reviewer:|Repository:|Branch:/);
+    // This particular Work Order IS eligible and --repo isn't a real git
+    // repo, so this crashes with a raw (non-KNOWN_ERROR) exception after
+    // adapter construction — proving only that nothing was printed to
+    // stdout before that point, not that the run completed.
+  }));
