@@ -1,0 +1,233 @@
+{
+  "id": null,
+  "name": "DC-005 OC-001 — Manual Operations Controller",
+  "description": "DC-005-OC-001: manual-trigger n8n workflow that starts one approved DC-003 Engineering Work Order through the existing Operations Bridge (npm run operations-bridge -- run ... --json, DC-003-I029.4/I029.4.1) and routes the already-decided outcome to the CEO. n8n owns no eligibility, engineering, Git, locking, review, authority, persistence or decision logic — all of that remains inside DC-003. Mock mode only (default mock Delivery Office runner + default mock Strategy Review adapter) — no --live-runner/--live-review flag exists anywhere in this workflow, so live execution cannot be accidentally enabled. NOT YET IMPORTED OR EXECUTED as of authoring: n8n MCP was unavailable and the n8n-test container's own DC-003 repository mount (/data/dc003-repo, read-only) is currently checked out to a different branch (dc-004/i001-industry-library-structure) that does not contain commit 4ca2429 or the operations-bridge.mjs CLI this workflow depends on — see the DC-005 OC-001 documentation in this same project folder for the exact blocker and manual import steps once resolved.",
+  "active": false,
+  "nodes": [
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 400],
+      "parameters": {}
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000002",
+      "name": "Build Work Order Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [460, 400],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { work_order_id: \"wo_REPLACE_ME\" } }}"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000003",
+      "name": "Validate Work Order Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [720, 400],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.work_order_id }}",
+              "rightValue": "^wo_[A-Za-z0-9]+$",
+              "operator": { "type": "string", "operation": "regex" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000004",
+      "name": "Prepare Input Error Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [980, 620],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"input_error\", work_order_id: $json.work_order_id, safeErrorSummary: \"work_order_id is missing or does not match the required form wo_<alphanumeric> — the Operations Bridge was never invoked.\", suggestedSafeAction: \"Correct the work_order_id in the Build Work Order Input node and re-run.\" } }}"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000005",
+      "name": "Run Operations Bridge",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [980, 300],
+      "parameters": {
+        "executeOnce": true,
+        "continueOnFail": true,
+        "onError": "continueRegularOutput",
+        "command": "=RUN_DIR=/tmp/dc005-oc001-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}\nmkdir -p \"$RUN_DIR\"\ncd /data/dc003-repo\nnode tests/validation/operations-bridge.mjs run \\\n  \"{{ $json.work_order_id }}\" \\\n  /home/node/.n8n/dc003/engineering/work-orders \\\n  /home/node/.n8n/dc003/engineering/delivery-reports \\\n  /home/node/.n8n/dc003/engineering/strategy-reviews \\\n  /home/node/.n8n/dc003/engineering/bridge \\\n  /data/dc003-repo \\\n  --repo=/data/dc003-repo \\\n  --delivery-lock=/home/node/.n8n/dc003/engineering/locks/delivery \\\n  --review-lock=/home/node/.n8n/dc003/engineering/locks/review \\\n  --drop=/home/node/.n8n/dc003/engineering/drop \\\n  --export=/home/node/.n8n/dc003/engineering/export \\\n  --json > \"$RUN_DIR/stdout.json\" 2> \"$RUN_DIR/stderr.log\"\nDC005_EXIT_CODE=$?\ncat \"$RUN_DIR/stdout.json\"\necho \"DC005_EXIT_CODE=$DC005_EXIT_CODE\"\ncat \"$RUN_DIR/stderr.log\" 1>&2"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000006",
+      "name": "Parse Operations Bridge Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 300],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const item = $input.item.json;\nconst raw = item.stdout || '';\nconst lines = raw.split('\\n');\nconst exitLineIndex = lines.findIndex((l) => l.startsWith('DC005_EXIT_CODE='));\nconst exitCode = exitLineIndex >= 0 ? parseInt(lines[exitLineIndex].split('=')[1], 10) : null;\nconst jsonText = (exitLineIndex >= 0 ? lines.slice(0, exitLineIndex) : lines).join('\\n').trim();\nconst workOrderId = $('Build Work Order Input').item.json.work_order_id;\n\nlet bridgeResult = null;\nlet parseError = null;\nif (jsonText) {\n  try {\n    bridgeResult = JSON.parse(jsonText);\n  } catch (e) {\n    parseError = e.message;\n  }\n} else {\n  parseError = 'Operations Bridge produced no stdout output.';\n}\n\nconst validJsonResultProduced = bridgeResult !== null;\nconst hasDecision = validJsonResultProduced && typeof bridgeResult.decision === 'string';\n\nlet routeKey;\nif (!validJsonResultProduced) {\n  routeKey = 'technical_failure';\n} else if (hasDecision) {\n  routeKey = bridgeResult.decision;\n} else {\n  // A valid JSON body with success:false and no decision is I029.2/I029.3's\n  // own thrown-error shape (eligibility/lock/configuration error) - a\n  // technical failure, not an engineering decision. See operations-bridge.mjs's\n  // own jsonFailureResult().\n  routeKey = 'technical_failure';\n}\n\nreturn {\n  json: {\n    routeKey,\n    validJsonResultProduced,\n    exitCode,\n    parseError,\n    stderrExcerpt: (item.stderr || '').slice(0, 1000),\n    workOrderId,\n    ...(bridgeResult || {}),\n  },\n};"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000007",
+      "name": "Route Outcome",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1500, 300],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "outputKey": "approved",
+              "conditions": {
+                "combinator": "and",
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [
+                  { "leftValue": "={{ $json.routeKey }}", "rightValue": "approved", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              }
+            },
+            {
+              "outputKey": "correction_required",
+              "conditions": {
+                "combinator": "and",
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [
+                  { "leftValue": "={{ $json.routeKey }}", "rightValue": "correction_required", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              }
+            },
+            {
+              "outputKey": "ceo_decision_required",
+              "conditions": {
+                "combinator": "and",
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [
+                  { "leftValue": "={{ $json.routeKey }}", "rightValue": "ceo_decision_required", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              }
+            },
+            {
+              "outputKey": "rejected",
+              "conditions": {
+                "combinator": "and",
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+                "conditions": [
+                  { "leftValue": "={{ $json.routeKey }}", "rightValue": "rejected", "operator": { "type": "string", "operation": "equals" } }
+                ]
+              }
+            }
+          ]
+        },
+        "fallbackOutput": "extra",
+        "options": {}
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000008",
+      "name": "Prepare Approved Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1780, 60],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"approved\", workOrderId: $json.workOrderId, workOrderTitle: $json.workOrderTitle, deliveryReportId: $json.deliveryReportId, deliveryCommit: $json.deliveryCommit, strategyReviewId: $json.strategyReviewId, summary: $json.summary, status: \"completed\" } }}"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000009",
+      "name": "Prepare Correction Required Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1780, 220],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"correction_required\", workOrderId: $json.workOrderId, deliveryStatus: $json.deliveryStatus, strategyReviewId: $json.strategyReviewId, summary: $json.summary, requiredOutcome: $json.correction ? $json.correction.required_outcome : null, verificationRequired: $json.correction ? $json.correction.verification_required : null, risks: $json.risks || [] } }}"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000010",
+      "name": "Prepare CEO Decision Required Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1780, 380],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"ceo_decision_required\", workOrderId: $json.workOrderId, summary: $json.summary, decisionRequired: $json.ceoEscalation ? $json.ceoEscalation.decision_required : null, reason: $json.ceoEscalation ? $json.ceoEscalation.reason : null, safeOptions: $json.ceoEscalation ? $json.ceoEscalation.safe_options : [], defaultSafeAction: \"stop\", risks: $json.risks || [] } }}"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000011",
+      "name": "Prepare Rejected Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1780, 540],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"rejected\", workOrderId: $json.workOrderId, summary: $json.summary, risks: $json.risks || [], safeAction: \"stop\" } }}"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000012",
+      "name": "Prepare Technical Failure Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1780, 700],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"technical_failure\", workOrderId: $json.workOrderId, safeErrorSummary: $json.parseError || ($json.error ? $json.error.message : \"Operations Bridge did not produce a decodable result.\"), exitCode: $json.exitCode, validJsonResultProduced: $json.validJsonResultProduced, suggestedSafeAction: \"Inspect the run directly (exit code / stderr) - do not rerun blindly.\" } }}"
+      }
+    },
+    {
+      "id": "b1a1c001-0000-4000-8000-000000000013",
+      "name": "Sticky Note — Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 20],
+      "parameters": {
+        "content": "## DC-005 OC-001 — Manual Operations Controller\n\nManual Trigger -> Build Work Order Input -> Validate Work Order Input -> Run Operations Bridge (one Execute Command call, --json) -> Parse Operations Bridge Result -> Route Outcome -> Prepare {Approved / Correction Required / CEO Decision Required / Rejected / Technical Failure} Output.\n\nInvokes DC-003-I029.4/I029.4.1's `operations-bridge.mjs run ... --json` CLI unchanged, exactly once, against the repo read-only bind-mounted at /data/dc003-repo. n8n owns zero eligibility/engineering/Git/locking/review/authority/persistence/decision logic - DC-003 already decided everything before this workflow ever sees a result; this workflow only starts it and presents what DC-003 already decided.\n\nMock mode only: default mock Delivery Office runner + default mock Strategy Review adapter. No --live-runner/--live-review flag exists anywhere in this workflow - live execution cannot be accidentally enabled from here.\n\nPersistent storage (inside the durable n8n_data volume, survives container recreation, outside the read-only repo mount, never committed to Git): /home/node/.n8n/dc003/engineering/{work-orders,delivery-reports,strategy-reviews,bridge,locks/delivery,locks/review,drop,export} - created automatically on first write by the same store adapters every other DC-003 milestone already uses; nothing here pre-creates them.\n\nNOT YET IMPORTED OR EXECUTED - see DC-005 OC-001 documentation in this project folder for the exact blocker (the container's own DC-003 mount is currently on a different branch, not main) and manual import steps.",
+        "color": 5,
+        "width": 700,
+        "height": 320
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Build Work Order Input", "type": "main", "index": 0 }]] },
+    "Build Work Order Input": { "main": [[{ "node": "Validate Work Order Input", "type": "main", "index": 0 }]] },
+    "Validate Work Order Input": {
+      "main": [
+        [{ "node": "Run Operations Bridge", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Input Error Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run Operations Bridge": { "main": [[{ "node": "Parse Operations Bridge Result", "type": "main", "index": 0 }]] },
+    "Parse Operations Bridge Result": { "main": [[{ "node": "Route Outcome", "type": "main", "index": 0 }]] },
+    "Route Outcome": {
+      "main": [
+        [{ "node": "Prepare Approved Output", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Correction Required Output", "type": "main", "index": 0 }],
+        [{ "node": "Prepare CEO Decision Required Output", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Rejected Output", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Technical Failure Output", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
