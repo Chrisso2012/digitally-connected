@@ -7150,6 +7150,299 @@ creation, scheduling/polling/background execution, multiple concurrent
 orchestrated runs, any Control Centre code change (confirmed unnecessary,
 see above).
 
+## Content Ingestion Engine (DC-003-I030)
+
+**The canonical entry point into the Content Factory.** Ingests one
+approved long-form article from a supported source (Google Docs only, for
+this milestone), validates it, and transforms it into a single, immutable
+**Ingested Content** record every downstream milestone will consume:
+
+```
+Approved Google Document
+  -> Content Source Adapter        (google-docs-source-adapter.mjs, or the mock)
+  -> Validation                     (title/body/length/metadata/fingerprint)
+  -> Duplicate check                 (Ingested Content Store)
+  -> Ingested Content                (ingested-content.mjs)
+  -> Ingested Content Store          (persisted, local JSON)
+```
+
+Nothing else. No editorial/social package generation, no rewriting or
+summarising, no OpenAI/Claude/prompt/image calls, no Templated rendering,
+no publishing, no modification of the source article — see "Out of
+scope" below.
+
+### Naming — "Ingested Content", not "Content Request"
+
+The brief that opened this milestone proposed "Content Request" as this
+object's name. Investigation found that name is **already taken** by a
+completely unrelated DC-003-I016 concept — `content-request.mjs`'s own
+`createContentRequest()`, `content-request.schema.json`'s `contentRequest`
+schema ID, `ContentRequestValidationError`, and the `npm run
+content:request` CLI all already exist, and mean something entirely
+different: a lightweight command ("generate 6 designs from GS01") that
+resolves an existing, hand-curated **Content Asset** (DC-003-I018 — an
+approved envelope wrapping a **Topic Package**, a marketing brief with
+audience/funnel-stage/CTA/brand-voice fields, never raw article text).
+Reusing "Content Request" for this milestone's genuinely different,
+upstream object — the raw retrieved article itself, before any human
+curation into a Topic Package — would have created real ambiguity: two
+unrelated `createContentRequest()`-shaped factories, two unrelated
+`ContentRequest*` schemas/errors, in the same codebase.
+
+Flagged to the Strategy Office before any code was written (see the
+brief's own "Claude should determine the final schema during
+investigation" and "Claude may refine [CLI subcommands] after
+investigation" — this went a step further than schema/CLI naming, so it
+was raised as an explicit decision rather than assumed). Confirmed
+answer: **do not touch I016's existing "Content Request" at all** (an
+established, tested, shipped concept — renaming it would be pure risk for
+no benefit); this milestone's object is named **"Ingested Content"**
+throughout — `ingested-content.mjs`, `ingested-content.schema.json`
+(`ingestedContent` schema ID), `Ingested*` error classes, `npm run
+content-ingestion` CLI. Zero I016/I017/I018 files were touched by this
+milestone.
+
+### Investigation (required before implementation, per this milestone's own brief)
+
+- **Best Google Docs retrieval method:** the Google Drive API v3's own
+  `files.export` endpoint with `mimeType=text/plain`, not the Docs API
+  v1's structured paragraph/run JSON. This milestone needs only the plain
+  article body — no formatting, images, or tables — so the simpler Drive
+  export endpoint is sufficient and avoids parsing the Docs API's own,
+  considerably more complex, structured document JSON.
+- **Authentication mechanism:** a Google Cloud **Service Account**, via
+  the standard JWT Bearer OAuth2 flow
+  (`google-service-account-auth.mjs`) — fully non-interactive: the
+  operator provisions the service account once, shares the target
+  document with its own email address (view access), and every
+  subsequent authentication is a signed JWT exchange with no browser
+  consent screen and no stored user session. Deliberately **not** the
+  interactive OAuth2 user-consent flow — this codebase's own binding
+  constraint (see DC-005-OC-001's README) is that no agent ever performs
+  a browser login or enters a credential into any field; a service
+  account is the only Google auth mechanism compatible with that
+  constraint. Configured via `GOOGLE_SERVICE_ACCOUNT_JSON` — the full
+  downloaded key file's own JSON content, verbatim, as a single
+  environment variable value, not a file path — matching this codebase's
+  existing "env var-driven config, never an assumed filesystem location"
+  convention (`LLM_API_KEY`, `OPENAI_API_KEY`, `CLAUDE_CODE_COMMAND`).
+- **Google Docs metadata available:** a single `files.get` call with an
+  explicit `fields` mask (`name,createdTime,modifiedTime,owners,
+  headRevisionId,webViewLink`) returns everything this milestone needs —
+  no separate Drive Revisions API call required.
+- **Stable document identifier — Document ID, not URL:** a Google Docs
+  share URL (`https://docs.google.com/document/d/<ID>/edit?usp=sharing`)
+  can carry a title slug, query parameters, or a tab fragment that all
+  change without the underlying document changing; the Drive file **ID**
+  embedded in that URL does not. `extractGoogleDocId()`
+  (`google-docs-source-adapter.mjs`) accepts either a bare ID or a full
+  share URL and always normalises to the bare ID before an Ingested
+  Content record is created — `source_reference` is always this stable
+  ID, never a URL.
+- **Revision/version information available:** `files.get`'s own
+  `headRevisionId` field uniquely identifies the document's current
+  revision at fetch time. Recorded in `metadata.source_revision_id` for
+  reference, but **not** used as the duplicate-detection signal — see
+  fingerprint strategy below, which is stronger and needs no extra API
+  call.
+- **Fingerprint/checksum strategy — two distinct hashes, two distinct
+  purposes:** `source_fingerprint` is a SHA-256 digest of
+  `full_article_text` alone, computed by `content-ingestion-service.mjs`
+  (never by the adapter) — it exists to detect whether the **source**
+  changed since a prior ingestion (see "Duplicate protection" below).
+  `checksum` is a SHA-256 digest of the record's own other fields,
+  computed internally by `createIngestedContent()` — self-integrity/
+  tamper-evidence for the record itself, the same purpose (though a
+  different mechanics) as `bridge-transport-record.schema.json`'s own
+  `checksum` field. Conflating the two would make it impossible to tell
+  "the source changed" apart from "this record was corrupted."
+- **Existing reusable patterns / whether anything could be reused instead
+  of duplicated:** extensively reused rather than duplicated — the
+  Storage Adapter + Store two-layer pattern (`engineering-work-order-
+  store.mjs`), the provider-neutral Adapter contract-checker pattern
+  (`delivery-office-runner-adapter.mjs`), the mock-first/`options.mode`
+  adapter convention (`delivery-office-mock-runner-adapter.mjs`), the
+  native-`fetch`-only HTTP transport convention with no client SDK
+  (`llm-transport-http.mjs`, `renderer-transport-http.mjs`), the
+  env-var-only config-loader convention with a structural-only
+  `configured` signal (`delivery-office-runner-config.mjs`), the
+  "assemble, then validate, then deep-freeze" domain-object factory
+  discipline (`engineering-work-order.mjs`), and the optional/additive
+  Control Centre section pattern (`strategy_review`/`bridge`). Nothing in
+  I016/I017/I018 (Content Request/Content Asset/Topic Package) was
+  reusable for the actual ingestion mechanics — all three represent
+  later, human-curated pipeline stages with no raw-article-retrieval
+  concern of their own.
+
+### Architecture
+
+- **JSON Schema** — `schemas/ingested-content.schema.json` (`ingestedContent`
+  in the registry). Thirteen required fields:
+  `ingested_content_id`/`source_type`/`source_reference`/
+  `source_fingerprint`/`title`/`status`/`approval_state`/
+  `full_article_text`/`word_count`/`metadata`/`created_at`/`updated_at`/
+  `checksum` — meeting or exceeding the brief's own minimum field list.
+  `status` is a single-value enum (`"ingested"`) deliberately left open
+  for a later milestone's own downstream lifecycle stages; `approval_state`
+  (`pending`/`approved`/`rejected`) always starts `"pending"` — I030 has
+  no approve/reject action of its own, anticipating one for a later
+  milestone, per the brief's own "Approval State" field requirement.
+- **Domain Object** — `src/ingested-content.mjs`, `createIngestedContent()`.
+  Assemble, validate, deep-freeze — computes `word_count` and `checksum`
+  internally; accepts `source_fingerprint` as an input (computed one
+  layer up, in the service, since it needs to be compared against prior
+  records before a new one is built).
+- **Factory / Store / Store Service** — `src/ingested-content-store-adapter.mjs`
+  (contract), `src/local-json-ingested-content-store-adapter.mjs` (one
+  file per record, atomic write-verify-rename), `src/ingested-content-
+  store.mjs` (domain rules: duplicate-ID rejection, existence checks,
+  schema validation on read and write, chronological `list()`, plus
+  `findBySourceReference()` — used only by the ingestion service's own
+  duplicate check, see below).
+- **Content Source Adapter abstraction** — `src/content-source-adapter.mjs`:
+  `{ name: string, fetch({ sourceReference }): Promise<{ title, body,
+  metadata, sourceIdentifier }> }`, plus `assertValidContentSourceAdapter()`
+  and `assertValidContentSourceFetchResult()` (mirrors
+  `delivery-office-runner-adapter.mjs`'s own contract-checker pattern
+  exactly). `content-ingestion-service.mjs` depends on **only** this
+  shape — adding a future Claude Cowork/Markdown/Git/WordPress/Notion
+  adapter never requires changing the service.
+- **Google Docs Adapter** — `src/google-docs-source-adapter.mjs` (the real
+  implementation), `src/google-docs-config.mjs` (env-var config loader),
+  `src/google-service-account-auth.mjs` (generic Google service-account
+  JWT Bearer auth, reusable by any future Google integration, not
+  Docs/Drive-specific).
+- **Mock Content Source Adapter** — `src/content-source-mock-adapter.mjs`.
+  The **only** adapter automated tests and the CLI's default mode use —
+  no network dependency, `options.mode` selects `not-found`/
+  `authentication-error`/`rate-limit`/`transport-error`/default-success,
+  `options.fixtures` injects per-`sourceReference` content, and a
+  built-in default fixture (239 words) makes the CLI's `create`
+  subcommand work zero-config for a genuine smoke test.
+- **Content Ingestion Service** — `src/content-ingestion-service.mjs`,
+  `ingestContent()`. Composition only, exactly like
+  `content-request-service.mjs` (I016) at its own boundary — never calls
+  an LLM, never rewrites/summarises, never touches anything downstream of
+  ingestion.
+- **CLI** — `tests/validation/content-ingestion.mjs`, `npm run
+  content-ingestion`. Four subcommands (refined from the brief's own
+  candidate list, each genuinely distinct rather than overlapping):
+  `create` (ingest and persist), `inspect <id>` (full record detail),
+  `list` (all summary lines), `status` (aggregate counts/breakdowns —
+  mirrors `engineering.mjs`'s own aggregate `status` subcommand, distinct
+  from per-record `inspect`).
+- **README documentation** — this section.
+
+### Validation (rejects invalid content before a record is created)
+
+- Source exists / source readable — the adapter's own typed error
+  (`ContentSourceNotFoundError`, `ContentSourceAuthenticationError`,
+  `ContentSourceRateLimitError`, `ContentSourceTransportError`,
+  `ContentSourceConfigurationError`) propagates as-is; no generic
+  "ingestion failed" swallowing.
+- Title present / body present — `assertValidContentSourceFetchResult()`,
+  immediately after every adapter call.
+- Minimum article length — `DEFAULT_MIN_WORD_COUNT = 200` words
+  (`content-ingestion-service.mjs`), a round, documented threshold
+  distinguishing a genuine long-form article from a stub/placeholder
+  document; overridable per call (`--min-words` on the CLI).
+- Metadata successfully collected — `metadata` must be an object or
+  `null` (never `undefined`), enforced by the same fetch-result assertion
+  above.
+- Fingerprint generated — `source_fingerprint`, computed by the service
+  from the (whitespace-normalised) retrieved body.
+- Checksum generated — computed internally by `createIngestedContent()`;
+  schema validation is the final backstop.
+
+### Duplicate protection
+
+Re-ingesting the same `source_reference` with an **unchanged**
+`source_fingerprint` throws `DuplicateIngestionError` (no new record
+created) — the store's `findBySourceReference()` is checked before a new
+record is built. A **changed** fingerprint (the source genuinely changed
+since the last ingestion) is a legitimate new ingestion, not a duplicate —
+mirrors this codebase's own established "a failed delivery is meant to be
+retried, only a genuinely completed one blocks a repeat" philosophy
+(`DuplicateDeliveryError`, DC-003-I029.2).
+
+### Live mode
+
+Mock mode is the default everywhere, exactly like every other external
+integration in this codebase (Anthropic, Templated, Google Drive
+publishing, Claude Code, OpenAI review) — pass `--live` to the CLI's
+`create` subcommand to use the real Google Docs adapter instead, which
+requires `GOOGLE_SERVICE_ACCOUNT_JSON` to be configured. **No live Google
+Docs request has been made** — building and structurally verifying the
+live adapter (JWT construction against a real RSA keypair, HTTP
+error-status mapping, Document-ID/URL normalisation, metadata field
+mapping — all covered by `google-docs-source-adapter.test.mjs` /
+`google-service-account-auth.test.mjs` against a mocked `fetch`) is in
+scope for this milestone; actually exercising it against a real Google
+Doc is not, mirroring this codebase's own established "mock now,
+live-verification-gate later, separately authorised" convention
+(DC-003-I029.2's Claude Code Runner, DC-003-I019's Anthropic transport).
+
+### Control Centre
+
+**Investigated and added** — consistent with the existing architecture:
+a new, optional, standalone `fields.ingestedContentStore` dependency
+(mirrors `bridgeTransportStore`'s own "standalone, not paired with
+anything else" precedent), surfaced as a new, additive `content_ingestion`
+overview field (`null` when the store isn't supplied — never guessed).
+**Deliberately a lean summary, not a full-record embed** — unlike
+`engineeringSummary`'s own full `latest_delivery_report` `$ref` embed,
+`content_ingestion.latest_ingestion` includes only
+`ingested_content_id`/`source_type`/`title`/`approval_state`/
+`word_count`/`created_at`, never `full_article_text`. Delivery Reports
+are naturally small and bounded; an ingested article's body is not — a
+full embed here would risk bloating the read model in a way no other
+Control Centre section does. CLI: `--content-ingestion=<dir>` on the
+`dashboard` command (`tests/validation/control-centre.mjs`), matching
+every other optional section's own named-flag convention.
+
+### Out of scope (per this milestone's own brief)
+
+Editorial Package generation, Social Package generation, article
+rewriting or summarisation, OpenAI/Claude calls, prompt generation, image
+generation, Templated rendering, publishing, modification of source
+articles. No additional Content Source Adapter beyond Google Docs — the
+generic adapter interface is built to support one later (Claude Cowork,
+Markdown, Git, WordPress, Notion) without changing
+`content-ingestion-service.mjs`, but none beyond Google Docs is
+implemented now.
+
+### Verification performed
+
+- Full unit test suite: **72 new tests** across 10 new test files
+  (`ingested-content.test.mjs`, `ingested-content-store.test.mjs`,
+  `content-source-adapter.test.mjs`, `content-source-mock-adapter.test.mjs`,
+  `content-ingestion-service.test.mjs`, `content-ingestion-cli.test.mjs`,
+  `google-service-account-auth.test.mjs` — including a genuine RSA
+  keypair-signed JWT, verified against its own matching public key,
+  `google-docs-source-adapter.test.mjs`, `google-docs-config.test.mjs`,
+  `control-centre-content-ingestion.test.mjs`) — **1739/1739 passed** in
+  Docker (`node:22`), zero regressions across the full pre-existing suite.
+- Fixture validation: `ingested-content.example.json` added, **20/20
+  fixtures pass** (`npm run validate`), including `control-centre.example.json`
+  updated with the new required `content_ingestion: null` key.
+- Manual smoke test (Docker, mock mode): `create` with the zero-config
+  default fixture, `create` with `--title`/`--body` overrides, `inspect`,
+  `list`, `status`, a genuine duplicate rejection
+  (`DuplicateIngestionError`), a genuine too-short rejection
+  (`ArticleTooShortError`), and Control Centre's `dashboard
+  --content-ingestion=<dir>` correctly reflecting a populated store and
+  degrading to "unknown" when the flag is omitted — all verified against
+  real CLI invocations, not just unit tests.
+- A pre-existing, host-only Windows/Git-Bash quirk in
+  `control-centre-cli.test.mjs` (an unrelated file, last touched in
+  I029.3, zero diff from this milestone) crashes the whole `node --test`
+  process when run on this host directly — confirmed **not** a regression
+  (same crash reproduces on `main` before any I030 change) and confirmed
+  **not present at all** inside Docker, where the full 1739-test suite
+  passes cleanly. Canonical verification for this milestone was therefore
+  performed in Docker, per this project's own established practice for
+  this exact class of host-only issue.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -7439,7 +7732,11 @@ Integration needed no Anthropic SDK either — Node's built-in global
 `fetch` (Node 18+) plus `AbortController` for timeouts was enough, the
 exact same choice DC-003-I006 made for the Templated HTTP transport;
 `node:crypto` wasn't needed here at all (no new IDs are minted by this
-milestone).
+milestone). The Content Ingestion Engine needed no Google API client
+library (`googleapis` or similar) either — the same native-`fetch`-only
+convention, plus `node:crypto`'s built-in `createSign("RSA-SHA256")` for
+the service-account JWT Bearer flow's own signing step (no JWT library
+needed).
 
 ## Implementation status
 
@@ -7534,7 +7831,8 @@ milestone).
 | Automated Delivery Office (first real Bridge Transport provider — executes one approved Work Order through a replaceable Runner Adapter, mock by default, records one Delivery Report) | Done (DC-003-I029.2) — `src/execution-policy.mjs`, `src/delivery-execution-lock.mjs`, `src/delivery-office-runner-adapter.mjs`, `src/delivery-office-mock-runner-adapter.mjs`, `src/claude-code-delivery-runner-adapter.mjs`, `src/delivery-office-runner-config.mjs`, `src/repository-git-evidence.mjs`, `src/automated-delivery-office-service.mjs`, CLI `npm run delivery-office`; see "Automated Delivery Office (DC-003-I029.2)"; no new schema — reuses I029's Work Order/Delivery Report and I029.1's Bridge Transport completely unmodified; no automated test invokes Claude or the network; default is always mock, real execution gated behind explicit `--live-runner`; independent git re-verification, never blind trust in the runner's own self-report, decides the final Delivery Report status; Control Centre's `deliveryOfficeLockDir` is additive/optional; **no real Claude Code execution occurred — pending the Initial Real-Runner Verification Gate and fresh Strategy Office + CEO approval** |
 | Automated Strategy Review (first automated Strategy Office review stage — reviews one Delivery Report's independently-verified evidence against its Work Order, mock by default, records one Engineering Strategy Review) | Done (DC-003-I029.3) — `src/engineering-strategy-review.mjs`, `src/engineering-strategy-review-store.mjs` + adapter files, `src/strategy-review-evidence-collector.mjs`, `src/strategy-review-authority-gates.mjs`, `src/strategy-review-policy.mjs`, `src/strategy-review-agent-adapter.mjs`, `src/strategy-review-mock-adapter.mjs`, `src/openai-strategy-review-adapter.mjs`, `src/strategy-review-instruction.mjs`, `src/strategy-review-config.mjs`, `src/strategy-review-error-diagnostics.mjs`, `src/strategy-review-lock.mjs`, `src/automated-strategy-review-service.mjs`, CLI `npm run strategy-review`; see "Automated Strategy Review (DC-003-I029.3)"; new `schemas/engineering-strategy-review.schema.json`; `bridge-transport-record.schema.json`/`.mjs` additively extended with `engineering_strategy_review` (`direction: "outgoing"`) — the only two I029.1 files touched, per Strategy Office's own explicit scope; deterministic authority gates (pre- and post-invocation) mean the OpenAI model can only make an outcome more cautious, never override toward approval; a failed test/fixture always blocks approval regardless of what the model proposes; no automated test invokes OpenAI or the network; default is always mock, real review gated behind explicit `--live-review`, fixed one-request ceiling; Engineering Work Management and Control Centre integrations both additive/optional; **no live OpenAI request occurred — pending the Initial Live Review Verification Gate and fresh Strategy Office + CEO approval**; does not yet create/execute correction Work Orders; **Delivery Status Authority Gate added and live-verified (DC-003-I029.3.1)** — a Delivery Report whose own overall status is `failed`/`partial` can no longer resolve to `approved`, closing a real defect the DC-003-I029.4 end-to-end smoke test found (self-reported-passing test/fixture counters could previously override an independently-verified failed delivery); see "Delivery Status Authority Gate (DC-003-I029.3.1)" |
 | End-to-End Operations Bridge (orchestrates I029.2 + I029.3 into one call: Work Order -> Delivery Office Runner -> Delivery Report -> Strategy Review -> decision) | Done (DC-003-I029.4) — `src/automated-operations-bridge-service.mjs`, `src/operations-bridge-errors.mjs`, CLI `npm run operations-bridge`; see "End-to-End Operations Bridge (DC-003-I029.4)"; no new schema, no new lock, no new eligibility/git/review logic — pure composition of two already-constructed I029.2/I029.3 services; `getOperationsBridgeStatus()` is a separate plain read over existing stores/locks, mirroring both standalone CLIs' own `status` precedent; Control Centre needed zero code changes (confirmed live, a genuine finding, not an oversight); **live end-to-end smoke test against a real throwaway git repository surfaced a genuine, pre-existing I029.3 authority-gate gap** (a "failed" Delivery Report's own status is not itself a mandatory escalation condition) — documented, not fixed, per this milestone's own "no new review logic" scope; no live Claude Code or OpenAI request occurred; **machine-readable `--json` mode and a single-call enriched result added (DC-003-I029.4.1)** — closes the two integration gaps the DC-005 OC-001 architecture investigation found (console-text-only output; a thin result requiring a second CLI call for a CEO notification), both fixed via already-public `getExecutionStatus()`/`getReviewStatus()` reads with zero I029.2/I029.3 changes; see "Machine-Readable Output Mode (DC-003-I029.4.1)" |
-| Unit test suite | Done — 1667 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before), 10 from I029.4.1 — 3 added to `automated-operations-bridge-service.test.mjs` (the single-call enrichment, sourced from fake `getExecutionStatus()`/`getReviewStatus()`) + 4 added to `operations-bridge-cli.test.mjs` (`--json` mode: banner suppression, the unified failure shape, backward-compatible plain-text mode) + 3 added to `operations-bridge-delivery-status-regression.test.mjs` (`rejected` and a model-proposed `correction_required`, both through real I029.2+I029.3+I029.4 services, extending its existing failed/completed coverage) — no existing test file's own assertions were weakened or removed, only extended); DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Content Ingestion Engine (canonical entry point into the Content Factory: retrieves one approved long-form article from a supported source, validates it, produces one immutable Ingested Content record) | Done (DC-003-I030) — `src/ingested-content.mjs`, `src/ingested-content-store.mjs` + adapter files, `src/content-source-adapter.mjs`, `src/content-source-mock-adapter.mjs`, `src/google-docs-source-adapter.mjs`, `src/google-docs-config.mjs`, `src/google-service-account-auth.mjs`, `src/content-ingestion-service.mjs`, CLI `npm run content-ingestion`; see "Content Ingestion Engine (DC-003-I030)"; new `schemas/ingested-content.schema.json`; named "Ingested Content", not "Content Request" as the brief originally proposed — that name is already taken by I016's unrelated command object, confirmed with the Strategy Office before implementation, zero I016/I017/I018 files touched; supports exactly one source (Google Docs) — the generic Content Source Adapter interface anticipates Claude Cowork/Markdown/Git/WordPress/Notion without requiring service changes, none implemented yet; Control Centre's `ingestedContentStore` dependency is additive/optional, mirroring `bridgeTransportStore`'s own standalone precedent, and deliberately surfaces only a lean summary (never the full article text); mock remains the default without `--live`; **no live Google Docs request has been made** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019's own precedent |
+| Unit test suite | Done — 1739 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before), 10 from I029.4.1 — 3 added to `automated-operations-bridge-service.test.mjs` (the single-call enrichment, sourced from fake `getExecutionStatus()`/`getReviewStatus()`) + 4 added to `operations-bridge-cli.test.mjs` (`--json` mode: banner suppression, the unified failure shape, backward-compatible plain-text mode) + 3 added to `operations-bridge-delivery-status-regression.test.mjs` (`rejected` and a model-proposed `correction_required`, both through real I029.2+I029.3+I029.4 services, extending its existing failed/completed coverage) — no existing test file's own assertions were weakened or removed, only extended), 72 from I030 — 11 new (`ingested-content.test.mjs`) + 7 new (`ingested-content-store.test.mjs`) + 4 new (`content-source-adapter.test.mjs`) + 6 new (`content-source-mock-adapter.test.mjs`) + 10 new (`content-ingestion-service.test.mjs`) + 10 new (`content-ingestion-cli.test.mjs`) + 6 new (`google-service-account-auth.test.mjs`, a real RSA-keypair-signed JWT verified against its own matching public key) + 9 new (`google-docs-source-adapter.test.mjs`) + 5 new (`google-docs-config.test.mjs`) + 4 new (`control-centre-content-ingestion.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `content_ingestion: null` key; DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |
@@ -7546,7 +7844,7 @@ milestone).
 | Multiple Content Request types / batch requests / scheduling | Not started — explicitly out of scope for I016 |
 | Publishing or approval UI reachable via the Content Request command | Not started — explicitly out of scope for I016; DC-003-I014's approve/reject/publish functions exist but this command doesn't call them |
 | Real article/source content in the Content Asset Repository | Not started — the repository itself is real and permanent (DC-003-I018), but its one asset, `content-assets/GS01.json`, still represents the same DC-003-I016 approved fixture, not a real article/source |
-| Article generation, ingestion, or editing tooling | Not started — explicitly out of scope for I018; I018 establishes the permanent structure the planned DC-004 Content Authoring Engine will populate, it doesn't populate it with real content itself |
+| Article generation or editing tooling | Not started — explicitly out of scope for I018 and I030 alike; article **ingestion** (retrieval + validation only, Google Docs source, no editing/generation) is now done — see "Content Ingestion Engine (DC-003-I030)" |
 | REST API / scheduler / GUI entry points | Not started — DC-003-I010 established the External Invocation Adapter as the required entry point for all of them, once they exist |
 | Authentication (on any adapter, workflow, or future entry point) | Not started — explicitly out of scope for I010, I011, I012, I014, I015, I016, I017, and I018 |
 | Asynchronous execution | Not started — DC-003-I010/I011/I012 are strictly synchronous; the `accepted`/`status` field split on `InvocationResponse` anticipates this without implementing it |

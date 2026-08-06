@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review", "content_ingestion"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -19,7 +19,8 @@
         "engineering": { "$ref": "#/$defs/engineeringSummary" },
         "bridge": { "$ref": "#/$defs/bridgeSummary" },
         "delivery_office": { "$ref": "#/$defs/deliveryOfficeSummary" },
-        "strategy_review": { "$ref": "#/$defs/strategyReviewSummary" }
+        "strategy_review": { "$ref": "#/$defs/strategyReviewSummary" },
+        "content_ingestion": { "$ref": "#/$defs/contentIngestionSummary" }
       }
     },
     {
@@ -404,6 +405,40 @@
                 "configured": { "type": "boolean" },
                 "mechanism": { "type": "string" }
               }
+            }
+          }
+        }
+      ]
+    },
+    "contentIngestionSummary": {
+      "description": "DC-003-I030 — sourced entirely from the Ingested Content Store, read-only, standalone (not paired with anything else), no networking of any kind. null when no Ingested Content Store was supplied. Deliberately a LEAN summary — latest_ingestion never embeds full_article_text (unbounded size), unlike engineeringSummary's full latest_delivery_report embed — see README 'Control Centre'.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["total_ingested", "by_source_type", "by_approval_state", "latest_ingestion"],
+          "additionalProperties": false,
+          "properties": {
+            "total_ingested": { "type": "integer", "minimum": 0 },
+            "by_source_type": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+            "by_approval_state": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+            "latest_ingestion": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["ingested_content_id", "source_type", "title", "approval_state", "word_count", "created_at"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "ingested_content_id": { "type": "string", "pattern": "^ic_[A-Za-z0-9]+$" },
+                    "source_type": { "type": "string" },
+                    "title": { "type": "string" },
+                    "approval_state": { "type": "string" },
+                    "word_count": { "type": "integer", "minimum": 0 },
+                    "created_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              ]
             }
           }
         }

@@ -86,6 +86,7 @@ function assertDependencies({
   engineeringDeliveryReportStore,
   bridgeTransportStore,
   strategyReviewStore,
+  ingestedContentStore,
 }) {
   if (
     !finishedCarouselStore ||
@@ -176,6 +177,18 @@ function assertDependencies({
       "fields.strategyReviewStore, when supplied, must be an Engineering Strategy Review Store — see createEngineeringStrategyReviewStore() in engineering-strategy-review-store.mjs"
     );
   }
+  // DC-003-I030 — optional, standalone (not paired with anything above) —
+  // the Content Ingestion section needs only the Ingested Content Store
+  // itself.
+  if (
+    ingestedContentStore !== null &&
+    ingestedContentStore !== undefined &&
+    (typeof ingestedContentStore.list !== "function" || typeof ingestedContentStore.get !== "function")
+  ) {
+    throw new InvalidControlCentreDependenciesError(
+      "fields.ingestedContentStore, when supplied, must be an Ingested Content Store — see createIngestedContentStore() in ingested-content-store.mjs"
+    );
+  }
 }
 
 // Reuses I022's own "metadata.json present, parseable, carousel_id
@@ -254,6 +267,13 @@ function sumCost(metricsSummaries) {
  * fields.strategyReviewLockDir — optional (DC-003-I029.3) string, a
  *   Strategy Review Lock directory (see strategy-review-lock.mjs). When
  *   omitted, `strategy_review.review_currently_locked` is honestly null.
+ * fields.ingestedContentStore — optional (DC-003-I030), standalone — see
+ *   ingested-content-store.mjs. When omitted, `content_ingestion` is
+ *   null. A lean summary only (counts, latest record's own small fields)
+ *   — never embeds a record's full_article_text, unlike the Engineering
+ *   section's full latest_delivery_report embed, since article bodies
+ *   are unbounded in size and would bloat the read model — see README
+ *   "Control Centre".
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -282,6 +302,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     deliveryOfficeLockDir = null,
     strategyReviewStore = null,
     strategyReviewLockDir = null,
+    ingestedContentStore = null,
     exportsRootDir = null,
   } = fields;
   assertDependencies({
@@ -293,6 +314,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     engineeringDeliveryReportStore,
     bridgeTransportStore,
     strategyReviewStore,
+    ingestedContentStore,
   });
 
   const now = options.now ?? (() => new Date().toISOString());
@@ -916,6 +938,47 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  // DC-003-I030 — read-only, additive, standalone (not paired with
+  // anything above). A LEAN summary only — count, breakdowns by
+  // source_type/approval_state, and the latest record's own small fields
+  // (id/title/word_count/created_at) — deliberately never the latest
+  // record's full_article_text, unlike engineeringSummary's full
+  // latest_delivery_report embed, since an article body is unbounded in
+  // size and a Delivery Report is not. See README "Control Centre" for
+  // the full investigation finding behind this choice.
+  function computeContentIngestion() {
+    if (!ingestedContentStore) return null;
+    try {
+      const summaries = ingestedContentStore.list();
+      const bySourceType = {};
+      const byApprovalState = {};
+      for (const summary of summaries) {
+        bySourceType[summary.source_type] = (bySourceType[summary.source_type] ?? 0) + 1;
+        byApprovalState[summary.approval_state] = (byApprovalState[summary.approval_state] ?? 0) + 1;
+      }
+      const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+
+      return {
+        total_ingested: summaries.length,
+        by_source_type: bySourceType,
+        by_approval_state: byApprovalState,
+        latest_ingestion:
+          latest === null
+            ? null
+            : {
+                ingested_content_id: latest.ingested_content_id,
+                source_type: latest.source_type,
+                title: latest.title,
+                approval_state: latest.approval_state,
+                word_count: latest.word_count,
+                created_at: latest.created_at,
+              },
+      };
+    } catch {
+      return { total_ingested: 0, by_source_type: {}, by_approval_state: {}, latest_ingestion: null };
+    }
+  }
+
   /**
    * Assembles the full "overview" read model: system health, dashboard
    * totals, recent jobs, recent activity, engineering status, bridge
@@ -941,6 +1004,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       bridge: computeBridge(),
       delivery_office: computeDeliveryOffice(),
       strategy_review: computeStrategyReview(),
+      content_ingestion: computeContentIngestion(),
     };
 
     return validateAndFreeze(overview);

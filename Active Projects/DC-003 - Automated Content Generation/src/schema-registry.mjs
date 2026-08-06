@@ -5,8 +5,9 @@
 // invocation-request.schema.json / invocation-response.schema.json,
 // DC-003-I016's content-request.schema.json, DC-003-I018's
 // content-asset.schema.json, DC-003-I023's production-metrics.schema.json,
-// and DC-003-I024's control-centre.schema.json — none part of the original
-// T002 five) and exposes them behind stable, camelCase identifiers
+// DC-003-I024's control-centre.schema.json, and DC-003-I030's
+// ingested-content.schema.json — none part of the original T002 five) and
+// exposes them behind stable, camelCase identifiers
 // (matching the JS-side naming convention documented in DC-003-T002 §8) so
 // later modules never need to know a schema's filesystem path — only its
 // identifier.
@@ -73,6 +74,14 @@ const SCHEMA_FILES = {
   // the Work Order it answers. Must be registered BEFORE controlCentre
   // below, since control-centre.schema.json $refs it by $id.
   engineeringStrategyReview: "engineering-strategy-review.schema.json",
+  // DC-003-I030 — the canonical, immutable record produced by the
+  // Content Ingestion Engine for one retrieved source article. Unrelated
+  // to contentRequest (I016) or contentAsset (I018) above — see this
+  // schema's own header comment. Registered before controlCentre for
+  // consistency with every other domain object above, though the Control
+  // Centre's own Content Ingestion section embeds a lean summary shape,
+  // not a $ref to this schema (see README "Control Centre").
+  ingestedContent: "ingested-content.schema.json",
   // DC-003-I024, extended by DC-003-I028/I029/I029.1/I029.3 — the Control
   // Centre's in-memory read model. Must be compiled AFTER
   // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport/bridgeTransportRecord/engineeringStrategyReview
@@ -84,7 +93,7 @@ const SCHEMA_FILES = {
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
 
 /**
- * Loads all nineteen schemas and returns them keyed by identifier, e.g.
+ * Loads all twenty schemas and returns them keyed by identifier, e.g.
  * `registry.topicPackage`. Fails fast on the first missing or malformed
  * schema file.
  */

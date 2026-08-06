@@ -36,6 +36,7 @@ const APPROVED_FIXTURES = [
   ["bridgeTransportRecord", "bridge-transport-record.example.json"],
   ["engineeringStrategyReview", "engineering-strategy-review.example.json"],
   ["controlCentre", "control-centre.example.json"],
+  ["ingestedContent", "ingested-content.example.json"],
 ];
 
 const validator = createValidator();

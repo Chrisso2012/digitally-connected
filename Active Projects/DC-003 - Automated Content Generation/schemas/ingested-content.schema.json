@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/ingested-content.schema.json",
+  "title": "Ingested Content",
+  "description": "DC-003-I030 — the canonical, immutable record produced by the Content Ingestion Engine for one approved long-form article retrieved from a supported source. Deliberately upstream of, and unrelated to, DC-003-I016's Content Request (a 'generate N designs' command object) and DC-003-I018's Content Asset (a hand-curated production envelope wrapping a Topic Package) — an Ingested Content record holds the raw retrieved article itself, before any human curation into a Topic Package. Immutable after creation: no schema-level update path exists; a changed source produces a NEW record, never a mutation of this one.",
+  "type": "object",
+  "required": [
+    "ingested_content_id",
+    "source_type",
+    "source_reference",
+    "source_fingerprint",
+    "title",
+    "status",
+    "approval_state",
+    "full_article_text",
+    "word_count",
+    "metadata",
+    "created_at",
+    "updated_at",
+    "checksum"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ingested_content_id": {
+      "type": "string",
+      "pattern": "^ic_[A-Za-z0-9]+$",
+      "description": "Machine-generated, independent of source_reference — mirrors every other DC-003 identifier convention (wo_/req_/dr_/...)."
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["google_docs"],
+      "description": "DC-003-I030 supports exactly one source. Future milestones extend this enum (and add a matching Content Source Adapter) without changing this schema's shape — see README 'Content Source Adapter'."
+    },
+    "source_reference": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The STABLE identifier for the source document, not necessarily the exact string the operator supplied. For source_type=google_docs this is always the Google Doc's own Document ID (e.g. '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms'), never the full share URL — a URL can carry a title slug/query params/tab fragment that changes without the underlying document changing; the Document ID does not. A URL supplied to the CLI is normalised to this ID before an Ingested Content record is ever created — see README 'Investigation — stable document identifier'."
+    },
+    "source_fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hex digest of full_article_text exactly as retrieved, computed by the Content Ingestion Service (never by the adapter). Re-ingesting the same source_reference with an unchanged fingerprint is rejected as a duplicate; a changed fingerprint means the source genuinely changed and a new record is created — see README 'Investigation — fingerprint/checksum strategy'."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["ingested"],
+      "description": "The ingestion pipeline's own status for this record. \"ingested\" is the only value DC-003-I030 itself ever produces — invalid content is rejected before a record is created, so no \"failed\"/\"processing\" state is ever persisted. The enum is deliberately open to extension by later milestones that add downstream lifecycle stages (packaging, publishing) without requiring a schema-breaking change here."
+    },
+    "approval_state": {
+      "type": "string",
+      "enum": ["pending", "approved", "rejected"],
+      "description": "Approval of THIS ingested record for downstream production use — distinct from the source document's own approval upstream of the Content Ingestion Engine (the brief's 'approved Google Document' refers to that upstream state, e.g. by convention or the source's own status, not this field). Always \"pending\" at creation; DC-003-I030 has no approve/reject action of its own — a later milestone may add one, per the brief's own \"Approval State\" requirement anticipating that step."
+    },
+    "full_article_text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The complete retrieved article body, verbatim from the source, whitespace-normalised only (see README 'Validation'). Never rewritten, summarised, or otherwise transformed — DC-003-I030 performs ingestion only."
+    },
+    "word_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Computed from full_article_text by splitting on whitespace — never separately supplied."
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "description": "Source-specific metadata collected at ingestion time (for google_docs: author/owner, source_created_at, source_modified_at, source_revision_id, source_url — see README 'Investigation — Google Docs metadata available'). Deliberately unconstrained, like content-asset.schema.json's own metadata field, since its shape varies by source_type."
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Always equal to created_at for DC-003-I030 — no update path exists yet. Present for forward-compatibility, mirroring topic-package.schema.json's own created_date/updated_date pair."
+    },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hex digest of every other field on this record (tamper-evidence for the record itself), computed by createIngestedContent() immediately before the record is frozen — distinct from source_fingerprint, which covers only full_article_text and exists to detect a CHANGED SOURCE, not a corrupted record."
+    }
+  }
+}
