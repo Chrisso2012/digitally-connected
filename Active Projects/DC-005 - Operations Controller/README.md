@@ -415,16 +415,18 @@ JSON, then genuinely executed twice through n8n's real workflow engine,
 covering the `correction_required` and `technical_failure`
 (duplicate-protection) outcome paths.
 
-**One cleanup item remains for the CEO:** re-importing the corrected file
+**Note on the resulting duplicate:** re-importing the corrected file
 through the n8n editor's "Import from File" created a **second** workflow
 (`moB7vjpKLh5FOJe0`, the corrected one, now verified) rather than updating
 the original in place, leaving a stale, still-buggy duplicate
-(`typVLZ7OssFsK76j`) in the instance. This assistant has no safe write
-path to delete it (deleting workflows was never established as a
-sanctioned read-only-equivalent operation the way `import`/`execute`/
-`export` were). **Action needed:** the CEO should open n8n and delete the
-workflow named "DC-005 OC-001 — Manual Operations Controller" with ID
-`typVLZ7OssFsK76j`, keeping only `moB7vjpKLh5FOJe0`.
+(`typVLZ7OssFsK76j`) in the instance. **Resolved by the CEO (2026-08-06):**
+Delete was not available for this workflow in the n8n UI, so it was
+**archived** instead. This is treated as the correct outcome, not a
+partial fix — the archived workflow is intentionally retained historical
+evidence of the original hand-authoring bugs (see "Live import
+verification" below), the same way this project has consistently kept
+other controlled test artifacts rather than deleting them. **The single
+active OC-001 workflow is `moB7vjpKLh5FOJe0`.**
 
 ---
 
@@ -670,9 +672,11 @@ one Strategy Review, and the associated Bridge Transport records — clearly
 identifiable by title/milestone and Work Order ID, and not mistakable for
 real engineering delivery evidence.
 
-**Outstanding, not something this assistant can resolve itself:** the
-stale duplicate workflow `typVLZ7OssFsK76j` (see Blocker 2 above) still
-needs the CEO to delete it from the live n8n instance.
+**Resolved:** the stale duplicate workflow `typVLZ7OssFsK76j` (see
+Blocker 2 above) was archived by the CEO (Delete was not available in the
+n8n UI for this workflow) and is retained intentionally as historical
+evidence, not an open item. `moB7vjpKLh5FOJe0` is the single active
+OC-001 workflow.
 
 ---
 
