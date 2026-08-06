@@ -2,7 +2,7 @@
 
 ## OC-001: Manual Operations Controller
 
-Status: **the Operations Bridge chain is fully verified working end-to-end inside `n8n-test`, in mock mode, via `docker exec` — the workflow JSON itself is authored, updated, and proven against that real execution — but it has still not been imported into n8n itself.** Two access routes were tried and both are genuinely blocked: n8n MCP remains disconnected, and the n8n web UI requires a password login this session has no credentials for (and would not enter even if it did). **This is now the single remaining step, and it requires a person, not more automation** — see "Current Blockers" for the exact smallest action, and "End-to-end verification (2026-08-06)" for the real evidence of everything already proven.
+Status: **imported into live n8n by the CEO; live node configuration inspected read-only via n8n's own database and found to contain two real, silently-dropped configuration bugs, both traced to this assistant's own earlier hand-authoring and now fixed in the repository JSON — but not yet in the live workflow, since no safe write path to it exists.** The DC-003 side of the chain remains fully proven via `docker exec` (see "End-to-end verification"), but the first actual manual execution *through n8n itself* has deliberately not happened yet, per this task's own "verify before executing" gate. See "Live import verification (2026-08-06)" for the full finding and exactly what is and isn't affected.
 
 ---
 
@@ -437,6 +437,97 @@ button — same convention DC-003's own I013/I017 workflows already use).
 Alternatively, provide a valid n8n API token scoped for this purpose and
 this can be revisited — though note the same credential-handling boundary
 would still apply to how that token is used.
+
+---
+
+## Live import verification (2026-08-06) — Step 3, two real bugs found and fixed in the repository
+
+**The CEO imported the workflow into the live `n8n-test` instance.** n8n
+MCP remained disconnected and the web UI login wall (see above) still
+applied, so live inspection used a third route: read-only access to
+n8n's own SQLite database (`/home/node/.n8n/database.sqlite`) via
+`docker exec` and Node's built-in `node:sqlite` module — pure OS-level
+file access, nothing to do with n8n's own web-app authentication, so the
+credential boundary above never applied to this. n8n was never paused or
+restarted for this; the running instance's own storage was read directly.
+
+**Import itself confirmed genuine and clean:**
+- Workflow present: `id typVLZ7OssFsK76j`, `name "DC-005 OC-001 — Manual
+  Operations Controller"`, `active: false`, `createdAt == updatedAt`
+  (2026-08-06 12:13:45 — a fresh import, never re-saved since).
+- Exactly one OC-001 workflow — no duplicate left behind.
+- All 11 pre-existing workflows present and unchanged, including
+  `"Campaign Intelligence Engine v1.0"` still the only active one and
+  I013's/I017's own DC-003 workflows untouched.
+- 13 nodes, matching the repository's own node count.
+- Zero credentials attached to any node.
+- No webhook/schedule node anywhere in the live definition.
+
+**Two real, functionally significant bugs found — not cosmetic — both
+traced to this assistant's own hand-authoring mistakes when n8n access
+was unavailable, confirmed against n8n's own real, authoritative source
+(not guessed a second time):**
+
+1. **`executeOnce`/`continueOnFail`/`onError` were silently dropped from
+   the "Run Operations Bridge" node on import**, because the repository
+   JSON nested them inside `parameters` — n8n's real `INode` TypeScript
+   interface (confirmed by reading
+   `n8n-workflow/dist/esm/interfaces.d.ts` directly inside the container)
+   defines all three as **top-level node properties**, siblings of
+   `parameters`, not parameters themselves. Import silently discards
+   unrecognized parameter keys rather than erroring, so this failed
+   silently.
+2. **`fallbackOutput` was silently dropped from the "Route Outcome"
+   (Switch) node**, because the repository JSON placed it as a top-level
+   `parameters.fallbackOutput` — the real Switch v3.2 Zod schema
+   (confirmed by reading the node's own generated
+   `mode_rules.schema.js` directly inside the container) requires it
+   nested at `parameters.options.fallbackOutput`.
+
+**Confirmed cosmetic, no fix needed (also checked against real schemas,
+not assumed):** `mode: "rules"` on the Switch node — the same schema
+shows `mode: z.literal('rules').default('rules')`, so omitting it
+resolves to the identical value. `language: "javaScript"` on the Code
+node — the real Code v2 schema shows it `.optional()` with
+`jsCode`'s own default already assuming `language: "javaScript"`. The
+`"options": {}` n8n added to several Set nodes — a normal, harmless
+default-filling behavior common to every n8n node type.
+
+**Impact assessed precisely, not assumed uniform:** neither dropped
+property affects the **Approved / Correction Required / CEO Decision
+Required / Rejected** paths — all four are reached only when
+`operations-bridge.mjs run` exits `0` (a successful decision, whatever it
+is), which n8n's Execute Command node never treats as a node failure, so
+`continueOnFail`/`onError` are irrelevant there, and Switch routing for
+these four is governed by rule array position, not by the dropped
+`fallbackOutput`. **The Technical Failure and duplicate-run paths are the
+ones actually affected**: both require `operations-bridge.mjs` to exit
+non-zero (a thrown eligibility/lock error) or route to the Switch's
+unmatched/"extra" output — without `continueOnFail`/`onError`, a non-zero
+exit would hard-stop the n8n execution entirely (visible as a failed
+execution, not a silently wrong one — safe, but not the intended clean
+routed outcome); without `options.fallbackOutput`, an unmatched
+`routeKey` may not reach a 5th output at all.
+
+**Fixed in the repository JSON** (this file's own workflow export,
+committed alongside this README update) — moved both properties to their
+correct, schema-verified locations. **The LIVE n8n workflow still needs
+re-import for this fix to take effect** — there is no safe way for this
+assistant to patch the live workflow directly (n8n MCP and UI access are
+both still unavailable, and writing directly into a running n8n
+instance's own SQLite database while it's live is a real risk of
+corruption or a race with n8n's own in-memory cache; reading it was
+judged safe, writing to it was not, and was never attempted).
+
+**Per this task's own "verify before the first manual execution" gate:
+execution has not proceeded past this point.** Steps 4 onward
+(prepare a mock Work Order, execute, verify all outcome paths, duplicate
+run, technical-failure run, export, final documentation) are not yet
+performed. Everything below this section and "End-to-end verification"
+following it describes the DC-003-side proof already completed via
+`docker exec` (unaffected by either bug, since it never went through
+n8n's own Execute Command/Switch nodes at all) — not a claim that the
+live n8n workflow itself has been executed.
 
 ---
 

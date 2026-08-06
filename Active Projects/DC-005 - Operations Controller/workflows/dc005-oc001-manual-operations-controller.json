@@ -60,10 +60,10 @@
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [980, 300],
+      "executeOnce": true,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput",
       "parameters": {
-        "executeOnce": true,
-        "continueOnFail": true,
-        "onError": "continueRegularOutput",
         "command": "=DC003_DIR=\"/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation\"\nRUN_DIR=/tmp/dc005-oc001-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}\nmkdir -p \"$RUN_DIR\"\ncd \"$DC003_DIR\"\nnode tests/validation/operations-bridge.mjs run \\\n  \"{{ $json.work_order_id }}\" \\\n  /home/node/.n8n/dc003/engineering/work-orders \\\n  /home/node/.n8n/dc003/engineering/delivery-reports \\\n  /home/node/.n8n/dc003/engineering/strategy-reviews \\\n  /home/node/.n8n/dc003/engineering/bridge \\\n  \"$DC003_DIR\" \\\n  --repo=\"$DC003_DIR\" \\\n  --delivery-lock=/home/node/.n8n/dc003/engineering/locks/delivery \\\n  --review-lock=/home/node/.n8n/dc003/engineering/locks/review \\\n  --drop=/home/node/.n8n/dc003/engineering/drop \\\n  --export=/home/node/.n8n/dc003/engineering/export \\\n  --json > \"$RUN_DIR/stdout.json\" 2> \"$RUN_DIR/stderr.log\"\nDC005_EXIT_CODE=$?\ncat \"$RUN_DIR/stdout.json\"\necho \"DC005_EXIT_CODE=$DC005_EXIT_CODE\"\ncat \"$RUN_DIR/stderr.log\" 1>&2"
       }
     },
@@ -131,8 +131,7 @@
             }
           ]
         },
-        "fallbackOutput": "extra",
-        "options": {}
+        "options": { "fallbackOutput": "extra" }
       }
     },
     {
