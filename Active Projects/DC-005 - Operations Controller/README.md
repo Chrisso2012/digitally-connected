@@ -2,7 +2,7 @@
 
 ## OC-001: Manual Operations Controller
 
-Status: **workflow authored, not yet imported or executed** — see "Current Blockers" below before attempting a live run.
+Status: **workflow authored, not yet imported or executed.** The original repository-visibility blocker (container mounted into an unrelated, actively-developed DC-004 branch) is now resolved — a dedicated, permanently-`main` runtime clone exists and is mounted read-only into `n8n-test`. A second, previously-undiscovered blocker was found while verifying that fix: see "Current Blockers" below before attempting a live run.
 
 ---
 
@@ -265,7 +265,7 @@ not implemented:**
 
 ---
 
-## Investigation findings (as of this delivery)
+## Investigation findings (as originally delivered — items 2–6 superseded, see "Current Blockers" above for the post-remount state)
 
 1. **n8n MCP connection:** unavailable (disconnected) at the time of this
    milestone. No workflow could be created or inspected through it.
@@ -335,25 +335,66 @@ not implemented:**
 
 ## Current Blockers
 
-**Blocker 1 — the mounted DC-003 repository does not contain commit
-`4ca2429`.** The container's own bind mount targets the original shared
-checkout, which is on an unrelated, actively-worked DC-004 branch. Until
-that checkout is on (or otherwise exposes) `main` at `4ca2429` or later,
-`operations-bridge.mjs` is not reachable from inside `n8n-test` at all — no
-n8n workflow, however correctly built, can succeed against it today. This is
-an infrastructure/repository-visibility decision, not something this
-milestone is authorised to fix unilaterally (it would mean either switching
-a live, in-use DC-004 checkout's branch — explicitly out of scope and
-disruptive to unrelated work — or recreating/remounting the container,
-which the brief for this milestone explicitly withholds authorization for).
-**Smallest safe option, for Strategy Office decision, not applied here:**
-either (a) fast-forward-merge the DC-005 branch this document lives on into
-`main` and separately arrange for the mounted checkout to reach `main`
-without disrupting DC-004's own active branch (e.g. a second worktree
-dedicated to what the container mounts), or (b) point a NEW bind mount at
-the already-`main`-tracking `digitally-connected-dc003` worktree this
-session has used throughout the I029.x/DC-005 work, alongside (not
-replacing) the existing mount, under explicit approval.
+**Blocker 1 — RESOLVED.** The mounted DC-003 repository did not contain
+commit `4ca2429`, because the container's bind mount targeted the original
+shared checkout, which was on an unrelated, actively-worked DC-004 branch.
+Per explicit Strategy Office direction, that checkout is now treated as
+protected infrastructure — never to be branch-switched, reset, remounted,
+or used as a runtime source for DC-003 or DC-005. Instead, a **dedicated
+runtime repository** was created:
+`C:\Users\Evans\OneDrive\Documents\GitHub\digitally-connected-runtime` — a
+genuinely independent `git clone` of `origin` (not a `git worktree add`
+linked worktree; see Blocker 3 for exactly why that distinction mattered),
+pinned to `main` only, intended to remain permanently on `main` and never
+receive direct commits — it should only ever be fast-forwarded once new
+work is merged into `main` elsewhere. `n8n-test` was recreated (image,
+env vars, ports, the `n8n_data` volume, the `/data/production-assets`
+mount, `NODES_EXCLUDE`, and every credential all preserved exactly — only
+the DC-003 repository bind-mount **source** changed) to mount
+`/data/dc003-repo` read-only from this new runtime clone. Confirmed after
+recreation: container starts cleanly, "Campaign Intelligence Engine v1.0"
+reactivated automatically (workflows/credentials intact — same untouched
+`n8n_data` volume), `/data/dc003-repo` is genuinely read-only (a write
+attempt is rejected by the filesystem), the mounted `operations-bridge.mjs`
+is checksum-identical to the runtime clone's own `main`-at-`4ca2429` copy
+on the host, and the original DC-004 checkout was independently confirmed
+unchanged (branch, HEAD, working tree) both before and after.
+
+**Blocker 3 — NEW, found while verifying Blocker 1's own fix: `git` is not
+reachable from inside the container at all, for any DC-003 mount, and
+never has been.** The bind mount only ever covers the project subfolder
+(`.../Active Projects/DC-003 - Automated Content Generation`), never the
+repository root — so `.git` (which lives at the root) has never been part
+of what `n8n-test` can see. `git` refuses to search upward past a mount
+boundary by default (`fatal: not a git repository ... Stopping at
+filesystem boundary`), so any DC-003 CLI that calls real git (I029.2's own
+`readGitState()`, used by `operations-bridge.mjs`, `delivery-office-runner.mjs`,
+and `strategy-review-agent.mjs` — **not** I013/I017's own workflows, which
+never touch git) crashes with an uncaught exception the moment it tries.
+Confirmed directly: seeding a real, eligible Work Order and running
+`operations-bridge.mjs run ... --json` against it inside the recreated
+container produces no JSON at all — a raw `git rev-parse HEAD` stack trace
+on stderr. This is **not a regression from the Blocker 1 fix** — the exact
+same gap existed identically under the OLD mount; it was simply never
+discovered before, because no git-dependent DC-003 CLI had ever actually
+been run through this container prior to this verification pass (every
+I029.2–I029.4.1 smoke test in this project's own history ran against a
+real git repository on the host directly, never through `n8n-test`).
+
+**Not fixed here, deliberately** — the explicit authorization for this
+session's container recreation was "change only the DC-003 repository bind
+mount... preserve everything else exactly," and the correct fix (adding a
+**second**, new bind mount exposing the runtime clone's repository root —
+e.g. `/data/dc003-repo-root:ro` — so a git-dependent CLI can be pointed at
+`/data/dc003-repo-root/Active Projects/DC-003 - Automated Content
+Generation` instead of the existing subfolder-only `/data/dc003-repo`)
+is a second, additional mount, not a change to the one already authorized.
+The existing `/data/dc003-repo` mount must stay exactly as-is regardless —
+I013's and I017's own existing workflows hardcode it as their project-folder
+path and never needed git, so they are unaffected either way. This
+workflow's own Execute Command node (see "Exact Operations Bridge command"
+above) will need updating to the new root-mounted path once that second
+mount is approved and added.
 
 **Blocker 2 — n8n MCP is disconnected.** This workflow could not be created,
 imported, or executed through it. The workflow JSON in this folder was
@@ -364,7 +405,7 @@ been imported into the live `n8n-test` instance, has no real n8n-assigned
 workflow ID yet (`id: null` in the export, intentionally, so it is never
 mistaken for an already-imported workflow), and has not been executed.
 
-**Manual import steps, once Blocker 1 is resolved:** open the `n8n-test`
+**Manual import steps, once Blocker 3 is resolved:** open the `n8n-test`
 UI at `http://localhost:5678`, use "Import from File", select
 `workflows/dc005-oc001-manual-operations-controller.json` from this project
 folder, confirm the imported workflow's node graph matches this document,
