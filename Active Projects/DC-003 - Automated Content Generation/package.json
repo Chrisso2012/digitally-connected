@@ -39,6 +39,7 @@
     "content-ingestion": "node tests/validation/content-ingestion.mjs",
     "editorial-package": "node tests/validation/editorial-package.mjs",
     "social-media-package": "node tests/validation/social-media-package.mjs",
+    "production-package": "node tests/validation/production-package.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

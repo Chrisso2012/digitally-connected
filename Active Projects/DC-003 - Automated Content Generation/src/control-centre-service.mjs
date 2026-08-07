@@ -89,6 +89,7 @@ function assertDependencies({
   ingestedContentStore,
   editorialPackageStore,
   socialMediaPackageStore,
+  productionPackageStore,
 }) {
   if (
     !finishedCarouselStore ||
@@ -215,6 +216,18 @@ function assertDependencies({
       "fields.socialMediaPackageStore, when supplied, must be a Social Media Package Store — see createSocialMediaPackageStore() in social-media-package-store.mjs"
     );
   }
+  // DC-003-I033 — optional, standalone (not paired with anything above) —
+  // the Production Package section needs only the Production Package
+  // Store itself.
+  if (
+    productionPackageStore !== null &&
+    productionPackageStore !== undefined &&
+    (typeof productionPackageStore.list !== "function" || typeof productionPackageStore.get !== "function")
+  ) {
+    throw new InvalidControlCentreDependenciesError(
+      "fields.productionPackageStore, when supplied, must be a Production Package Store — see createProductionPackageStore() in production-package-store.mjs"
+    );
+  }
 }
 
 // Reuses I022's own "metadata.json present, parseable, carousel_id
@@ -309,6 +322,10 @@ function sumCost(metricsSummaries) {
  *   `social_media_package` is null. Also a lean summary only, mirroring
  *   `editorial_package`'s own precedent exactly — never embeds the full
  *   platforms/carousel content.
+ * fields.productionPackageStore — optional (DC-003-I033), standalone —
+ *   see production-package-store.mjs. When omitted, `production_package`
+ *   is null. Also a lean summary only, mirroring `social_media_package`'s
+ *   own precedent exactly — never embeds the full slide_sequence.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -340,6 +357,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     ingestedContentStore = null,
     editorialPackageStore = null,
     socialMediaPackageStore = null,
+    productionPackageStore = null,
     exportsRootDir = null,
   } = fields;
   assertDependencies({
@@ -354,6 +372,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     ingestedContentStore,
     editorialPackageStore,
     socialMediaPackageStore,
+    productionPackageStore,
   });
 
   const now = options.now ?? (() => new Date().toISOString());
@@ -1080,6 +1099,36 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  // DC-003-I033 — read-only, additive, standalone. Mirrors
+  // computeSocialMediaPackage()'s own lean-summary precedent exactly:
+  // count, and the latest record's own small fields
+  // (production_package_id/social_media_package_id/renderer/status/
+  // generated_at) — never the full slide_sequence.
+  function computeProductionPackage() {
+    if (!productionPackageStore) return null;
+    try {
+      const summaries = productionPackageStore.list();
+      const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+
+      return {
+        total_production_packages: summaries.length,
+        latest_package:
+          latest === null
+            ? null
+            : {
+                production_package_id: latest.production_package_id,
+                social_media_package_id: latest.social_media_package_id,
+                renderer: latest.renderer,
+                status: latest.status,
+                generated_at: latest.generated_at,
+              },
+        latest_status: latest === null ? null : latest.status,
+      };
+    } catch {
+      return { total_production_packages: 0, latest_package: null, latest_status: null };
+    }
+  }
+
   /**
    * Assembles the full "overview" read model: system health, dashboard
    * totals, recent jobs, recent activity, engineering status, bridge
@@ -1108,6 +1157,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       content_ingestion: computeContentIngestion(),
       editorial_package: computeEditorialPackage(),
       social_media_package: computeSocialMediaPackage(),
+      production_package: computeProductionPackage(),
     };
 
     return validateAndFreeze(overview);

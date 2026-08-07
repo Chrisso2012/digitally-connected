@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/production-package.schema.json",
+  "title": "Production Package",
+  "description": "DC-003-I033 — the canonical renderer-ready package used by every downstream rendering engine (Templated now; Canva/Adobe Express/Figma/HTML/PowerPoint later, per-renderer support isolated behind a Renderer Adapter), derived from exactly one immutable Social Media Package (DC-003-I032) via a pure, deterministic transformation — no AI/LLM call of any kind. Nothing after I033 needs to interpret marketing copy or editorial intent again. Deliberately renderer-agnostic at the top level: `headline_mapping`/`body_copy_mapping`/`cta_mapping`/`image_guidance_mapping` are generic per-slide content values, never a specific renderer's own literal layer names — a chosen Renderer Adapter resolves those separately, on demand, never persisted here. `template_id` names a renderer-agnostic template FAMILY (e.g. \"dc-carousel-v1\"), not a raw Templated template UUID. Immutable after creation: no update path exists; at most one Production Package may exist per social_media_package_id (see the Production Package Store's own duplicate-rejection rule).",
+  "type": "object",
+  "required": [
+    "production_package_id",
+    "social_media_package_id",
+    "status",
+    "renderer",
+    "platform",
+    "design_id",
+    "template_id",
+    "slide_sequence",
+    "rendering_metadata",
+    "validation_metadata",
+    "generated_at",
+    "schema_version",
+    "production_checksum"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "production_package_id": {
+      "type": "string",
+      "pattern": "^pp_[A-Za-z0-9]+$",
+      "description": "Machine-generated, independent of social_media_package_id — mirrors every other DC-003 identifier convention (sm_/ep_/ic_/...)."
+    },
+    "social_media_package_id": {
+      "type": "string",
+      "pattern": "^sm_[A-Za-z0-9]+$",
+      "description": "The single, required input this package was derived from (DC-003-I032's Social Media Package Store). At most one Production Package may exist per social_media_package_id."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["generated"],
+      "description": "\"generated\" is the only value DC-003-I033 itself ever produces — mirrors social-media-package.schema.json's own identical status-field rationale, left open for a later milestone's own downstream lifecycle stages (e.g. \"rendered\")."
+    },
+    "renderer": {
+      "type": "string",
+      "enum": ["templated"],
+      "description": "The renderer this package was prepared for. Deliberately a narrow enum — only Templated has an implemented Renderer Adapter as of I033; extend this list only once a real adapter for another renderer exists (Canva/Adobe Express/Figma/HTML/PowerPoint), never speculatively."
+    },
+    "platform": {
+      "type": ["string", "null"],
+      "description": "Optional, caller-supplied informational metadata (e.g. \"instagram\"). null when not specified — the source Social Media Package's own `carousel` content is platform-agnostic (shared across all four of its `platforms` text variations), so a platform association is never fabricated here, only honestly recorded when a caller actually supplies one."
+    },
+    "design_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Sourced from config/versions.json's own `design_system_version` at generation time (e.g. \"dc-002-v1\") — real, already-version-controlled metadata, never invented."
+    },
+    "template_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Names the renderer-agnostic template FAMILY this package's slide_sequence was mapped against (e.g. \"dc-carousel-v1\") — not a specific renderer's own literal template UUID. A chosen Renderer Adapter resolves this into that renderer's real per-slide template identifiers (see templated-renderer-adapter.mjs)."
+    },
+    "slide_sequence": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "description": "Exactly six slides, 1:1 with the source Social Media Package's own six-entry `carousel` arrays, in the same order — no reordering, no slide-type classification invented (unlike the older, now-superseded six-heterogeneous-template carousel pipeline — see this schema's own top-level description and the DC-003-I033 README section \"Investigation\" for why).",
+      "items": { "$ref": "#/$defs/productionSlide" }
+    },
+    "rendering_metadata": {
+      "type": "object",
+      "required": ["mapping_strategy", "slide_count", "generator"],
+      "additionalProperties": false,
+      "description": "Documents HOW slide_sequence was produced — distinct from the identity fields above (renderer/template_id/design_id/platform).",
+      "properties": {
+        "mapping_strategy": { "type": "string", "minLength": 1 },
+        "slide_count": { "type": "integer", "const": 6 },
+        "generator": { "type": "string", "minLength": 1 }
+      }
+    },
+    "validation_metadata": {
+      "type": "object",
+      "required": ["social_media_package_checksum", "all_slides_populated", "renderer_mapping_validated"],
+      "additionalProperties": false,
+      "description": "A record of what was actually checked at generation time — mirrors this project's own established \"capture what you verified\" discipline rather than asserting correctness silently.",
+      "properties": {
+        "social_media_package_checksum": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Copied from the source Social Media Package's own `checksum` at generation time, for traceability — proves which exact version of the source this package was derived from."
+        },
+        "all_slides_populated": { "type": "boolean" },
+        "renderer_mapping_validated": {
+          "type": "boolean",
+          "description": "True only when the chosen Renderer Adapter's own mapToRendererPayload() was successfully exercised (not merely assumed) against this package's slide_sequence during generation — see production-package-generator.mjs."
+        }
+      }
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "production_checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Self-integrity checksum for this record itself — mirrors ingested-content.mjs/editorial-package.mjs/social-media-package.mjs's own identical discipline (computed over the record before this field is added)."
+    }
+  },
+  "$defs": {
+    "productionSlide": {
+      "type": "object",
+      "required": ["slide_number", "headline_mapping", "body_copy_mapping", "cta_mapping", "image_guidance_mapping", "placeholder_tag_mapping"],
+      "additionalProperties": false,
+      "properties": {
+        "slide_number": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "headline_mapping": { "type": "string", "minLength": 1 },
+        "body_copy_mapping": { "type": "string", "minLength": 1 },
+        "cta_mapping": {
+          "type": ["string", "null"],
+          "description": "Non-null only on the slide carrying the call to action (slide_number 6, mirroring the older carousel pipeline's own \"CTA is always the last slide\" convention) — sourced verbatim from the Social Media Package's own top-level call_to_action field, never rewritten."
+        },
+        "image_guidance_mapping": { "type": "string", "minLength": 1 },
+        "placeholder_tag_mapping": {
+          "type": "object",
+          "required": ["headline", "body", "cta", "image_guidance"],
+          "additionalProperties": false,
+          "description": "The same four values above, re-keyed under a stable, renderer-agnostic tag vocabulary (headline/body/cta/image_guidance) rather than this schema's own field names — ready for a future tag-substitution-style renderer adapter (e.g. PowerPoint/Figma placeholder text) to consume directly without needing to know this schema.",
+          "properties": {
+            "headline": { "type": "string", "minLength": 1 },
+            "body": { "type": "string", "minLength": 1 },
+            "cta": { "type": ["string", "null"] },
+            "image_guidance": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

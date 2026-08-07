@@ -39,6 +39,7 @@ const APPROVED_FIXTURES = [
   ["ingestedContent", "ingested-content.example.json"],
   ["editorialPackage", "editorial-package.example.json"],
   ["socialMediaPackage", "social-media-package.example.json"],
+  ["productionPackage", "production-package.example.json"],
 ];
 
 const validator = createValidator();

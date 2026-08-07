@@ -85,5 +85,6 @@
   "strategy_review": null,
   "content_ingestion": null,
   "editorial_package": null,
-  "social_media_package": null
+  "social_media_package": null,
+  "production_package": null
 }

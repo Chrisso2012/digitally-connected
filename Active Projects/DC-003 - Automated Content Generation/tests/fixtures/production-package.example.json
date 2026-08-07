@@ -1,0 +1,102 @@
+{
+  "production_package_id": "pp_a1b2c3d4e5f60708",
+  "social_media_package_id": "sm_a1b2c3d4e5f60708",
+  "status": "generated",
+  "renderer": "templated",
+  "platform": null,
+  "design_id": "dc-002-v1",
+  "template_id": "dc-carousel-v1",
+  "slide_sequence": [
+    {
+      "slide_number": 1,
+      "headline_mapping": "A Strategy Is No Longer Optional",
+      "body_copy_mapping": "A coherent digital marketing strategy is no longer optional for local businesses.",
+      "cta_mapping": null,
+      "image_guidance_mapping": "Slide 1: a local storefront with a subtle digital overlay motif — illustrative guidance only, not a real creative brief [mock].",
+      "placeholder_tag_mapping": {
+        "headline": "A Strategy Is No Longer Optional",
+        "body": "A coherent digital marketing strategy is no longer optional for local businesses.",
+        "cta": null,
+        "image_guidance": "Slide 1: a local storefront with a subtle digital overlay motif — illustrative guidance only, not a real creative brief [mock]."
+      }
+    },
+    {
+      "slide_number": 2,
+      "headline_mapping": "Search Visibility Matters",
+      "body_copy_mapping": "Search visibility matters because most buying journeys begin with a search engine query.",
+      "cta_mapping": null,
+      "image_guidance_mapping": "Slide 2: a search results page with a highlighted local business listing — illustrative guidance only [mock].",
+      "placeholder_tag_mapping": {
+        "headline": "Search Visibility Matters",
+        "body": "Search visibility matters because most buying journeys begin with a search engine query.",
+        "cta": null,
+        "image_guidance": "Slide 2: a search results page with a highlighted local business listing — illustrative guidance only [mock]."
+      }
+    },
+    {
+      "slide_number": 3,
+      "headline_mapping": "Social Proof Compounds Trust",
+      "body_copy_mapping": "Social proof compounds trust in a way advertising alone cannot buy.",
+      "cta_mapping": null,
+      "image_guidance_mapping": "Slide 3: a customer leaving a five-star review on a phone — illustrative guidance only [mock].",
+      "placeholder_tag_mapping": {
+        "headline": "Social Proof Compounds Trust",
+        "body": "Social proof compounds trust in a way advertising alone cannot buy.",
+        "cta": null,
+        "image_guidance": "Slide 3: a customer leaving a five-star review on a phone — illustrative guidance only [mock]."
+      }
+    },
+    {
+      "slide_number": 4,
+      "headline_mapping": "Content Consistency Pays Off",
+      "body_copy_mapping": "Content consistency is rewarded by both algorithms and audiences over time.",
+      "cta_mapping": null,
+      "image_guidance_mapping": "Slide 4: a content calendar with evenly spaced posts — illustrative guidance only [mock].",
+      "placeholder_tag_mapping": {
+        "headline": "Content Consistency Pays Off",
+        "body": "Content consistency is rewarded by both algorithms and audiences over time.",
+        "cta": null,
+        "image_guidance": "Slide 4: a content calendar with evenly spaced posts — illustrative guidance only [mock]."
+      }
+    },
+    {
+      "slide_number": 5,
+      "headline_mapping": "Scattered Activity, Real Cost",
+      "body_copy_mapping": "Marketing activity is scattered and inconsistent rather than a repeatable system.",
+      "cta_mapping": null,
+      "image_guidance_mapping": "Slide 5: a cluttered desk with scattered marketing materials — illustrative guidance only [mock].",
+      "placeholder_tag_mapping": {
+        "headline": "Scattered Activity, Real Cost",
+        "body": "Marketing activity is scattered and inconsistent rather than a repeatable system.",
+        "cta": null,
+        "image_guidance": "Slide 5: a cluttered desk with scattered marketing materials — illustrative guidance only [mock]."
+      }
+    },
+    {
+      "slide_number": 6,
+      "headline_mapping": "A Structured Three-Pillar Approach",
+      "body_copy_mapping": "The reader adopts a structured, three-pillar approach to digital marketing.",
+      "cta_mapping": "Learn more about building a digital marketing strategy",
+      "image_guidance_mapping": "Slide 6: three clean pillars labelled Search, Social, Content — illustrative guidance only [mock].",
+      "placeholder_tag_mapping": {
+        "headline": "A Structured Three-Pillar Approach",
+        "body": "The reader adopts a structured, three-pillar approach to digital marketing.",
+        "cta": "Learn more about building a digital marketing strategy",
+        "image_guidance": "Slide 6: three clean pillars labelled Search, Social, Content — illustrative guidance only [mock]."
+      }
+    }
+  ],
+  "rendering_metadata": {
+    "mapping_strategy": "uniform-cover-cta-v1",
+    "slide_count": 6,
+    "generator": "templated-renderer-adapter"
+  },
+  "validation_metadata": {
+    "social_media_package_checksum": "d734fd7f65fce3498ee98ef948f538caa02346dfd80498b68b81776e522727c7",
+    "all_slides_populated": true,
+    "renderer_mapping_validated": true
+  },
+  "generated_at": "2026-08-07T12:00:00.000Z",
+  "schema_version": "1.0",
+  "production_checksum": "74ca8bb10c601884e7fffe44fce5fe3dde47bc77f6faaddf7b1a66fc7f48b46a"
+}

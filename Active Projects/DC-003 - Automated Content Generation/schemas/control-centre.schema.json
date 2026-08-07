@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review", "content_ingestion", "editorial_package", "social_media_package"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review", "content_ingestion", "editorial_package", "social_media_package", "production_package"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -22,7 +22,8 @@
         "strategy_review": { "$ref": "#/$defs/strategyReviewSummary" },
         "content_ingestion": { "$ref": "#/$defs/contentIngestionSummary" },
         "editorial_package": { "$ref": "#/$defs/editorialPackageSummary" },
-        "social_media_package": { "$ref": "#/$defs/socialMediaPackageSummary" }
+        "social_media_package": { "$ref": "#/$defs/socialMediaPackageSummary" },
+        "production_package": { "$ref": "#/$defs/productionPackageSummary" }
       }
     },
     {
@@ -499,6 +500,38 @@
                     "social_media_package_id": { "type": "string", "pattern": "^sm_[A-Za-z0-9]+$" },
                     "editorial_package_id": { "type": "string", "pattern": "^ep_[A-Za-z0-9]+$" },
                     "hook": { "type": "string" },
+                    "status": { "type": "string" },
+                    "generated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              ]
+            },
+            "latest_status": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "productionPackageSummary": {
+      "description": "DC-003-I033 — sourced entirely from the Production Package Store, read-only, standalone, no networking of any kind. null when no Production Package Store was supplied. A LEAN summary — latest_package never embeds the full slide_sequence, mirroring socialMediaPackageSummary's own precedent.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["total_production_packages", "latest_package", "latest_status"],
+          "additionalProperties": false,
+          "properties": {
+            "total_production_packages": { "type": "integer", "minimum": 0 },
+            "latest_package": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["production_package_id", "social_media_package_id", "renderer", "status", "generated_at"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "production_package_id": { "type": "string", "pattern": "^pp_[A-Za-z0-9]+$" },
+                    "social_media_package_id": { "type": "string", "pattern": "^sm_[A-Za-z0-9]+$" },
+                    "renderer": { "type": "string" },
                     "status": { "type": "string" },
                     "generated_at": { "type": "string", "format": "date-time" }
                   }
