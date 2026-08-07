@@ -850,3 +850,267 @@ once a channel is explicitly approved.
 - **Resolving Blocker 1** — a Strategy Office decision on how the
   `n8n-test` container should reach `main`-or-later without disrupting
   DC-004's own active work.
+
+---
+
+## OC-002: GS01 End-to-End Content Production Workflow
+
+Status: **created directly in live n8n via the n8n Workflow SDK
+(`create_workflow_from_code`) against a genuine, connected n8n MCP
+session — not hand-authored JSON. Structurally verified (`validate_workflow`
+returned `valid: true`, 30 nodes; `get_workflow_details` confirmed every
+node/connection/parameter matches the design exactly, including
+`executeOnce`/`onError` correctly placed as top-level node properties,
+avoiding the exact class of bug OC-001 hit when it had to be hand-authored
+without MCP access). Workflow ID `uQHylcbZhMMKlHLL`,
+`http://localhost:5678/workflow/uQHylcbZhMMKlHLL`, inactive (manual-trigger
+workflows don't need activation). NOT yet executed, mock or live — see
+"Blocking infrastructure gap" below for why, and "Verification performed"
+for exactly what was and wasn't possible to check.**
+
+### Purpose
+
+Orchestrates the complete DC-003 content production pipeline
+(I030→I031→I032→I033→I034) for one hardcoded article, GS01, ending with
+six rendered carousel images exported to the Windows Production Assets
+folder. Composes existing DC-003 CLIs only via Execute Command — this
+workflow owns no content-generation, rendering, approval-persistence, or
+export logic of its own; every one of those already exists in DC-003 and
+is invoked, never reimplemented.
+
+### Pipeline
+
+```
+Manual Trigger
+  -> Select Approved Article (GS01, hardcoded)
+  -> I030 Content Ingestion            (content-ingestion.mjs)
+  -> I031 Editorial Package            (editorial-package.mjs)
+  -> CEO Approval Gate                  (n8n Wait node, form-resume)
+  -> I032 Social Media Package         (social-media-package.mjs)
+  -> CEO Approval Gate                  (n8n Wait node, form-resume)
+  -> I033 Production Package           (production-package.mjs)
+  -> I034 Live Carousel Rendering      (render-production-package.mjs --live)
+  -> CEO Visual Approval Gate           (n8n Wait node, form-resume)
+  -> Approve Carousel (I014) + Production Asset Export (I021/I026)
+  -> Complete
+```
+
+Every arrow that isn't an approval gate is one Execute Command node
+calling a real DC-003 CLI with `--json`-equivalent output (I030–I033
+print human-readable labeled output; I032/I033's own `create` command
+already prints every field a CEO gate needs, and I031/I032 additionally
+chain a follow-up `inspect` call inside the same Execute Command script
+for a clean, JSON-parseable capture of free-text review content —
+headline/summary/hook/platform copy — rather than regex-parsing padded
+label:value text, which would be fragile for content containing
+punctuation).
+
+### Investigation (required before implementation, per this milestone's own brief)
+
+- **Existing OC-001 workflow**: the direct structural template for this
+  one — same Execute Command shell pattern (capture stdout/stderr to
+  files, capture `$?`, echo a `DC005_EXIT_CODE=` delimiter line, `cat`
+  both back out), same top-level `executeOnce`/`onError:
+  "continueRegularOutput"` node properties (not nested inside
+  `parameters` — the exact bug OC-001 itself found and fixed the hard
+  way), same Switch/IF-based `routeKey` routing philosophy, same
+  `/data/dc003-repo-root` mount and `/home/node/.n8n/dc003/...`
+  persistent-storage convention (this workflow uses a sibling path,
+  `/home/node/.n8n/dc003/content-production/{ic,ep,sm,pp,fc}`).
+- **Current Operations Bridge workflow patterns**: OC-001 never needed a
+  human-in-the-loop pause — DC-003's own automated review (I029.3)
+  already decided the outcome before n8n ever saw it. OC-002 is
+  different: it needs three GENUINE human decisions made inside the
+  running n8n execution itself, which OC-001's own architecture has no
+  precedent for.
+- **Existing Execute Command node conventions**: reused exactly (see
+  above) — this time authored via the n8n Workflow SDK and validated by
+  n8n's own `validate_workflow`/`create_workflow_from_code` tools rather
+  than hand-typed JSON, which caught the `continueOnFail` issue below
+  before anything was ever imported.
+- **Existing approval patterns available within n8n**: investigated
+  `n8n-nodes-base.wait`'s own `resume` modes (`timeInterval`,
+  `specificTime`, `webhook`, `form`). Chose `form` — the only mode that
+  gives a reviewer an actual UI (title/description/fields) rather than a
+  bare webhook URL to `curl`. n8n auto-generates
+  `$execution.resumeFormUrl` per paused execution, servable from the
+  same `localhost:5678` origin the CEO already uses for the n8n editor —
+  no email/Slack/webhook-exposure dependency of any kind. Each gate has
+  exactly two fields: a required `decision` dropdown (`Approve`/
+  `Reject`) and an optional `notes` textarea.
+- **Existing DC-003 CLI interfaces**: all six were already known
+  precisely — five (`content-ingestion.mjs`, `editorial-package.mjs`,
+  `social-media-package.mjs`, `production-package.mjs`,
+  `render-production-package.mjs`) were built this session (DC-003-I030
+  through I034); the sixth (`approve-carousel.mjs`, DC-003-I014) and
+  the Finished Carousel Store CLI (`carousel-store.mjs`, DC-003-I015)
+  were confirmed by direct inspection. **Real finding, not assumed**:
+  `approve-carousel.mjs` operates on a JSON **file**, not a store
+  identifier — so the CEO's visual "Approve" decision inside n8n must be
+  followed by a real `get` → `approve --out=` → `replace` chain against
+  the Finished Carousel Store before export can run at all. A form
+  "Approve" click alone changes nothing in DC-003's own data — this
+  workflow's "Run Approve And Export" node performs that real
+  persistence chain, in one Execute Command, before ever calling export.
+- **Existing runtime repository mount**: confirmed live via `docker
+  inspect n8n-test` — both mounts
+  (`/data/dc003-repo-root` → `digitally-connected-runtime`,
+  `/data/dc003-repo` → the same repo's DC-003 subfolder) are unchanged
+  from OC-001's own setup. **The runtime repository itself is on `main`
+  at `4ca2429` (I029.4.1) — see "Blocking infrastructure gap" below.**
+- **Existing Windows Production Asset export path**: confirmed by
+  reading `export-production-assets-windows.mjs` directly —
+  `<carouselId> <finishedCarouselStoreDirectory> [--replace]`, requires
+  `finishedCarousel.approval.approved === true` (a real, pre-existing
+  DC-003 gate, not something this workflow adds).
+
+### Blocking infrastructure gap (found and reported before continuing implementation)
+
+**Confirmed live, not assumed**, via `git log`/`git branch` inside
+`digitally-connected-runtime` and `docker exec n8n-test ls
+tests/validation/`: the mounted runtime repository is on `main` at
+`4ca2429`, which predates DC-003-I030 entirely. **None of the five new
+CLIs this workflow calls
+(`content-ingestion.mjs`/`editorial-package.mjs`/
+`social-media-package.mjs`/`production-package.mjs`/
+`render-production-package.mjs`) exist on that branch** — they only
+exist on their own still-unmerged feature branches
+(`dc-003/i030-content-ingestion-engine` through
+`dc-003/i034-carousel-rendering-engine`). Verified directly inside the
+live container: `ls /data/dc003-repo/tests/validation/` returns none of
+the five filenames.
+
+**Practical effect**: every Execute Command node in this workflow that
+calls one of those five CLIs will fail with "file not found" if run
+today, mock or live — this is a repository-visibility problem, not a
+workflow-design problem, and mirrors OC-001's own historical "Blocker
+1" exactly (a container mounted at the wrong ref). **Not resolved
+here** — resolving it means either merging I030–I034 to `main` (a
+Strategy Office/CEO decision this session was never authorised to make
+unilaterally — every one of I030–I034's own Delivery Reports was
+explicitly told "do not merge into main") or pointing a mount at a
+different ref, which carries the same "don't disturb an unrelated
+active checkout" caution OC-001's own Blocker 1 resolution required.
+**This is the reason "end-to-end execution (mock until live approval)"
+could not be completed this round** — see "Verification performed"
+below for exactly what was checked instead.
+
+### Approval gates
+
+Three, using `n8n-nodes-base.wait` in `resume: "form"` mode — the
+workflow execution genuinely pauses; nothing continues until the form is
+submitted:
+
+1. **Editorial Package Approval Gate** — reviews headline, executive
+   summary, core message, call to action, key insights.
+2. **Social Media Package Approval Gate** — reviews hook, call to
+   action, tone, audience, the real LinkedIn post text and Instagram
+   caption, and the six carousel headings.
+3. **CEO Visual Approval Gate** — reviews the six real rendered slide
+   image URLs (from the live I034 render's own output).
+
+Each gate's downstream IF node checks `decision === "Approve"` exactly;
+anything else (including a literal "Reject") routes to the shared
+"Prepare Rejected Output" node — workflow execution ends there, no
+further stage runs, no automatic retry.
+
+### Error handling
+
+Every Execute Command node captures its own exit code via the same
+`DC005_EXIT_CODE=` delimiter technique OC-001 established, wrapped in
+`onError: "continueRegularOutput"` so a non-zero exit still reaches its
+own Parse node rather than hard-stopping the n8n execution. Each Parse
+node computes a `routeKey` (`continue`/`technical_failure`) from the
+real exit code and real output shape — never from a raw n8n node-failure
+signal alone, mirroring OC-001's own "route only on the parsed result,
+never on exit code alone" discipline. I034's own Parse node additionally
+requires `overall_status === "completed"` (not just exit 0) before
+routing to the visual approval gate — a `"partial"`/`"failed"` render
+never reaches the CEO as if it were a clean success. Every failure
+branch (five distinct stages) converges on one shared "Prepare Technical
+Failure Output" node naming the exact failing stage; every rejection
+branch (three gates) converges on one shared "Prepare Rejected Output"
+node. No automatic retries exist anywhere in this workflow — a failed or
+rejected run must be re-triggered manually after correction.
+
+### GS01
+
+Hardcoded in the "Select Approved Article (GS01)" Set node as
+`sourceReference: "GS01"`, fed directly into I030's own `create`
+command. I030 itself runs in its own default MOCK mode in this
+workflow (no `--live` flag on the content-ingestion call) — this
+milestone's own brief scoped "LIVE rendering only" specifically to
+Templated rendering, and no separate live-Google-Docs authorisation was
+given here; I030's own README still documents its live path as "never
+been exercised live, pending a future, separately-authorised Live
+Verification Gate," so this workflow does not silently change that.
+Generalising source selection beyond a hardcoded value is explicitly
+out of scope for this milestone.
+
+### Live Request Safety
+
+The one live-gated step is `Run I034 Live Carousel Rendering`, which
+passes `--live` to `render-production-package.mjs` — DC-003-I034's own
+Live Verification Gate applies unchanged: `TEMPLATED_API_KEY` must be
+present in the container environment, maximum 1 attempt per slide by
+default (`resolveLiveMaxAttempts()`, independent of
+`TEMPLATED_RENDER_MAX_ATTEMPTS`), up to 6 real Templated requests total
+for one full GS01 run, real template IDs `cover`
+(`748d17c5-c58e-48eb-9f12-434252a6d17f`) ×5 and `cta`
+(`366ceefc-d9ea-4fbc-9ffc-eac8f978fa59`) ×1. **No live Templated request
+has been made** — blocked structurally by the infrastructure gap above
+(the CLI this node calls doesn't exist in the mounted repo yet), not
+attempted, not simulated.
+
+### Verification performed
+
+- **Workflow-code validation**: `validate_workflow` — `valid: true`, 30
+  nodes, zero errors (one warning, `continueOnFail` not a recognised
+  top-level SDK field — fixed by removing it; `onError:
+  "continueRegularOutput"` alone is n8n's modern equivalent).
+- **Live creation + structural confirmation**: `create_workflow_from_code`
+  succeeded against the connected n8n MCP session (workflow ID
+  `uQHylcbZhMMKlHLL`); `get_workflow_details` re-confirmed every node,
+  every connection, and — specifically — that `executeOnce`/`onError`
+  landed as top-level node properties (siblings of `parameters`, not
+  nested inside it) and that both Wait nodes received real n8n-assigned
+  `webhookId`s (confirming the form-resume mechanism is genuinely
+  wired, not just present in the JSON).
+- **NOT performed, and why**: node connectivity was verified structurally
+  (above), but CLI invocation, approval-gate pause/resume behaviour
+  under real execution, and end-to-end mock execution could not be
+  performed — every Execute Command node in this workflow calls one of
+  the five CLIs confirmed absent from the mounted runtime repository
+  (see "Blocking infrastructure gap"). Export-stage wiring was verified
+  by direct inspection of `export-production-assets-windows.mjs`'s own
+  contract (argument order, the `approval.approved` precondition) but
+  not exercised. **This gap must close before this workflow can be
+  meaningfully executed, mock or live, in any form.**
+
+### Deliverables
+
+- `workflows/dc005-oc002-gs01-content-production-workflow.json` —
+  exported directly from `get_workflow_details` against the live
+  workflow (not hand-authored), so it is byte-faithful to what actually
+  exists in n8n right now.
+- This README section.
+- Import instructions: not needed for a fresh environment — this
+  workflow was created directly in the live n8n instance via MCP.
+  Should the JSON ever need reimporting elsewhere, use n8n's own
+  `import:workflow` CLI (mirrors OC-001's own precedent) rather than the
+  editor's "Import from File," which creates a duplicate rather than
+  updating in place.
+
+### Next steps (not performed this round, per explicit scope)
+
+1. Strategy Office/CEO decision on how the mounted runtime repository
+   reaches I030–I034 (merge to `main`, or an additional/adjusted mount)
+   — the same category of decision OC-001's own Blocker 1 required.
+2. Once resolved: a genuine mock end-to-end execution (I030 in its
+   default mock mode throughout, `--live` still withheld on I034) to
+   prove node connectivity, CLI invocation, and both approval gates'
+   pause/resume behaviour for real.
+3. Only after mock verification succeeds and fresh Strategy Office + CEO
+   approval is obtained: the one authorised live I034 run against a
+   genuinely ingested GS01, per this milestone's own "Live Verification
+   Gate" section above.

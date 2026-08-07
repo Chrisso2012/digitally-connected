@@ -1,0 +1,473 @@
+{
+  "id": "uQHylcbZhMMKlHLL",
+  "name": "DC-005 OC-002 — GS01 End-to-End Content Production Workflow",
+  "description": "Orchestrates the full DC-003 I030-I034 content production pipeline for GS01: Content Ingestion, Editorial Package, Social Media Package, Production Package, and live Carousel Rendering, with three CEO approval gates and Production Asset Export at the end. Every stage invokes an existing DC-003 CLI via Execute Command — no business logic is reimplemented in n8n. Approval gates use n8n's native Wait node in form-resume mode (no email/Slack dependency). Rejection at any gate stops the workflow with outcome \"rejected\"; any CLI/validation/rendering/export failure stops it with outcome \"technical_failure\" naming the exact stage — no automatic retries anywhere. LIVE rendering only (--live on render-production-package.mjs) is the one live-gated step, following the existing DC-003 Live Verification Gate convention. KNOWN BLOCKER, documented in the DC-005 OC-002 README: the mounted runtime repository (digitally-connected-runtime, on main) does not yet contain I030-I034 — none of the five new CLIs this workflow calls exist there, since those milestones are still on unmerged feature branches. This blocks genuine mock/live execution until resolved. Created directly via the n8n Workflow SDK (create_workflow_from_code) against the live n8n MCP connection, then exported here byte-for-byte from get_workflow_details — not hand-authored JSON, avoiding the class of parameter-placement bugs OC-001 hit when MCP access was unavailable.",
+  "active": false,
+  "nodes": [
+    {
+      "id": "13b7978d-e53d-44cf-82f9-3ffa8b63aa48",
+      "name": "Sticky Note f2c90547",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [130, 650],
+      "parameters": {
+        "content": "## DC-005 OC-002 — GS01 End-to-End Content Production Workflow\n\nManual Trigger -> Select Approved Article (GS01, hardcoded) -> I030 Content Ingestion -> I031 Editorial Package -> CEO Approval Gate -> I032 Social Media Package -> CEO Approval Gate -> I033 Production Package -> I034 Live Carousel Rendering (Templated, --live) -> CEO Visual Approval Gate -> Approve Carousel (I014) + Production Asset Export (I021/I026) -> Complete.\n\nOrchestrates existing DC-003 CLIs only via Execute Command — no business logic is reimplemented in n8n. Three real human-in-the-loop approval gates use the native Wait node in form-resume mode. Rejection at any gate stops the workflow with outcome \"rejected\"; any CLI/validation/rendering/export failure stops it with outcome \"technical_failure\" naming the exact stage — no automatic retries anywhere.\n\nLIVE rendering only (--live on render-production-package.mjs) — following the existing DC-003 Live Verification Gate convention. See the DC-005 OC-002 README for the full request budget and the known infrastructure blocker.",
+        "color": 5,
+        "width": 900,
+        "height": 260
+      }
+    },
+    {
+      "id": "6b481e9d-b4b3-48fb-9e93-0e303e0659cc",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [180, 700],
+      "parameters": {}
+    },
+    {
+      "id": "746f492c-cdd9-4eb9-ac0c-e48b7d1f08d6",
+      "name": "Select Approved Article (GS01)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [420, 700],
+      "parameters": { "mode": "raw", "jsonOutput": "={{ { sourceReference: \"GS01\" } }}" }
+    },
+    {
+      "id": "e1b8a5bf-9ae7-4357-8da7-dd5491513124",
+      "name": "Run I030 Content Ingestion",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [660, 700],
+      "executeOnce": true,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "command": "=DC003_DIR=\"/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation\"\nRUN_DIR=/tmp/dc005-oc002-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}-{{ $itemIndex }}\nmkdir -p \"$RUN_DIR\"\ncd \"$DC003_DIR\"\nnode tests/validation/content-ingestion.mjs create \"{{ $json.sourceReference }}\" \"/home/node/.n8n/dc003/content-production/ic\" > \"$RUN_DIR/stdout.log\" 2> \"$RUN_DIR/stderr.log\"\nDC005_EXIT_CODE=$?\ncat \"$RUN_DIR/stdout.log\"\necho \"DC005_EXIT_CODE=$DC005_EXIT_CODE\"\ncat \"$RUN_DIR/stderr.log\" 1>&2\n"
+      }
+    },
+    {
+      "id": "6dc2d78c-31c4-441c-aa2b-daad749012c4",
+      "name": "Parse I030 Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 700],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const item = $input.item.json;\nconst raw = item.stdout || '';\nconst lines = raw.split('\\n');\nconst exitLineIndex = lines.findIndex((l) => l.startsWith('DC005_EXIT_CODE='));\nconst exitCode = exitLineIndex >= 0 ? parseInt(lines[exitLineIndex].split('=')[1], 10) : null;\nconst stdoutText = (exitLineIndex >= 0 ? lines.slice(0, exitLineIndex) : lines).join('\\n');\nconst idMatch = stdoutText.match(/ingested_content_id:\\s+(ic_[A-Za-z0-9]+)/);\nconst success = exitCode === 0 && idMatch !== null;\nreturn {\n  json: {\n    routeKey: success ? 'continue' : 'technical_failure',\n    stage: 'I030 Content Ingestion',\n    ingestedContentId: idMatch ? idMatch[1] : null,\n    exitCode,\n    safeErrorSummary: success ? null : `I030 Content Ingestion failed (exit ${exitCode}).`,\n    stdoutExcerpt: stdoutText.slice(0, 2000),\n    stderrExcerpt: (item.stderr || '').slice(0, 1000),\n  },\n};"
+      }
+    },
+    {
+      "id": "9d65d6d9-354d-4953-9984-4abe7165587d",
+      "name": "I030 Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1140, 700],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.routeKey }}", "rightValue": "continue", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "20e3e64e-a8bb-4278-8551-52d8787e3a30",
+      "name": "Run I031 Editorial Package",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1380, 560],
+      "executeOnce": true,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "command": "=DC003_DIR=\"/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation\"\nRUN_DIR=/tmp/dc005-oc002-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}-{{ $itemIndex }}\nmkdir -p \"$RUN_DIR\"\ncd \"$DC003_DIR\"\nnode tests/validation/editorial-package.mjs create \"{{ $('Parse I030 Result').item.json.ingestedContentId }}\" \"/home/node/.n8n/dc003/content-production/ic\" \"/home/node/.n8n/dc003/content-production/ep\" > \"$RUN_DIR/create.log\" 2> \"$RUN_DIR/stderr.log\"\nCREATE_EXIT=$?\nif [ $CREATE_EXIT -ne 0 ]; then\n  cat \"$RUN_DIR/create.log\"\n  echo \"DC005_EXIT_CODE=$CREATE_EXIT\"\n  cat \"$RUN_DIR/stderr.log\" 1>&2\n  exit 0\nfi\nEP_ID=$(grep -oE 'ep_[A-Za-z0-9]+' \"$RUN_DIR/create.log\" | head -1)\nnode tests/validation/editorial-package.mjs inspect \"$EP_ID\" \"/home/node/.n8n/dc003/content-production/ep\" > \"$RUN_DIR/inspect.log\" 2>> \"$RUN_DIR/stderr.log\"\nINSPECT_EXIT=$?\ncat \"$RUN_DIR/inspect.log\"\necho \"DC005_EXIT_CODE=$INSPECT_EXIT\"\ncat \"$RUN_DIR/stderr.log\" 1>&2\n"
+      }
+    },
+    {
+      "id": "fe9e659a-66cc-4941-8b3f-81d29af666be",
+      "name": "Parse I031 Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1620, 560],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const item = $input.item.json;\nconst raw = item.stdout || '';\nconst lines = raw.split('\\n');\nconst exitLineIndex = lines.findIndex((l) => l.startsWith('DC005_EXIT_CODE='));\nconst exitCode = exitLineIndex >= 0 ? parseInt(lines[exitLineIndex].split('=')[1], 10) : null;\nconst stdoutText = (exitLineIndex >= 0 ? lines.slice(0, exitLineIndex) : lines).join('\\n');\nconst jsonStart = stdoutText.indexOf('{');\nlet record = null;\nif (jsonStart >= 0) {\n  try { record = JSON.parse(stdoutText.slice(jsonStart)); } catch (e) { record = null; }\n}\nconst success = exitCode === 0 && record !== null;\nreturn {\n  json: {\n    routeKey: success ? 'continue' : 'technical_failure',\n    stage: 'I031 Editorial Package',\n    editorialPackageId: record ? record.editorial_package_id : null,\n    primaryHeadline: record ? record.primary_headline : null,\n    executiveSummary: record ? record.executive_summary : null,\n    coreMessage: record ? record.core_message : null,\n    callToAction: record ? record.call_to_action : null,\n    keyInsights: record ? record.key_insights : [],\n    pullQuotes: record ? record.pull_quotes : [],\n    exitCode,\n    safeErrorSummary: success ? null : `I031 Editorial Package failed (exit ${exitCode}).`,\n    stdoutExcerpt: stdoutText.slice(0, 2000),\n    stderrExcerpt: (item.stderr || '').slice(0, 1000),\n  },\n};"
+      }
+    },
+    {
+      "id": "9c27eaf2-8bd0-4a53-9ffa-b8c2f5783720",
+      "name": "I031 Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1860, 560],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.routeKey }}", "rightValue": "continue", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "c437568f-c91f-4aff-803a-d8bf13277474",
+      "name": "Editorial Package Approval Gate",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2100, 460],
+      "webhookId": "322d0654-78de-4492-a965-ae4b708e3eaf",
+      "parameters": {
+        "resume": "form",
+        "formTitle": "Review: Editorial Package (GS01)",
+        "formDescription": "={{ \"Headline: \" + $json.primaryHeadline + \"\\n\\nSummary: \" + $json.executiveSummary + \"\\n\\nCore message: \" + $json.coreMessage + \"\\n\\nCall to action: \" + $json.callToAction + \"\\n\\nKey insights:\\n\" + ($json.keyInsights || []).map(i => \"- \" + i).join(\"\\n\") }}",
+        "formFields": {
+          "values": [
+            { "fieldName": "decision", "fieldLabel": "Decision", "fieldType": "dropdown", "fieldOptions": { "values": [{ "option": "Approve" }, { "option": "Reject" }] }, "requiredField": true },
+            { "fieldName": "notes", "fieldLabel": "Notes (optional, required if rejecting)", "fieldType": "textarea", "requiredField": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f41e99b4-f6e8-48b5-ba43-f63e8ee3fbea",
+      "name": "Editorial Package Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [2340, 460],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.decision }}", "rightValue": "Approve", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "a14879d3-b94f-4ce4-b6f3-0ac5e2183971",
+      "name": "Run I032 Social Media Package",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2580, 360],
+      "executeOnce": true,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "command": "=DC003_DIR=\"/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation\"\nRUN_DIR=/tmp/dc005-oc002-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}-{{ $itemIndex }}\nmkdir -p \"$RUN_DIR\"\ncd \"$DC003_DIR\"\nnode tests/validation/social-media-package.mjs create \"{{ $('Parse I031 Result').item.json.editorialPackageId }}\" \"/home/node/.n8n/dc003/content-production/ep\" \"/home/node/.n8n/dc003/content-production/sm\" > \"$RUN_DIR/create.log\" 2> \"$RUN_DIR/stderr.log\"\nCREATE_EXIT=$?\nif [ $CREATE_EXIT -ne 0 ]; then\n  cat \"$RUN_DIR/create.log\"\n  echo \"DC005_EXIT_CODE=$CREATE_EXIT\"\n  cat \"$RUN_DIR/stderr.log\" 1>&2\n  exit 0\nfi\nSM_ID=$(grep -oE 'sm_[A-Za-z0-9]+' \"$RUN_DIR/create.log\" | head -1)\nnode tests/validation/social-media-package.mjs inspect \"$SM_ID\" \"/home/node/.n8n/dc003/content-production/sm\" > \"$RUN_DIR/inspect.log\" 2>> \"$RUN_DIR/stderr.log\"\nINSPECT_EXIT=$?\ncat \"$RUN_DIR/inspect.log\"\necho \"DC005_EXIT_CODE=$INSPECT_EXIT\"\ncat \"$RUN_DIR/stderr.log\" 1>&2\n"
+      }
+    },
+    {
+      "id": "b3f0f4d3-e52f-4da7-999a-eb6f3faa1368",
+      "name": "Parse I032 Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2820, 360],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const item = $input.item.json;\nconst raw = item.stdout || '';\nconst lines = raw.split('\\n');\nconst exitLineIndex = lines.findIndex((l) => l.startsWith('DC005_EXIT_CODE='));\nconst exitCode = exitLineIndex >= 0 ? parseInt(lines[exitLineIndex].split('=')[1], 10) : null;\nconst stdoutText = (exitLineIndex >= 0 ? lines.slice(0, exitLineIndex) : lines).join('\\n');\nconst jsonStart = stdoutText.indexOf('{');\nlet record = null;\nif (jsonStart >= 0) {\n  try { record = JSON.parse(stdoutText.slice(jsonStart)); } catch (e) { record = null; }\n}\nconst success = exitCode === 0 && record !== null;\nreturn {\n  json: {\n    routeKey: success ? 'continue' : 'technical_failure',\n    stage: 'I032 Social Media Package',\n    socialMediaPackageId: record ? record.social_media_package_id : null,\n    hook: record ? record.hook : null,\n    callToAction: record ? record.call_to_action : null,\n    tone: record ? record.tone : null,\n    audience: record ? record.audience : null,\n    linkedinText: record ? record.platforms?.linkedin?.post_text : null,\n    instagramCaption: record ? record.platforms?.instagram?.caption : null,\n    carouselHeadings: record ? record.carousel?.headings : [],\n    exitCode,\n    safeErrorSummary: success ? null : `I032 Social Media Package failed (exit ${exitCode}).`,\n    stdoutExcerpt: stdoutText.slice(0, 2000),\n    stderrExcerpt: (item.stderr || '').slice(0, 1000),\n  },\n};"
+      }
+    },
+    {
+      "id": "518e9dc1-82f3-41a0-b5d9-97df1eeaab1a",
+      "name": "I032 Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [3060, 360],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.routeKey }}", "rightValue": "continue", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "66b6f9c8-8b18-4c36-90ba-058ba505ce6a",
+      "name": "Social Media Package Approval Gate",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3300, 260],
+      "webhookId": "8e6d361a-0629-44bd-b649-930cede38492",
+      "parameters": {
+        "resume": "form",
+        "formTitle": "Review: Social Media Package (GS01)",
+        "formDescription": "={{ \"Hook: \" + $json.hook + \"\\n\\nCall to action: \" + $json.callToAction + \"\\n\\nTone: \" + $json.tone + \"\\n\\nAudience: \" + $json.audience + \"\\n\\nLinkedIn post:\\n\" + $json.linkedinText + \"\\n\\nInstagram caption:\\n\" + $json.instagramCaption + \"\\n\\nCarousel headings:\\n\" + ($json.carouselHeadings || []).map((h, i) => (i+1) + \". \" + h).join(\"\\n\") }}",
+        "formFields": {
+          "values": [
+            { "fieldName": "decision", "fieldLabel": "Decision", "fieldType": "dropdown", "fieldOptions": { "values": [{ "option": "Approve" }, { "option": "Reject" }] }, "requiredField": true },
+            { "fieldName": "notes", "fieldLabel": "Notes (optional, required if rejecting)", "fieldType": "textarea", "requiredField": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "46b75c34-34ca-4616-8d97-06c125cfb540",
+      "name": "Social Media Package Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [3540, 260],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.decision }}", "rightValue": "Approve", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "4c341885-3df2-45cc-9749-10ffa8d02fff",
+      "name": "Run I033 Production Package",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [3780, 260],
+      "executeOnce": true,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "command": "=DC003_DIR=\"/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation\"\nRUN_DIR=/tmp/dc005-oc002-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}-{{ $itemIndex }}\nmkdir -p \"$RUN_DIR\"\ncd \"$DC003_DIR\"\nnode tests/validation/production-package.mjs create \"{{ $('Parse I032 Result').item.json.socialMediaPackageId }}\" \"/home/node/.n8n/dc003/content-production/sm\" \"/home/node/.n8n/dc003/content-production/pp\" > \"$RUN_DIR/stdout.log\" 2> \"$RUN_DIR/stderr.log\"\nDC005_EXIT_CODE=$?\ncat \"$RUN_DIR/stdout.log\"\necho \"DC005_EXIT_CODE=$DC005_EXIT_CODE\"\ncat \"$RUN_DIR/stderr.log\" 1>&2\n"
+      }
+    },
+    {
+      "id": "00bc812c-fbe2-4503-8c15-a5fccb5b9c47",
+      "name": "Parse I033 Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4020, 260],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const item = $input.item.json;\nconst raw = item.stdout || '';\nconst lines = raw.split('\\n');\nconst exitLineIndex = lines.findIndex((l) => l.startsWith('DC005_EXIT_CODE='));\nconst exitCode = exitLineIndex >= 0 ? parseInt(lines[exitLineIndex].split('=')[1], 10) : null;\nconst stdoutText = (exitLineIndex >= 0 ? lines.slice(0, exitLineIndex) : lines).join('\\n');\nconst idMatch = stdoutText.match(/production_package_id:\\s+(pp_[A-Za-z0-9]+)/);\nconst success = exitCode === 0 && idMatch !== null;\nreturn {\n  json: {\n    routeKey: success ? 'continue' : 'technical_failure',\n    stage: 'I033 Production Package',\n    productionPackageId: idMatch ? idMatch[1] : null,\n    exitCode,\n    safeErrorSummary: success ? null : `I033 Production Package failed (exit ${exitCode}).`,\n    stdoutExcerpt: stdoutText.slice(0, 2000),\n    stderrExcerpt: (item.stderr || '').slice(0, 1000),\n  },\n};"
+      }
+    },
+    {
+      "id": "15ce603f-9368-463f-9167-017953f9882e",
+      "name": "I033 Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [4260, 260],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.routeKey }}", "rightValue": "continue", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "eeed5c43-5026-4766-b627-f0b02abe6fa0",
+      "name": "Run I034 Live Carousel Rendering",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [4500, 160],
+      "executeOnce": true,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "command": "=DC003_DIR=\"/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation\"\nRUN_DIR=/tmp/dc005-oc002-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}-{{ $itemIndex }}\nmkdir -p \"$RUN_DIR\"\ncd \"$DC003_DIR\"\nnode tests/validation/render-production-package.mjs \"{{ $('Parse I033 Result').item.json.productionPackageId }}\" \"/home/node/.n8n/dc003/content-production/pp\" \"/home/node/.n8n/dc003/content-production/fc\" --live > \"$RUN_DIR/stdout.log\" 2> \"$RUN_DIR/stderr.log\"\nDC005_EXIT_CODE=$?\ncat \"$RUN_DIR/stdout.log\"\necho \"DC005_EXIT_CODE=$DC005_EXIT_CODE\"\ncat \"$RUN_DIR/stderr.log\" 1>&2\n"
+      }
+    },
+    {
+      "id": "d43ae9f4-41c5-4198-b36f-280f5852ba25",
+      "name": "Parse I034 Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4740, 160],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const item = $input.item.json;\nconst raw = item.stdout || '';\nconst lines = raw.split('\\n');\nconst exitLineIndex = lines.findIndex((l) => l.startsWith('DC005_EXIT_CODE='));\nconst exitCode = exitLineIndex >= 0 ? parseInt(lines[exitLineIndex].split('=')[1], 10) : null;\nconst stdoutText = (exitLineIndex >= 0 ? lines.slice(0, exitLineIndex) : lines).join('\\n');\nconst idMatch = stdoutText.match(/carousel_id:\\s+(car_[A-Za-z0-9]+)/);\nconst statusMatch = stdoutText.match(/overall_status:\\s+(\\w+)/);\nconst slideRegex = /\\[slide (\\d+)\\] (\\S+) . (\\S+) . (\\S+)/g;\nconst slides = [];\nlet m;\nwhile ((m = slideRegex.exec(stdoutText)) !== null) {\n  slides.push({ slideNumber: parseInt(m[1], 10), slideType: m[2], status: m[3], imageUrl: m[4] });\n}\nconst overallStatus = statusMatch ? statusMatch[1] : null;\nconst success = exitCode === 0 && idMatch !== null && overallStatus === 'completed';\nreturn {\n  json: {\n    routeKey: success ? 'continue' : 'technical_failure',\n    stage: 'I034 Live Carousel Rendering',\n    carouselId: idMatch ? idMatch[1] : null,\n    overallStatus,\n    slides,\n    exitCode,\n    safeErrorSummary: success ? null : `I034 Live Carousel Rendering did not complete successfully (exit ${exitCode}, overall_status=${overallStatus}).`,\n    stdoutExcerpt: stdoutText.slice(0, 3000),\n    stderrExcerpt: (item.stderr || '').slice(0, 1000),\n  },\n};"
+      }
+    },
+    {
+      "id": "86b9025e-6adf-4689-84b7-53b448d926e3",
+      "name": "I034 Completed Successfully?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [4980, 160],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.routeKey }}", "rightValue": "continue", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "b6a601ea-38c5-4422-9833-b003bd35f0d0",
+      "name": "CEO Visual Approval Gate",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [5220, 60],
+      "webhookId": "24d2c370-507e-40a7-bd70-9cbc9bfbd15a",
+      "parameters": {
+        "resume": "form",
+        "formTitle": "Review: Rendered Carousel (GS01)",
+        "formDescription": "={{ \"Carousel: \" + $json.carouselId + \"\\n\\n\" + ($json.slides || []).map(s => \"Slide \" + s.slideNumber + \" (\" + s.slideType + \"): \" + s.imageUrl).join(\"\\n\") }}",
+        "formFields": {
+          "values": [
+            { "fieldName": "decision", "fieldLabel": "Decision", "fieldType": "dropdown", "fieldOptions": { "values": [{ "option": "Approve" }, { "option": "Reject" }] }, "requiredField": true },
+            { "fieldName": "notes", "fieldLabel": "Notes (optional, required if rejecting)", "fieldType": "textarea", "requiredField": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5376bbc9-70b9-4604-aa3a-6becb7477ff1",
+      "name": "Visually Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [5460, 60],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.decision }}", "rightValue": "Approve", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "2b296b1b-c703-4ffd-bce0-9409dc43a0f3",
+      "name": "Run Approve And Export",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [5700, 60],
+      "executeOnce": true,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "command": "=DC003_DIR=\"/data/dc003-repo-root/Active Projects/DC-003 - Automated Content Generation\"\nRUN_DIR=/tmp/dc005-oc002-run-{{ $now.toFormat('yyyyLLdd-HHmmssSSS') }}-{{ $itemIndex }}\nmkdir -p \"$RUN_DIR\"\ncd \"$DC003_DIR\"\nCAR_ID=\"{{ $('Parse I034 Result').item.json.carouselId }}\"\nnode tests/validation/carousel-store.mjs get \"$CAR_ID\" \"/home/node/.n8n/dc003/content-production/fc\" > \"$RUN_DIR/get.log\" 2> \"$RUN_DIR/stderr.log\"\nGET_EXIT=$?\nif [ $GET_EXIT -ne 0 ]; then cat \"$RUN_DIR/get.log\"; echo \"DC005_EXIT_CODE=$GET_EXIT\"; cat \"$RUN_DIR/stderr.log\" 1>&2; exit 0; fi\ntail -n +2 \"$RUN_DIR/get.log\" > \"$RUN_DIR/carousel.json\"\nnode tests/validation/approve-carousel.mjs \"$RUN_DIR/carousel.json\" approve --by=CEO --out=\"$RUN_DIR/carousel.approved.json\" > \"$RUN_DIR/approve.log\" 2>> \"$RUN_DIR/stderr.log\"\nAPPROVE_EXIT=$?\nif [ $APPROVE_EXIT -ne 0 ]; then cat \"$RUN_DIR/approve.log\"; echo \"DC005_EXIT_CODE=$APPROVE_EXIT\"; cat \"$RUN_DIR/stderr.log\" 1>&2; exit 0; fi\nnode tests/validation/carousel-store.mjs replace \"$RUN_DIR/carousel.approved.json\" \"/home/node/.n8n/dc003/content-production/fc\" > \"$RUN_DIR/replace.log\" 2>> \"$RUN_DIR/stderr.log\"\nREPLACE_EXIT=$?\nif [ $REPLACE_EXIT -ne 0 ]; then cat \"$RUN_DIR/replace.log\"; echo \"DC005_EXIT_CODE=$REPLACE_EXIT\"; cat \"$RUN_DIR/stderr.log\" 1>&2; exit 0; fi\nnode tests/validation/export-production-assets-windows.mjs \"$CAR_ID\" \"/home/node/.n8n/dc003/content-production/fc\" > \"$RUN_DIR/export.log\" 2>> \"$RUN_DIR/stderr.log\"\nEXPORT_EXIT=$?\ncat \"$RUN_DIR/export.log\"\necho \"DC005_EXIT_CODE=$EXPORT_EXIT\"\ncat \"$RUN_DIR/stderr.log\" 1>&2\n"
+      }
+    },
+    {
+      "id": "10cfd609-4bd3-4612-9874-a5dc5768b58a",
+      "name": "Parse Approve And Export Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5940, 60],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const item = $input.item.json;\nconst raw = item.stdout || '';\nconst lines = raw.split('\\n');\nconst exitLineIndex = lines.findIndex((l) => l.startsWith('DC005_EXIT_CODE='));\nconst exitCode = exitLineIndex >= 0 ? parseInt(lines[exitLineIndex].split('=')[1], 10) : null;\nconst stdoutText = (exitLineIndex >= 0 ? lines.slice(0, exitLineIndex) : lines).join('\\n');\nconst success = exitCode === 0;\nreturn {\n  json: {\n    routeKey: success ? 'complete' : 'technical_failure',\n    stage: 'Approve And Export',\n    carouselId: $('Parse I034 Result').item.json.carouselId,\n    exitCode,\n    safeErrorSummary: success ? null : `Approve/Export failed (exit ${exitCode}).`,\n    stdoutExcerpt: stdoutText.slice(0, 2000),\n    stderrExcerpt: (item.stderr || '').slice(0, 1000),\n  },\n};"
+      }
+    },
+    {
+      "id": "50ba7167-58c4-4adf-8191-125482b0a9fc",
+      "name": "Export Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [6180, 60],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.routeKey }}", "rightValue": "complete", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "79ee83f5-b217-49b8-b99e-9a4b07d4d8bc",
+      "name": "Prepare Complete Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [6420, 60],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"complete\", carouselId: $json.carouselId, status: \"completed\", message: \"Six carousel images exported to the Windows Production Assets folder.\" } }}"
+      }
+    },
+    {
+      "id": "d7a93671-3157-4ffc-bd62-689b2826e442",
+      "name": "Prepare Technical Failure Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [4260, 900],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"technical_failure\", stage: $json.stage, safeErrorSummary: $json.safeErrorSummary, exitCode: $json.exitCode, suggestedSafeAction: \"Inspect the run directly (RUN_DIR / stderr) - do not rerun blindly.\" } }}"
+      }
+    },
+    {
+      "id": "161c7227-88d8-48e7-ab71-4911b0390ffd",
+      "name": "Prepare Rejected Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [3060, 900],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { outcome: \"rejected\", decision: $json.decision, notes: $json.notes, safeAction: \"stop\" } }}"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "Select Approved Article (GS01)", "type": "main", "index": 0 }]] },
+    "Select Approved Article (GS01)": { "main": [[{ "node": "Run I030 Content Ingestion", "type": "main", "index": 0 }]] },
+    "Run I030 Content Ingestion": { "main": [[{ "node": "Parse I030 Result", "type": "main", "index": 0 }]] },
+    "Parse I030 Result": { "main": [[{ "node": "I030 Succeeded?", "type": "main", "index": 0 }]] },
+    "I030 Succeeded?": {
+      "main": [
+        [{ "node": "Run I031 Editorial Package", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Technical Failure Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run I031 Editorial Package": { "main": [[{ "node": "Parse I031 Result", "type": "main", "index": 0 }]] },
+    "Parse I031 Result": { "main": [[{ "node": "I031 Succeeded?", "type": "main", "index": 0 }]] },
+    "I031 Succeeded?": {
+      "main": [
+        [{ "node": "Editorial Package Approval Gate", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Technical Failure Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Editorial Package Approval Gate": { "main": [[{ "node": "Editorial Package Approved?", "type": "main", "index": 0 }]] },
+    "Editorial Package Approved?": {
+      "main": [
+        [{ "node": "Run I032 Social Media Package", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Rejected Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run I032 Social Media Package": { "main": [[{ "node": "Parse I032 Result", "type": "main", "index": 0 }]] },
+    "Parse I032 Result": { "main": [[{ "node": "I032 Succeeded?", "type": "main", "index": 0 }]] },
+    "I032 Succeeded?": {
+      "main": [
+        [{ "node": "Social Media Package Approval Gate", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Technical Failure Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Social Media Package Approval Gate": { "main": [[{ "node": "Social Media Package Approved?", "type": "main", "index": 0 }]] },
+    "Social Media Package Approved?": {
+      "main": [
+        [{ "node": "Run I033 Production Package", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Rejected Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run I033 Production Package": { "main": [[{ "node": "Parse I033 Result", "type": "main", "index": 0 }]] },
+    "Parse I033 Result": { "main": [[{ "node": "I033 Succeeded?", "type": "main", "index": 0 }]] },
+    "I033 Succeeded?": {
+      "main": [
+        [{ "node": "Run I034 Live Carousel Rendering", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Technical Failure Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run I034 Live Carousel Rendering": { "main": [[{ "node": "Parse I034 Result", "type": "main", "index": 0 }]] },
+    "Parse I034 Result": { "main": [[{ "node": "I034 Completed Successfully?", "type": "main", "index": 0 }]] },
+    "I034 Completed Successfully?": {
+      "main": [
+        [{ "node": "CEO Visual Approval Gate", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Technical Failure Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "CEO Visual Approval Gate": { "main": [[{ "node": "Visually Approved?", "type": "main", "index": 0 }]] },
+    "Visually Approved?": {
+      "main": [
+        [{ "node": "Run Approve And Export", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Rejected Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run Approve And Export": { "main": [[{ "node": "Parse Approve And Export Result", "type": "main", "index": 0 }]] },
+    "Parse Approve And Export Result": { "main": [[{ "node": "Export Succeeded?", "type": "main", "index": 0 }]] },
+    "Export Succeeded?": {
+      "main": [
+        [{ "node": "Prepare Complete Output", "type": "main", "index": 0 }],
+        [{ "node": "Prepare Technical Failure Output", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "tags": []
+}
