@@ -87,6 +87,7 @@ function assertDependencies({
   bridgeTransportStore,
   strategyReviewStore,
   ingestedContentStore,
+  editorialPackageStore,
 }) {
   if (
     !finishedCarouselStore ||
@@ -189,6 +190,18 @@ function assertDependencies({
       "fields.ingestedContentStore, when supplied, must be an Ingested Content Store — see createIngestedContentStore() in ingested-content-store.mjs"
     );
   }
+  // DC-003-I031 — optional, standalone (not paired with anything above) —
+  // the Editorial Package section needs only the Editorial Package Store
+  // itself.
+  if (
+    editorialPackageStore !== null &&
+    editorialPackageStore !== undefined &&
+    (typeof editorialPackageStore.list !== "function" || typeof editorialPackageStore.get !== "function")
+  ) {
+    throw new InvalidControlCentreDependenciesError(
+      "fields.editorialPackageStore, when supplied, must be an Editorial Package Store — see createEditorialPackageStore() in editorial-package-store.mjs"
+    );
+  }
 }
 
 // Reuses I022's own "metadata.json present, parseable, carousel_id
@@ -274,6 +287,10 @@ function sumCost(metricsSummaries) {
  *   section's full latest_delivery_report embed, since article bodies
  *   are unbounded in size and would bloat the read model — see README
  *   "Control Centre".
+ * fields.editorialPackageStore — optional (DC-003-I031), standalone — see
+ *   editorial-package-store.mjs. When omitted, `editorial_package` is
+ *   null. Also a lean summary only, mirroring `content_ingestion`'s own
+ *   precedent exactly.
  * fields.exportsRootDir — optional string. When omitted, every export
  *   signal in the read model is honestly "unknown" — see this module's own
  *   header comment.
@@ -303,6 +320,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     strategyReviewStore = null,
     strategyReviewLockDir = null,
     ingestedContentStore = null,
+    editorialPackageStore = null,
     exportsRootDir = null,
   } = fields;
   assertDependencies({
@@ -315,6 +333,7 @@ export function createControlCentreService(fields = {}, options = {}) {
     bridgeTransportStore,
     strategyReviewStore,
     ingestedContentStore,
+    editorialPackageStore,
   });
 
   const now = options.now ?? (() => new Date().toISOString());
@@ -979,6 +998,38 @@ export function createControlCentreService(fields = {}, options = {}) {
     }
   }
 
+  // DC-003-I031 — read-only, additive, standalone. Mirrors
+  // computeContentIngestion()'s own lean-summary precedent exactly:
+  // count, and the latest record's own small fields
+  // (id/ingested_content_id/primary_headline/status/generated_at) —
+  // never the full editorial fields (executive_summary, key_insights,
+  // etc.), consistent with never embedding unbounded/verbose content in
+  // this read model.
+  function computeEditorialPackage() {
+    if (!editorialPackageStore) return null;
+    try {
+      const summaries = editorialPackageStore.list();
+      const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+
+      return {
+        total_editorial_packages: summaries.length,
+        latest_package:
+          latest === null
+            ? null
+            : {
+                editorial_package_id: latest.editorial_package_id,
+                ingested_content_id: latest.ingested_content_id,
+                primary_headline: latest.primary_headline,
+                status: latest.status,
+                generated_at: latest.generated_at,
+              },
+        latest_status: latest === null ? null : latest.status,
+      };
+    } catch {
+      return { total_editorial_packages: 0, latest_package: null, latest_status: null };
+    }
+  }
+
   /**
    * Assembles the full "overview" read model: system health, dashboard
    * totals, recent jobs, recent activity, engineering status, bridge
@@ -1005,6 +1056,7 @@ export function createControlCentreService(fields = {}, options = {}) {
       delivery_office: computeDeliveryOffice(),
       strategy_review: computeStrategyReview(),
       content_ingestion: computeContentIngestion(),
+      editorial_package: computeEditorialPackage(),
     };
 
     return validateAndFreeze(overview);

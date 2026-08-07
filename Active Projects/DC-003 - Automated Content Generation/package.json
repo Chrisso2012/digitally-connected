@@ -37,6 +37,7 @@
     "strategy-review": "node tests/validation/strategy-review-agent.mjs",
     "operations-bridge": "node tests/validation/operations-bridge.mjs",
     "content-ingestion": "node tests/validation/content-ingestion.mjs",
+    "editorial-package": "node tests/validation/editorial-package.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

@@ -7443,6 +7443,295 @@ implemented now.
   performed in Docker, per this project's own established practice for
   this exact class of host-only issue.
 
+## Editorial Package Generator (DC-003-I031)
+
+**The canonical strategic representation of one approved article.**
+Consumes exactly one immutable **Ingested Content** record (DC-003-I030)
+and transforms it, via AI-assisted editorial analysis, into a single
+**Editorial Package**:
+
+```
+Ingested Content (I030)
+  -> Editorial Package Prompt Builder
+  -> Editorial Analysis Provider     (editorial-analysis-mock-provider.mjs, or Anthropic)
+  -> Editorial Analysis Result validation
+  -> Editorial Package                (immutable)
+  -> Editorial Package Store          (persisted, local JSON)
+```
+
+Depends on **only** the Ingested Content object handed to it by ID — the
+explicit architectural boundary set by the Strategy Office before this
+milestone's own brief was even issued: never reads a source article,
+never touches a Content Source Adapter (Google Docs or otherwise), and
+contains no source-specific logic of its own. See "Input" below for how
+that boundary is enforced structurally, not just by convention.
+
+### Input
+
+`generateEditorialPackage(ingestedContentId, dependencies)` accepts
+exactly one argument identifying the source: an `ic_...` identifier,
+resolved via `dependencies.ingestedContentStore` (DC-003-I030's own
+`createIngestedContentStore()`). Nothing else — no source-type parameter,
+no adapter selection, no fallback path that could reach a Content Source
+Adapter. `editorial-package-generator.mjs` imports nothing from
+`content-source-adapter.mjs`, `content-source-mock-adapter.mjs`,
+`google-docs-source-adapter.mjs`, or `content-ingestion-service.mjs` —
+confirmed by inspection, not merely asserted.
+
+### Naming — no collision this time, confirmed by investigation
+
+Unlike I030 ("Content Request" already meant something else), a
+pre-implementation search of `src/`, `schemas/`, and `tests/` for
+"editorial" found nothing — "Editorial Package" was genuinely free to use
+exactly as the brief proposed. Worth checking every time regardless: this
+codebase now has enough milestones (I001–I030) that a superficially
+plausible name can already be taken by something unrelated, as I030
+itself found the hard way — grepping first is now a standing habit, not a
+one-off reaction.
+
+### Investigation (required before implementation, per this milestone's own brief)
+
+- **Existing Editorial Package concepts already present within DC-003:**
+  none. The closest superficially-similar concepts — `content-request.mjs`
+  (I016, an unrelated command object) and `content-asset.mjs`/
+  `topic-package.mjs` (I018/T002, a hand-curated marketing brief with
+  `audience`/`core_message`/`cta`/`keywords` fields) — sit on the
+  opposite side of the pipeline: both are *inputs* a human curates before
+  production, never something *derived* from an article via AI analysis.
+  No overlap, no reuse opportunity for the schema itself.
+- **Opportunities to reuse existing schemas or patterns:** substantial,
+  at the *infrastructure* layer rather than the schema layer. DC-003-I004/
+  I019 already solved "call an AI provider with a deterministic prompt,
+  get structured JSON back, retry safely, classify failures" for carousel
+  copy generation — and four of its five supporting files turned out to
+  be **already fully provider/domain-agnostic**, with zero
+  carousel-specific content, and are reused here **completely unmodified**:
+  `retry.mjs` (generic retry primitive), `llm-provider-errors.mjs`
+  (`LlmAuthenticationError`/`LlmRateLimitError`/etc. — no carousel
+  reference anywhere in the file), `llm-provider-config.mjs`
+  (`LLM_API_KEY`/`LLM_MODEL`/`resolveLiveMaxAttempts()` — provider-level
+  config, not carousel-level), and `llm-error-diagnostics.mjs`
+  (`buildSafeDiagnostic()` — Anthropic-response-shape-generic). Even
+  `llm-response-validator.mjs`'s own `validateLlmTransportResponse()` is
+  reused directly — it already accepts an arbitrary `toolName` parameter
+  and its logic has no carousel-specific content; only its return field's
+  *name* (`slidesJson`) is carousel-flavoured, so it's destructured and
+  renamed locally in `editorial-analysis-anthropic-provider.mjs` rather
+  than duplicated under a new name. **Only what is genuinely
+  editorial-package-shaped was written as new, parallel files** — the
+  tool schema/name in the HTTP transport, the provider's own method name
+  and prompt, and the mock provider's own content — deliberately *not*
+  by parameterising `llm-transport-http.mjs`/`llm-provider-anthropic.mjs`
+  themselves, since this codebase's own established discipline (I029.1's
+  own explicit reasoning for not touching I029's Work Order/Delivery
+  Report Stores) is to leave an already-shipped, tested milestone's files
+  untouched rather than risk it for a later milestone's convenience.
+- **Best structure for storing extracted editorial intelligence:** a flat
+  JSON Schema (`editorial-package.schema.json`) mirroring
+  `ingested-content.schema.json`'s own factory discipline exactly
+  (assemble, validate, self-compute a tamper-evidence checksum,
+  deep-freeze) — no nested sub-objects, since every field the brief asked
+  for is naturally a string or a flat string array.
+- **Whether any current modules should be extended rather than
+  duplicated:** yes — see "reuse" above; `retry.mjs`/
+  `llm-provider-errors.mjs`/`llm-provider-config.mjs`/
+  `llm-error-diagnostics.mjs`/`llm-response-validator.mjs` are used
+  as-is, zero duplication, zero modification.
+- **Whether Editorial Package should support future versioning:**
+  handled the same way I004/I019 already established for AI-generated
+  content, not by adding a mutable version counter (Topic Package's own
+  `version` field, which doesn't fit an *immutable* record — see
+  ingested-content.schema.json's own identical reasoning). Every record
+  carries `llm_model`/`prompt_version`/`schema_version` provenance
+  metadata, mirroring `carousel_content`'s own `llm_model`/
+  `prompt_version`/`schema_version` fields exactly. A future prompt
+  improvement produces a **new** Editorial Package (a fresh
+  `ingested_content_id` still has no package yet) rather than mutating an
+  existing one — consistent with "immutable after creation" throughout
+  this codebase.
+- **Appropriate storage pattern:** the established Storage Adapter + Store
+  two-layer pattern, byte-for-byte mirroring
+  `ingested-content-store.mjs`/`local-json-ingested-content-store-adapter.mjs`
+  — one JSON file per record, atomic write-verify-rename.
+- **Control Centre integration:** investigated and added — see "Control
+  Centre" below.
+
+### Editorial Package
+
+`schemas/editorial-package.schema.json` (`editorialPackage` in the
+registry). Twenty-three required fields — the brief's own sixteen
+editorial-intelligence fields (`primary_headline`/`supporting_headline`/
+`executive_summary`/`core_message`/`primary_audience`/`primary_problem`/
+`desired_outcome`/`key_insights`/`pull_quotes`/`call_to_action`/
+`keywords`/`seo_title`/`seo_description`/`suggested_hashtags`/
+`editorial_themes`/`content_categories`), plus `editorial_package_id`/
+`ingested_content_id`/`status`/`generated_at`/`llm_model`/
+`prompt_version`/`schema_version`/`checksum`. `status` is a single-value
+enum (`"generated"`) deliberately left open for a later milestone's own
+downstream lifecycle stages, mirroring `ingested_content.status`'s own
+identical rationale. `generated_at` (not `created_at`/`updated_at`) —
+this is an AI-*generation* event, so it mirrors `carousel_content`'s/
+`finished_carousel`'s own naming for exactly that kind of artifact,
+deliberately distinct from Ingested Content's own `created_at`/
+`updated_at` pair (a *retrieval* event).
+
+### Architecture
+
+- **JSON Schema** — `schemas/editorial-package.schema.json`, described above.
+- **Domain Object** — `src/editorial-package.mjs`, `createEditorialPackage()`.
+  Assemble, validate, deep-freeze — computes its own `checksum`
+  internally, mirroring `ingested-content.mjs`'s own exact discipline
+  (not `bridge-transport-record.mjs`'s "checksum of an external object"
+  pattern — this checksum is self-integrity for the record itself).
+- **Store / Store Service** — `src/editorial-package-store-adapter.mjs`
+  (contract), `src/local-json-editorial-package-store-adapter.mjs` (one
+  file per record, atomic write-verify-rename), `src/editorial-package-
+  store.mjs` (domain rules, plus `findByIngestedContentId()` — used only
+  by the generator's own duplicate check).
+- **AI Adapter abstraction** — `src/editorial-analysis-provider.mjs`:
+  `{ name: string, analyzeContent(prompt, context): Promise<string> }` —
+  deliberately mirrors DC-003-I004/I019's own Provider interface
+  (`generateCarousel(prompt, context)`) rather than DC-003-I030's Content
+  Source Adapter shape, since this is the same *class* of thing I004/
+  I019 already solved, not a new class of adapter. Also exports
+  `assertValidEditorialAnalysisResult()` — a defense-in-depth shape check
+  on the provider's own parsed JSON output, run before
+  `createEditorialPackage()` is ever called.
+- **Mock adapter** — `src/editorial-analysis-mock-provider.mjs`. The
+  **only** provider automated tests and the CLI's default mode use — no
+  network dependency, deterministic (the same Ingested Content always
+  produces the exact same output). Every field is either a genuine
+  substring of the real article (`pullQuotes`, `keyInsights`, `keywords`
+  via simple word-frequency) or an honestly generic derived statement
+  marked `[mock]` — never a fabricated fact, mirroring
+  `carousel-mock-provider.mjs`'s own "mark anything illustrative as
+  illustrative" discipline exactly.
+- **Real adapter** — `src/editorial-analysis-anthropic-provider.mjs` +
+  `src/editorial-analysis-transport-http.mjs` (the only genuinely new
+  HTTP-level file — its own `TOOL_NAME`/tool schema, everything else
+  reused, see "Investigation" above). Never used by automated tests or
+  the CLI's default mode.
+- **Prompt Builder** — `src/editorial-package-prompt-builder.mjs`,
+  `buildEditorialPackagePrompt()`. Mirrors `carousel-prompt-builder.mjs`
+  exactly — a pure function of an Ingested Content record, deterministic,
+  never calls an LLM.
+- **Generator Service** — `src/editorial-package-generator.mjs`,
+  `generateEditorialPackage()`. Mirrors
+  `generateCarouselFromTopicPackage()`'s own orchestration shape exactly,
+  including its retry-with-non-retryable-bypass logic.
+- **CLI** — `tests/validation/editorial-package.mjs`, `npm run
+  editorial-package`. Four subcommands, mirroring `content-ingestion.mjs`'s
+  own precedent: `create` (generate and persist), `inspect <id>` (full
+  record detail), `list` (all summary lines), `status` (aggregate — total,
+  latest package, latest status, matching the brief's own explicit
+  Control Centre field list). `--live` selects the real Anthropic
+  provider (requires `LLM_API_KEY`); `--live-max-attempts=N` overrides
+  the safe one-attempt default, mirroring `generate-live-carousel.mjs`'s
+  own Live Verification Gate safety rule exactly.
+
+### Validation (rejects generation before a record is created)
+
+- **Ingested Content missing** — `ingestedContentStore.get()` throws
+  DC-003-I030's own `IngestedContentNotFoundError`, reused unmodified,
+  propagated as-is.
+- **Content invalid** — the Ingested Content Store's own `get()` already
+  re-validates stored content against its schema on every read
+  (`CorruptedIngestedContentError` if it doesn't); no separate check
+  needed here.
+- **Duplicate Editorial Package already exists** — `DuplicateEditorialPackageError`,
+  checked via `editorialPackageStore.findByIngestedContentId()` before
+  any prompt is built or provider called. At most one Editorial Package
+  may exist per Ingested Content record — a genuinely changed article
+  produces a **new** `ingested_content_id` (I030's own duplicate rule),
+  which naturally avoids ever needing to overwrite or version an existing
+  Editorial Package.
+- **Required editorial fields cannot be generated** —
+  `EditorialPackageGenerationFailedError`, thrown after `retry.mjs`
+  exhausts every attempt (malformed JSON, or a result failing
+  `assertValidEditorialAnalysisResult()`'s shape check) — carries a
+  per-attempt failure summary, mirroring `CarouselGenerationFailedError`'s
+  own richer error message exactly (not just a bare attempt count). A
+  non-retryable provider error (`retryable: false` — authentication,
+  configuration, malformed transport response) propagates immediately,
+  bypassing retry entirely, mirroring `generateCarouselFromTopicPackage()`'s
+  own identical reasoning.
+
+### Live mode
+
+Mock mode is the default everywhere, exactly like every other external
+integration in this codebase — pass `--live` to the CLI's `create`
+subcommand to use the real Anthropic-backed provider instead. **No live
+Anthropic request has been made for editorial analysis** — building and
+structurally verifying the real provider (HTTP request construction,
+error-status mapping, tool-schema round-trip — all covered by
+`editorial-analysis-anthropic-provider.test.mjs` against a mocked
+`fetch`) is in scope for this milestone; actually exercising it live is
+not, per this milestone's own "follow existing live-AI approval
+conventions before any real provider verification" instruction, mirroring
+DC-003-I029.2/I019's own established "mock now, live-verification-gate
+later, separately authorised" convention.
+
+### Control Centre
+
+**Investigated and added** — consistent with the existing architecture,
+exactly mirroring `content_ingestion`'s own precedent from I030: a new,
+optional, standalone `fields.editorialPackageStore` dependency, surfaced
+as a new, additive `editorial_package` overview field (`null` when the
+store isn't supplied). Displays exactly the three fields the brief asked
+for — `total_editorial_packages`, `latest_package` (a lean summary:
+`editorial_package_id`/`ingested_content_id`/`primary_headline`/`status`/
+`generated_at`, never the full editorial fields like
+`executive_summary`/`key_insights`), and `latest_status`. CLI:
+`--editorial-package=<dir>` on the `dashboard` command
+(`tests/validation/control-centre.mjs`), matching every other optional
+section's own named-flag convention.
+
+### Out of scope (per this milestone's own brief)
+
+LinkedIn post generation, Instagram caption generation, carousel copy
+generation, image rendering, asset publishing, production asset export.
+No I032+ concern of any kind — this milestone stops at a persisted
+Editorial Package.
+
+### Verification performed
+
+- Full unit test suite: **95 new tests** across 9 new test files
+  (`editorial-package.test.mjs`, `editorial-package-store.test.mjs`,
+  `editorial-analysis-provider.test.mjs`,
+  `editorial-analysis-mock-provider.test.mjs`,
+  `editorial-package-prompt-builder.test.mjs`,
+  `editorial-package-generator.test.mjs`,
+  `editorial-analysis-anthropic-provider.test.mjs` — covering the HTTP
+  transport and real provider together via a mocked `fetch`, mirroring
+  `google-docs-source-adapter.test.mjs`'s own precedent,
+  `editorial-package-cli.test.mjs`, `control-centre-editorial-package.test.mjs`).
+- Fixture validation: `editorial-package.example.json` added, **21/21
+  fixtures pass** (`npm run validate`), including
+  `control-centre.example.json` updated with the new required
+  `editorial_package: null` key.
+- Manual smoke test (mock mode): seeded a real Ingested Content record via
+  the I030 CLI, generated an Editorial Package from it end to end via
+  `npm run editorial-package -- create`, `inspect`, `list`, `status`, a
+  genuine duplicate rejection, and Control Centre's `dashboard
+  --editorial-package=<dir>` correctly reflecting a populated store and
+  degrading to "unknown" when the flag is omitted.
+- **A real, latent bug found and fixed in this milestone's own new test
+  helpers (not present in any shipped source file):** `withTempDir(fn)`
+  in three new test files used `try { return fn(dir) } finally { rmSync(dir,
+  ...) }` without `await`-ing the async `fn(dir)` — a classic
+  async/`finally` mistake where cleanup fires as soon as the promise is
+  *returned*, not once it *settles*, deleting the temp directory mid-test.
+  It manifested exactly once, in a duplicate-generation test whose second
+  assertion depended on a file written before the test's own first
+  `await`. The identical pattern already exists, unfixed, in I030's own
+  test helpers — it has never manifested there (the same 72 tests pass
+  consistently, including in this milestone's own full-suite Docker run),
+  and per explicit instruction I030 is approved and not to be modified
+  further, so it was deliberately left alone; fixed only in this
+  milestone's own three affected files
+  (`editorial-package-store.test.mjs`, `editorial-package-generator.test.mjs`,
+  `control-centre-editorial-package.test.mjs`) by adding `async`/`await`.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -7832,7 +8121,8 @@ needed).
 | Automated Strategy Review (first automated Strategy Office review stage — reviews one Delivery Report's independently-verified evidence against its Work Order, mock by default, records one Engineering Strategy Review) | Done (DC-003-I029.3) — `src/engineering-strategy-review.mjs`, `src/engineering-strategy-review-store.mjs` + adapter files, `src/strategy-review-evidence-collector.mjs`, `src/strategy-review-authority-gates.mjs`, `src/strategy-review-policy.mjs`, `src/strategy-review-agent-adapter.mjs`, `src/strategy-review-mock-adapter.mjs`, `src/openai-strategy-review-adapter.mjs`, `src/strategy-review-instruction.mjs`, `src/strategy-review-config.mjs`, `src/strategy-review-error-diagnostics.mjs`, `src/strategy-review-lock.mjs`, `src/automated-strategy-review-service.mjs`, CLI `npm run strategy-review`; see "Automated Strategy Review (DC-003-I029.3)"; new `schemas/engineering-strategy-review.schema.json`; `bridge-transport-record.schema.json`/`.mjs` additively extended with `engineering_strategy_review` (`direction: "outgoing"`) — the only two I029.1 files touched, per Strategy Office's own explicit scope; deterministic authority gates (pre- and post-invocation) mean the OpenAI model can only make an outcome more cautious, never override toward approval; a failed test/fixture always blocks approval regardless of what the model proposes; no automated test invokes OpenAI or the network; default is always mock, real review gated behind explicit `--live-review`, fixed one-request ceiling; Engineering Work Management and Control Centre integrations both additive/optional; **no live OpenAI request occurred — pending the Initial Live Review Verification Gate and fresh Strategy Office + CEO approval**; does not yet create/execute correction Work Orders; **Delivery Status Authority Gate added and live-verified (DC-003-I029.3.1)** — a Delivery Report whose own overall status is `failed`/`partial` can no longer resolve to `approved`, closing a real defect the DC-003-I029.4 end-to-end smoke test found (self-reported-passing test/fixture counters could previously override an independently-verified failed delivery); see "Delivery Status Authority Gate (DC-003-I029.3.1)" |
 | End-to-End Operations Bridge (orchestrates I029.2 + I029.3 into one call: Work Order -> Delivery Office Runner -> Delivery Report -> Strategy Review -> decision) | Done (DC-003-I029.4) — `src/automated-operations-bridge-service.mjs`, `src/operations-bridge-errors.mjs`, CLI `npm run operations-bridge`; see "End-to-End Operations Bridge (DC-003-I029.4)"; no new schema, no new lock, no new eligibility/git/review logic — pure composition of two already-constructed I029.2/I029.3 services; `getOperationsBridgeStatus()` is a separate plain read over existing stores/locks, mirroring both standalone CLIs' own `status` precedent; Control Centre needed zero code changes (confirmed live, a genuine finding, not an oversight); **live end-to-end smoke test against a real throwaway git repository surfaced a genuine, pre-existing I029.3 authority-gate gap** (a "failed" Delivery Report's own status is not itself a mandatory escalation condition) — documented, not fixed, per this milestone's own "no new review logic" scope; no live Claude Code or OpenAI request occurred; **machine-readable `--json` mode and a single-call enriched result added (DC-003-I029.4.1)** — closes the two integration gaps the DC-005 OC-001 architecture investigation found (console-text-only output; a thin result requiring a second CLI call for a CEO notification), both fixed via already-public `getExecutionStatus()`/`getReviewStatus()` reads with zero I029.2/I029.3 changes; see "Machine-Readable Output Mode (DC-003-I029.4.1)" |
 | Content Ingestion Engine (canonical entry point into the Content Factory: retrieves one approved long-form article from a supported source, validates it, produces one immutable Ingested Content record) | Done (DC-003-I030) — `src/ingested-content.mjs`, `src/ingested-content-store.mjs` + adapter files, `src/content-source-adapter.mjs`, `src/content-source-mock-adapter.mjs`, `src/google-docs-source-adapter.mjs`, `src/google-docs-config.mjs`, `src/google-service-account-auth.mjs`, `src/content-ingestion-service.mjs`, CLI `npm run content-ingestion`; see "Content Ingestion Engine (DC-003-I030)"; new `schemas/ingested-content.schema.json`; named "Ingested Content", not "Content Request" as the brief originally proposed — that name is already taken by I016's unrelated command object, confirmed with the Strategy Office before implementation, zero I016/I017/I018 files touched; supports exactly one source (Google Docs) — the generic Content Source Adapter interface anticipates Claude Cowork/Markdown/Git/WordPress/Notion without requiring service changes, none implemented yet; Control Centre's `ingestedContentStore` dependency is additive/optional, mirroring `bridgeTransportStore`'s own standalone precedent, and deliberately surfaces only a lean summary (never the full article text); mock remains the default without `--live`; **no live Google Docs request has been made** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019's own precedent |
-| Unit test suite | Done — 1739 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before), 10 from I029.4.1 — 3 added to `automated-operations-bridge-service.test.mjs` (the single-call enrichment, sourced from fake `getExecutionStatus()`/`getReviewStatus()`) + 4 added to `operations-bridge-cli.test.mjs` (`--json` mode: banner suppression, the unified failure shape, backward-compatible plain-text mode) + 3 added to `operations-bridge-delivery-status-regression.test.mjs` (`rejected` and a model-proposed `correction_required`, both through real I029.2+I029.3+I029.4 services, extending its existing failed/completed coverage) — no existing test file's own assertions were weakened or removed, only extended), 72 from I030 — 11 new (`ingested-content.test.mjs`) + 7 new (`ingested-content-store.test.mjs`) + 4 new (`content-source-adapter.test.mjs`) + 6 new (`content-source-mock-adapter.test.mjs`) + 10 new (`content-ingestion-service.test.mjs`) + 10 new (`content-ingestion-cli.test.mjs`) + 6 new (`google-service-account-auth.test.mjs`, a real RSA-keypair-signed JWT verified against its own matching public key) + 9 new (`google-docs-source-adapter.test.mjs`) + 5 new (`google-docs-config.test.mjs`) + 4 new (`control-centre-content-ingestion.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `content_ingestion: null` key; DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
+| Editorial Package Generator (canonical strategic representation of one approved article: AI-assisted editorial analysis of an Ingested Content record into structured editorial intelligence) | Done (DC-003-I031) — `src/editorial-package.mjs`, `src/editorial-package-store.mjs` + adapter files, `src/editorial-analysis-provider.mjs`, `src/editorial-analysis-mock-provider.mjs`, `src/editorial-analysis-anthropic-provider.mjs`, `src/editorial-analysis-transport-http.mjs`, `src/editorial-package-prompt-builder.mjs`, `src/editorial-package-generator.mjs`, CLI `npm run editorial-package`; see "Editorial Package Generator (DC-003-I031)"; new `schemas/editorial-package.schema.json`; consumes ONLY an I030 Ingested Content record by ID — confirmed by inspection that no Content Source Adapter of any kind is imported; reuses `retry.mjs`/`llm-provider-errors.mjs`/`llm-provider-config.mjs`/`llm-error-diagnostics.mjs`/`llm-response-validator.mjs` from I004/I019 completely unmodified (all five already provider-agnostic), writing only genuinely editorial-package-shaped new files rather than touching those already-shipped ones; at most one Editorial Package per Ingested Content record (`DuplicateEditorialPackageError`); Control Centre's `editorialPackageStore` dependency is additive/optional, mirroring `ingestedContentStore`'s own precedent; mock remains the default without `--live`; **no live Anthropic request has been made for editorial analysis** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019/I030's own precedent |
+| Unit test suite | Done — 1834 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before), 10 from I029.4.1 — 3 added to `automated-operations-bridge-service.test.mjs` (the single-call enrichment, sourced from fake `getExecutionStatus()`/`getReviewStatus()`) + 4 added to `operations-bridge-cli.test.mjs` (`--json` mode: banner suppression, the unified failure shape, backward-compatible plain-text mode) + 3 added to `operations-bridge-delivery-status-regression.test.mjs` (`rejected` and a model-proposed `correction_required`, both through real I029.2+I029.3+I029.4 services, extending its existing failed/completed coverage) — no existing test file's own assertions were weakened or removed, only extended), 72 from I030 — 11 new (`ingested-content.test.mjs`) + 7 new (`ingested-content-store.test.mjs`) + 4 new (`content-source-adapter.test.mjs`) + 6 new (`content-source-mock-adapter.test.mjs`) + 10 new (`content-ingestion-service.test.mjs`) + 10 new (`content-ingestion-cli.test.mjs`) + 6 new (`google-service-account-auth.test.mjs`, a real RSA-keypair-signed JWT verified against its own matching public key) + 9 new (`google-docs-source-adapter.test.mjs`) + 5 new (`google-docs-config.test.mjs`) + 4 new (`control-centre-content-ingestion.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `content_ingestion: null` key, 95 from I031 — 29 new (`editorial-package.test.mjs`, parameterised loops over every required string/array field) + 7 new (`editorial-package-store.test.mjs`) + 15 new (`editorial-analysis-provider.test.mjs`, parameterised loops over every required Editorial Analysis Result field) + 7 new (`editorial-analysis-mock-provider.test.mjs`) + 6 new (`editorial-package-prompt-builder.test.mjs`) + 10 new (`editorial-package-generator.test.mjs`) + 8 new (`editorial-analysis-anthropic-provider.test.mjs`, covering the HTTP transport and real provider together via a mocked `fetch`) + 9 new (`editorial-package-cli.test.mjs`) + 4 new (`control-centre-editorial-package.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `editorial_package: null` key; DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
 | Approval reset / un-approve / un-reject transition | Not started — explicitly out of scope for I014 (an open question in its brief, deliberately left unresolved); a wrong decision requires a new Finished Carousel Object from a fresh pipeline run |

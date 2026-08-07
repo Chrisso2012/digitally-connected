@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/editorial-package.schema.json",
+  "title": "Editorial Package",
+  "description": "DC-003-I031 — the canonical strategic representation of one approved article, derived from exactly one immutable Ingested Content record (DC-003-I030) via AI-assisted editorial analysis. Every later content-generation milestone (Social Media Package, Production Assets, Publishing) consumes this object, never the original article or the Ingested Content record directly. Immutable after creation: no update path exists; at most one Editorial Package may exist per ingested_content_id (see the Editorial Package Store's own duplicate-rejection rule).",
+  "type": "object",
+  "required": [
+    "editorial_package_id",
+    "ingested_content_id",
+    "status",
+    "primary_headline",
+    "supporting_headline",
+    "executive_summary",
+    "core_message",
+    "primary_audience",
+    "primary_problem",
+    "desired_outcome",
+    "key_insights",
+    "pull_quotes",
+    "call_to_action",
+    "keywords",
+    "seo_title",
+    "seo_description",
+    "suggested_hashtags",
+    "editorial_themes",
+    "content_categories",
+    "generated_at",
+    "llm_model",
+    "prompt_version",
+    "schema_version",
+    "checksum"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "editorial_package_id": {
+      "type": "string",
+      "pattern": "^ep_[A-Za-z0-9]+$",
+      "description": "Machine-generated, independent of ingested_content_id — mirrors every other DC-003 identifier convention (ic_/wo_/req_/...)."
+    },
+    "ingested_content_id": {
+      "type": "string",
+      "pattern": "^ic_[A-Za-z0-9]+$",
+      "description": "The single, required input this package was derived from (DC-003-I030's Ingested Content Store). At most one Editorial Package may exist per ingested_content_id — see editorial-package-store.mjs's own findByIngestedContentId()."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["generated"],
+      "description": "\"generated\" is the only value DC-003-I031 itself ever produces — a failed generation never persists a record at all (see README \"Validation\"). Deliberately left open for a later milestone's own downstream lifecycle stages (e.g. editorial approval), mirroring ingested-content.schema.json's own identical status-field rationale."
+    },
+    "primary_headline": { "type": "string", "minLength": 1 },
+    "supporting_headline": { "type": "string", "minLength": 1 },
+    "executive_summary": { "type": "string", "minLength": 1 },
+    "core_message": { "type": "string", "minLength": 1 },
+    "primary_audience": { "type": "string", "minLength": 1 },
+    "primary_problem": { "type": "string", "minLength": 1 },
+    "desired_outcome": { "type": "string", "minLength": 1 },
+    "key_insights": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "pull_quotes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "call_to_action": { "type": "string", "minLength": 1 },
+    "keywords": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "seo_title": { "type": "string", "minLength": 1 },
+    "seo_description": { "type": "string", "minLength": 1 },
+    "suggested_hashtags": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "editorial_themes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "content_categories": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the analysis was performed — mirrors finished-carousel.schema.json/carousel-content's own generated_at naming for an AI-generated artifact, not created_at/updated_at (Ingested Content's own naming, for a retrieval event instead of a generation event — see README for the distinction)."
+    },
+    "llm_model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The provider/model identifier that produced this package (e.g. \"mock-editorial-analysis-provider-v1\" or \"anthropic-claude-sonnet-5\") — mirrors carousel-content.schema.json's own llm_model provenance field."
+    },
+    "prompt_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hex digest of every other field on this record (tamper-evidence for the record itself), computed by createEditorialPackage() immediately before the record is frozen — mirrors ingested-content.schema.json's own checksum field exactly."
+    }
+  }
+}

@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review", "content_ingestion"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review", "content_ingestion", "editorial_package"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -20,7 +20,8 @@
         "bridge": { "$ref": "#/$defs/bridgeSummary" },
         "delivery_office": { "$ref": "#/$defs/deliveryOfficeSummary" },
         "strategy_review": { "$ref": "#/$defs/strategyReviewSummary" },
-        "content_ingestion": { "$ref": "#/$defs/contentIngestionSummary" }
+        "content_ingestion": { "$ref": "#/$defs/contentIngestionSummary" },
+        "editorial_package": { "$ref": "#/$defs/editorialPackageSummary" }
       }
     },
     {
@@ -440,6 +441,38 @@
                 }
               ]
             }
+          }
+        }
+      ]
+    },
+    "editorialPackageSummary": {
+      "description": "DC-003-I031 — sourced entirely from the Editorial Package Store, read-only, standalone, no networking of any kind. null when no Editorial Package Store was supplied. A LEAN summary — latest_package never embeds the full editorial fields (executive_summary, key_insights, etc.), mirroring contentIngestionSummary's own precedent.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["total_editorial_packages", "latest_package", "latest_status"],
+          "additionalProperties": false,
+          "properties": {
+            "total_editorial_packages": { "type": "integer", "minimum": 0 },
+            "latest_package": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["editorial_package_id", "ingested_content_id", "primary_headline", "status", "generated_at"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "editorial_package_id": { "type": "string", "pattern": "^ep_[A-Za-z0-9]+$" },
+                    "ingested_content_id": { "type": "string", "pattern": "^ic_[A-Za-z0-9]+$" },
+                    "primary_headline": { "type": "string" },
+                    "status": { "type": "string" },
+                    "generated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              ]
+            },
+            "latest_status": { "type": ["string", "null"] }
           }
         }
       ]

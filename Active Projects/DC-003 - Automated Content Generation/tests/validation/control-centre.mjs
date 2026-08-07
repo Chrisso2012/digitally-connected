@@ -90,6 +90,13 @@ import {
   CorruptedIngestedContentError,
   IngestedContentPersistenceError,
 } from "../../src/ingested-content-errors.mjs";
+import { createLocalJsonEditorialPackageStoreAdapter } from "../../src/local-json-editorial-package-store-adapter.mjs";
+import { createEditorialPackageStore } from "../../src/editorial-package-store.mjs";
+import {
+  InvalidEditorialPackageStoreAdapterError,
+  CorruptedEditorialPackageError,
+  EditorialPackagePersistenceError,
+} from "../../src/editorial-package-errors.mjs";
 import { createControlCentreService } from "../../src/control-centre-service.mjs";
 import { InvalidControlCentreDependenciesError, ControlCentreAssemblyError } from "../../src/control-centre-errors.mjs";
 
@@ -125,6 +132,9 @@ const KNOWN_ERRORS = [
   InvalidIngestedContentStoreAdapterError,
   CorruptedIngestedContentError,
   IngestedContentPersistenceError,
+  InvalidEditorialPackageStoreAdapterError,
+  CorruptedEditorialPackageError,
+  EditorialPackagePersistenceError,
 ];
 
 // DC-003-I028/I029/I029.1 — named flags, not more positionals, so each can
@@ -139,6 +149,7 @@ const NAMED_FLAG_PREFIXES = {
   strategyReviewStoreDirectory: "--strategy-review=",
   strategyReviewLockDirectory: "--strategy-review-lock=",
   contentIngestionStoreDirectory: "--content-ingestion=",
+  editorialPackageStoreDirectory: "--editorial-package=",
 };
 
 function extractNamedFlags(args) {
@@ -164,6 +175,7 @@ function usageAndExit() {
   console.error("  (append --delivery-office-lock=<dir> to the dashboard command to include Delivery Office lock status, DC-003-I029.2)");
   console.error("  (append --strategy-review=<dir> [--strategy-review-lock=<dir>] to the dashboard command to include Strategy Review status, DC-003-I029.3)");
   console.error("  (append --content-ingestion=<dir> to the dashboard command to include Content Ingestion status, DC-003-I030)");
+  console.error("  (append --editorial-package=<dir> to the dashboard command to include Editorial Package status, DC-003-I031)");
   console.error("  node tests/validation/control-centre.mjs dashboard <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs health    <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
   console.error("  node tests/validation/control-centre.mjs jobs      <carouselStoreDirectory> <metricsStoreDirectory> <publisherResultStoreDirectory> [exportsRootDir]");
@@ -337,6 +349,20 @@ function printContentIngestionSection(contentIngestion) {
   );
 }
 
+function printEditorialPackageSection(editorialPackage) {
+  console.log("Editorial Package");
+  console.log();
+  if (editorialPackage === null) {
+    console.log("  unknown (no --editorial-package=<dir> supplied)");
+    return;
+  }
+  console.log(`  Total Editorial Packages   ${editorialPackage.total_editorial_packages}`);
+  console.log(
+    `  Latest Package             ${editorialPackage.latest_package ? `[${editorialPackage.latest_package.editorial_package_id}] "${editorialPackage.latest_package.primary_headline}"` : "(none)"}`
+  );
+  console.log(`  Latest Status              ${editorialPackage.latest_status ?? "(none)"}`);
+}
+
 function printDashboard(overview) {
   console.log(RULE);
   console.log("DC-003 CONTROL CENTRE");
@@ -361,6 +387,8 @@ function printDashboard(overview) {
   printStrategyReviewSection(overview.strategy_review);
   console.log();
   printContentIngestionSection(overview.content_ingestion);
+  console.log();
+  printEditorialPackageSection(overview.editorial_package);
 }
 
 function printJobDetail(detail) {
@@ -464,7 +492,8 @@ function buildService(
   deliveryOfficeLockDirectory,
   strategyReviewStoreDirectory,
   strategyReviewLockDirectory,
-  contentIngestionStoreDirectory
+  contentIngestionStoreDirectory,
+  editorialPackageStoreDirectory
 ) {
   const finishedCarouselStore = createFinishedCarouselStore({ adapter: createLocalJsonCarouselStoreAdapter({ storageDir: carouselStoreDirectory }) });
   const productionMetricsStore = createProductionMetricsStore({ adapter: createLocalJsonProductionMetricsStoreAdapter({ storageDir: metricsStoreDirectory }) });
@@ -487,6 +516,9 @@ function buildService(
   const ingestedContentStore = contentIngestionStoreDirectory
     ? createIngestedContentStore({ adapter: createLocalJsonIngestedContentStoreAdapter({ storageDir: contentIngestionStoreDirectory }) })
     : null;
+  const editorialPackageStore = editorialPackageStoreDirectory
+    ? createEditorialPackageStore({ adapter: createLocalJsonEditorialPackageStoreAdapter({ storageDir: editorialPackageStoreDirectory }) })
+    : null;
   return createControlCentreService({
     finishedCarouselStore,
     productionMetricsStore,
@@ -499,6 +531,7 @@ function buildService(
     strategyReviewStore,
     strategyReviewLockDir: strategyReviewLockDirectory ?? null,
     ingestedContentStore,
+    editorialPackageStore,
     exportsRootDir: exportsRootDir ?? null,
   });
 }
@@ -515,6 +548,7 @@ const {
     strategyReviewStoreDirectory,
     strategyReviewLockDirectory,
     contentIngestionStoreDirectory,
+    editorialPackageStoreDirectory,
   },
   rest,
 } = extractNamedFlags(rawRest);
@@ -535,7 +569,8 @@ try {
       deliveryOfficeLockDirectory,
       strategyReviewStoreDirectory,
       strategyReviewLockDirectory,
-      contentIngestionStoreDirectory
+      contentIngestionStoreDirectory,
+      editorialPackageStoreDirectory
     );
     printDashboard(service.getOverview());
   } else if (subcommand === "health") {
@@ -553,7 +588,8 @@ try {
       deliveryOfficeLockDirectory,
       strategyReviewStoreDirectory,
       strategyReviewLockDirectory,
-      contentIngestionStoreDirectory
+      contentIngestionStoreDirectory,
+      editorialPackageStoreDirectory
     );
     printHealthSection(service.getOverview().health);
   } else if (subcommand === "jobs") {
@@ -571,7 +607,8 @@ try {
       deliveryOfficeLockDirectory,
       strategyReviewStoreDirectory,
       strategyReviewLockDirectory,
-      contentIngestionStoreDirectory
+      contentIngestionStoreDirectory,
+      editorialPackageStoreDirectory
     );
     printRecentJobsSection(service.getOverview().recent_jobs);
   } else if (subcommand === "activity") {
@@ -589,7 +626,8 @@ try {
       deliveryOfficeLockDirectory,
       strategyReviewStoreDirectory,
       strategyReviewLockDirectory,
-      contentIngestionStoreDirectory
+      contentIngestionStoreDirectory,
+      editorialPackageStoreDirectory
     );
     printRecentActivitySection(service.getOverview().recent_activity);
   } else if (subcommand === "job") {
@@ -607,7 +645,8 @@ try {
       deliveryOfficeLockDirectory,
       strategyReviewStoreDirectory,
       strategyReviewLockDirectory,
-      contentIngestionStoreDirectory
+      contentIngestionStoreDirectory,
+      editorialPackageStoreDirectory
     );
     printJobDetail(service.getJobDetail(carouselId));
   } else {

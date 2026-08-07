@@ -37,6 +37,7 @@ const APPROVED_FIXTURES = [
   ["engineeringStrategyReview", "engineering-strategy-review.example.json"],
   ["controlCentre", "control-centre.example.json"],
   ["ingestedContent", "ingested-content.example.json"],
+  ["editorialPackage", "editorial-package.example.json"],
 ];
 
 const validator = createValidator();

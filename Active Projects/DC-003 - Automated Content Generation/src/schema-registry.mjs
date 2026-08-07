@@ -82,6 +82,12 @@ const SCHEMA_FILES = {
   // Centre's own Content Ingestion section embeds a lean summary shape,
   // not a $ref to this schema (see README "Control Centre").
   ingestedContent: "ingested-content.schema.json",
+  // DC-003-I031 — the canonical strategic representation of one approved
+  // article, derived from exactly one Ingested Content record above.
+  // Registered before controlCentre for consistency, though the Control
+  // Centre's own Editorial Package section embeds a lean summary shape,
+  // not a $ref to this schema (see README "Control Centre").
+  editorialPackage: "editorial-package.schema.json",
   // DC-003-I024, extended by DC-003-I028/I029/I029.1/I029.3 — the Control
   // Centre's in-memory read model. Must be compiled AFTER
   // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport/bridgeTransportRecord/engineeringStrategyReview
@@ -93,7 +99,7 @@ const SCHEMA_FILES = {
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
 
 /**
- * Loads all twenty schemas and returns them keyed by identifier, e.g.
+ * Loads all twenty-one schemas and returns them keyed by identifier, e.g.
  * `registry.topicPackage`. Fails fast on the first missing or malformed
  * schema file.
  */
