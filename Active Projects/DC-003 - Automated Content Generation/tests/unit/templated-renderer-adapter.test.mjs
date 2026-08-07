@@ -96,11 +96,14 @@ test("mapToRendererPayload() resolves real per-slide Templated template IDs — 
   assert.equal(payloads.length, 6);
   for (let i = 0; i < 5; i += 1) {
     assert.equal(payloads[i].template_id, "cover-template-id");
+    assert.equal(payloads[i].slide_type, "cover");
+    assert.equal(payloads[i].slide_number, i + 1);
     assert.equal(payloads[i].layers.headline_text.text, snakeCaseSlides[i].headline_mapping);
     assert.equal(payloads[i].layers.body_text.text, snakeCaseSlides[i].body_copy_mapping);
     assert.equal("button_label" in payloads[i].layers, false);
   }
   assert.equal(payloads[5].template_id, "cta-template-id");
+  assert.equal(payloads[5].slide_type, "cta");
   assert.equal(payloads[5].layers.button_label.text, snakeCaseSlides[5].cta_mapping);
 });
 

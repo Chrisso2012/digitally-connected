@@ -40,6 +40,7 @@
     "editorial-package": "node tests/validation/editorial-package.mjs",
     "social-media-package": "node tests/validation/social-media-package.mjs",
     "production-package": "node tests/validation/production-package.mjs",
+    "render-production-package": "node tests/validation/render-production-package.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

@@ -149,6 +149,13 @@ function mapToRendererPayload(productionPackage, options = {}) {
       template_version: templateEntry.template_version ?? null,
       format: templateEntry.format,
       slide_number: slide.slide_number,
+      // DC-003-I034 — the REAL template family used for this slide
+      // ("cover" or "cta", per templateKeyForSlide() above), never a
+      // fabricated value. Required both by renderer.mjs (I006, which
+      // carries it onto the resulting RenderResult) and by
+      // finished-carousel-builder.mjs's own Production Package lineage
+      // check (checkTemplatedPayloadForProductionPackageLineage()).
+      slide_type: templateKey,
       layers,
     };
   });

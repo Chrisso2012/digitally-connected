@@ -176,7 +176,7 @@
       "additionalProperties": false,
       "properties": {
         "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
-        "topic_id": { "type": "string" },
+        "topic_id": { "type": ["string", "null"], "description": "DC-003-I034 — null for a Finished Carousel built from the newer Production Package lineage, which has no Topic Package/topic_id concept at all. See finished-carousel.schema.json's own $defs.legacyLineage/productionPackageLineage." },
         "execution_id": { "type": "string" },
         "overall_status": { "type": "string", "enum": ["completed", "partial", "failed"] },
         "completed_at": { "type": "string", "format": "date-time" },
@@ -208,7 +208,7 @@
         "timestamp": { "type": "string", "format": "date-time" },
         "event": { "type": "string", "enum": ["generated", "rendered", "approved", "exported", "published"] },
         "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
-        "topic_id": { "type": "string" },
+        "topic_id": { "type": ["string", "null"], "description": "DC-003-I034 — null for a Finished Carousel built from the newer Production Package lineage. See jobSummary's own identical field." },
         "detail": { "type": ["string", "null"] }
       }
     },
@@ -287,7 +287,7 @@
       "additionalProperties": false,
       "properties": {
         "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
-        "topic_id": { "type": "string" },
+        "topic_id": { "type": ["string", "null"], "description": "DC-003-I034 — null for a Finished Carousel built from the newer Production Package lineage. See jobSummary's own identical field." },
         "finished_carousel": { "$ref": "https://digitallyconnected.net/schemas/dc-003/finished-carousel.schema.json" },
         "metrics": {
           "oneOf": [{ "type": "null" }, { "$ref": "https://digitallyconnected.net/schemas/dc-003/production-metrics.schema.json" }]

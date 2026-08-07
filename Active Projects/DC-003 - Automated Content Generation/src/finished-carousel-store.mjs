@@ -93,9 +93,11 @@ function summarize(carousel) {
  * options.validator — inject a pre-built validator (used by tests).
  * options.rootDir — passed through when no validator is injected.
  *
- * Returns { name, save, get, list, replace, exists } — `name` is the
- * underlying adapter's own name, exposed for building safe storage
- * references (see DC-003-I016).
+ * Returns { name, save, get, list, replace, exists,
+ * findByProductionPackageId } — `name` is the underlying adapter's own
+ * name, exposed for building safe storage references (see DC-003-I016).
+ * findByProductionPackageId (DC-003-I034) is the store's own duplicate-
+ * protection lookup for the newer Production Package lineage.
  */
 export function createFinishedCarouselStore({ adapter } = {}, options = {}) {
   assertValidCarouselStoreAdapter(adapter);
@@ -202,7 +204,10 @@ export function createFinishedCarouselStore({ adapter } = {}, options = {}) {
    * list() never silently skips or papers over a corrupted entry; it
    * fails on the first one found, naming which identifier is corrupted.
    */
-  function list() {
+  // DC-003-I034 — extracted from list()'s own original body (behavior
+  // unchanged) so findByProductionPackageId() below can share the same
+  // read-parse-validate logic rather than duplicating it.
+  function readAllRecords() {
     let identifiers;
     try {
       identifiers = adapter.list();
@@ -210,7 +215,7 @@ export function createFinishedCarouselStore({ adapter } = {}, options = {}) {
       throw new CarouselPersistenceError("(list)", "list", cause);
     }
 
-    const summaries = identifiers.map((identifier) => {
+    return identifiers.map((identifier) => {
       let raw;
       try {
         raw = adapter.read(identifier);
@@ -219,11 +224,30 @@ export function createFinishedCarouselStore({ adapter } = {}, options = {}) {
       }
       const carousel = parseStoredContent(identifier, raw);
       validateStoredCarousel(identifier, carousel, validator);
-      return summarize(carousel);
+      return carousel;
     });
+  }
 
+  function list() {
+    const summaries = readAllRecords().map(summarize);
     summaries.sort((a, b) => (a.carousel_id < b.carousel_id ? -1 : a.carousel_id > b.carousel_id ? 1 : 0));
     return deepFreezeClone(summaries);
+  }
+
+  /**
+   * DC-003-I034 — returns every full stored record whose
+   * production_package_id matches, ordered chronologically by
+   * generated_at ascending — used by the Carousel Rendering Engine to
+   * enforce "at most one successful Finished Carousel per Production
+   * Package." Mirrors createSocialMediaPackageStore()'s own
+   * findByEditorialPackageId() precedent exactly. Legacy (Topic Package
+   * lineage) records always have production_package_id === null, so they
+   * can never match a real pp_... argument here.
+   */
+  function findByProductionPackageId(productionPackageId) {
+    const records = readAllRecords().filter((record) => record.production_package_id === productionPackageId);
+    records.sort((a, b) => (a.generated_at < b.generated_at ? -1 : a.generated_at > b.generated_at ? 1 : 0));
+    return deepFreezeClone(records);
   }
 
   /**
@@ -284,5 +308,5 @@ export function createFinishedCarouselStore({ adapter } = {}, options = {}) {
   // build a safe, non-path storage reference like
   // `${store.name}:${carouselId}` without ever touching the adapter or a
   // filesystem path directly.
-  return { name: adapter.name, save, get, list, replace, exists };
+  return { name: adapter.name, save, get, list, replace, exists, findByProductionPackageId };
 }

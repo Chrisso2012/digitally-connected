@@ -2,14 +2,28 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://digitallyconnected.net/schemas/dc-003/finished-carousel.schema.json",
   "title": "Finished Carousel Object",
-  "description": "What the pipeline returns after rendering. Carries render identity, image location, timing, errors, and the fields reserved for future approval. Defined in DC-003-T002 §4 and §7.",
+  "description": "What the pipeline returns after rendering. Carries render identity, image location, timing, errors, and the fields reserved for future approval. Defined in DC-003-T002 §4 and §7. Extended in DC-003-I034 to carry TWO possible content-lineage paths, never both, never neither (see `$defs.legacyLineage`/`$defs.productionPackageLineage` below): the original Topic Package -> Carousel Content Object lineage (`topic_id` + `carousel_content_id`, DC-003-I001-I012's own pipeline), or the newer Production Package lineage (`production_package_id`, DC-003-I030-I034's own pipeline, which has no topic_id/carousel_content_id concept at all — see production-package.schema.json). Every Finished Carousel produced before DC-003-I034 already satisfies the legacy lineage shape unchanged; nothing about an existing stored record needs to change.",
   "type": "object",
   "required": ["carousel_id", "topic_id", "carousel_content_id", "generated_at", "overall_status", "slides", "metadata", "execution_metadata"],
   "additionalProperties": false,
+  "allOf": [{ "oneOf": [{ "$ref": "#/$defs/legacyLineage" }, { "$ref": "#/$defs/productionPackageLineage" }] }],
   "properties": {
     "carousel_id": { "type": "string", "pattern": "^car_[A-Za-z0-9]+$" },
-    "topic_id": { "type": "string", "pattern": "^topic_[A-Za-z0-9]+$" },
-    "carousel_content_id": { "type": "string", "pattern": "^cc_[A-Za-z0-9]+$" },
+    "topic_id": {
+      "type": ["string", "null"],
+      "pattern": "^topic_[A-Za-z0-9]+$",
+      "description": "Required-present (see this schema's own top-level `required`), but nullable as of DC-003-I034 — null on a Finished Carousel built from the newer Production Package lineage, which has no Topic Package/topic_id concept at all. See `$defs.legacyLineage`/`$defs.productionPackageLineage` for the rule governing which combination of topic_id/carousel_content_id/production_package_id is actually legal."
+    },
+    "carousel_content_id": {
+      "type": ["string", "null"],
+      "pattern": "^cc_[A-Za-z0-9]+$",
+      "description": "Required-present, but nullable as of DC-003-I034 — same rationale as topic_id above."
+    },
+    "production_package_id": {
+      "type": ["string", "null"],
+      "pattern": "^pp_[A-Za-z0-9]+$",
+      "description": "DC-003-I034 — the newer Production Package lineage identifier (see production-package.schema.json). Deliberately NOT in this schema's own top-level `required` list (unlike topic_id/carousel_content_id) so every Finished Carousel produced before this milestone, which never mentions this field at all, remains valid unchanged — its absence is equivalent to null. Non-null only on a Finished Carousel built from a Production Package; see `$defs.productionPackageLineage`."
+    },
     "generated_at": { "type": "string", "format": "date-time" },
     "overall_status": { "type": "string", "enum": ["completed", "partial", "failed"] },
     "slides": {
@@ -85,6 +99,28 @@
         "rejection_reason": { "type": ["string", "null"] },
         "published": { "type": "boolean" },
         "published_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  },
+  "$defs": {
+    "legacyLineage": {
+      "type": "object",
+      "description": "DC-003-I001-I012's original lineage: both topic_id and carousel_content_id are real, non-null identifiers. production_package_id, if present at all, must be null — a Finished Carousel can never claim both lineages at once. Every Finished Carousel produced before DC-003-I034 already matches this shape (production_package_id simply never appears in it, which is equivalent to null here).",
+      "required": ["topic_id", "carousel_content_id"],
+      "properties": {
+        "topic_id": { "type": "string" },
+        "carousel_content_id": { "type": "string" },
+        "production_package_id": { "const": null }
+      }
+    },
+    "productionPackageLineage": {
+      "type": "object",
+      "description": "DC-003-I034's newer lineage: production_package_id is a real, non-null identifier, and topic_id/carousel_content_id (still required-present by this schema's own top-level `required`) must both be explicitly null — never a fabricated Topic Package/Carousel Content Object identifier, since neither exists anywhere in the I030-I034 pipeline.",
+      "required": ["production_package_id"],
+      "properties": {
+        "topic_id": { "const": null },
+        "carousel_content_id": { "const": null },
+        "production_package_id": { "type": "string" }
       }
     }
   }

@@ -8221,6 +8221,278 @@ full `slide_sequence`), and `latest_status`.
   `cover`'s template ID on slides 1–5, `cta`'s template ID plus a real
   `button_label` layer on slide 6). All behaved exactly as designed.
 
+## Carousel Rendering Engine (DC-003-I034)
+
+**The first real visual-output milestone of the new pipeline.** Consumes
+exactly one immutable **Production Package** record (DC-003-I033) and
+renders it into a persisted **Finished Carousel**, reusing EXISTING
+rendering infrastructure end to end — no new rendering subsystem:
+
+```
+Production Package (I033)
+  -> Templated Renderer Adapter's mapToRendererPayload()   (I033, unmodified)
+  -> renderTemplatedPayload() per slide                    (I006, unmodified)
+  -> createFinishedCarousel({ productionPackageId, ... })  (I007, extended additively)
+  -> Finished Carousel Store                                (I015, extended additively)
+```
+
+Consumes **only** the Production Package object handed to it by ID —
+never reads Social Media Package, Editorial Package, Ingested Content,
+Google Docs, or a raw article, and never rewrites copy, performs AI
+analysis, or invents missing content.
+
+### Investigation (required before implementation, per this milestone's own brief)
+
+- **I006 Templated Renderer Integration**: `renderTemplatedPayload(payload, {transport})`
+  is loosely coupled — it only needs `payload.template_id`/`layers`/
+  `format`/`slide_type`, with no dependency on `carousel_content_id` or
+  `payload_id` at all. Fully reusable unmodified. **Real behavior
+  discovered by inspection, not assumed**: a render Templated itself
+  rejects does NOT come back as a non-throwing `RenderResult{status:
+  "failed"}` — `renderer-response-validator.mjs` throws `RenderRejected`
+  instead (non-retryable, by design, since a rejected payload will fail
+  identically on retry). Left unhandled, that would mean a single
+  rejected slide aborts the ENTIRE run with nothing ever persisted —
+  there would be no way to reach a genuine "partial" outcome. This
+  milestone's own engine catches ONLY `RenderRejected` and converts it
+  into a `RenderResult` via I006's own `createRenderResult()` factory
+  (status `"failed"`) — reusing the exact existing shape/status
+  vocabulary `finished-carousel-builder.mjs` already understands, not
+  inventing a new one. Every OTHER failure (`AuthenticationError`,
+  `RetryLimitExceeded`, `TimeoutError`, `TransportError`,
+  `ValidationError`) still aborts the whole run before anything is
+  persisted.
+- **I007 Finished Carousel Builder / Finished Carousel schema**: the
+  **genuine incompatibility found and reported before any code was
+  written** — `finished-carousel.schema.json` required `topic_id`
+  (`^topic_[A-Za-z0-9]+$`) and `carousel_content_id` (`^cc_[A-Za-z0-9]+$`)
+  as REQUIRED, pattern-enforced fields, sourced directly from a real
+  Topic Package/Carousel Content Object — neither of which exists
+  anywhere in the I030-I034 pipeline's lineage. Resolved, per explicit
+  Strategy Office approval, with the smallest backward-compatible
+  additive change: see "Finished Carousel dual lineage" below.
+- **I009 Pipeline Orchestrator**: not composed into this milestone —
+  it orchestrates the OLDER Topic-Package-driven pipeline end to end
+  (n8n Adapter → Invocation Adapter → Pipeline Orchestrator), a
+  different composition than this milestone's own narrow
+  Production-Package-to-Finished-Carousel scope.
+- **I020 Live Production Run**: not composed into this milestone (same
+  reason as I009 — it drives the older pipeline), but its own
+  request-budget reporting convention ("capped at 1 Anthropic + 6
+  Templated requests") is the direct precedent for this milestone's own
+  "Live Request Safety" section below.
+- **I021/I026 Production Asset Export**: keys **only** on
+  `finishedCarousel.carousel_id` — zero coupling to `topic_id`/
+  `carousel_content_id`/`production_package_id`. Fully reusable,
+  unmodified, once a valid Finished Carousel exists. **Deliberately NOT
+  composed into this CLI**: `production-asset-export-service.mjs`
+  requires `finishedCarousel.approval.approved === true`, and a carousel
+  this milestone just rendered is never yet approved (no auto-approval
+  exists anywhere in this codebase) — composing export here would be
+  dead code in every real invocation. Export remains the documented next
+  operational step (see "Asset export" below).
+- **Current Templated template configuration/IDs**: reused unmodified via
+  I033's own Templated Adapter (`config/templates.json`'s real `cover`/
+  `cta` template IDs).
+- **Whether I034 can compose existing modules without a second rendering
+  architecture**: yes, confirmed — see the pipeline diagram above. The
+  only genuinely new code is orchestration (`carousel-rendering-engine.mjs`)
+  and the narrow `RenderRejected`-to-`RenderResult` conversion described
+  above.
+- **Whether the existing Finished Carousel schema can represent I034
+  output unchanged**: no — see the incompatibility above. Resolved
+  additively, not by a second competing object.
+- **Whether the existing asset export path can be reused directly after
+  rendering**: yes, confirmed by inspection — no changes needed to
+  `production-asset-export-service.mjs`/`windows-production-export-service.mjs`
+  at all.
+
+### Finished Carousel dual lineage (approved compatibility resolution)
+
+`finished-carousel.schema.json` now supports TWO mutually exclusive
+lineages, enforced by a schema-level `oneOf` (`$defs.legacyLineage` /
+`$defs.productionPackageLineage`):
+
+- **Legacy** (`DC-003-I001`-`I012`): `topic_id` + `carousel_content_id`
+  both real, non-null identifiers; `production_package_id` absent or
+  null. Every Finished Carousel produced before this milestone already
+  matches this shape unchanged — confirmed by re-validating the real,
+  pre-existing `finished-carousel.example.json` fixture against the
+  updated schema without modifying it at all.
+- **Production Package** (`DC-003-I034`): `production_package_id` a real,
+  non-null identifier; `topic_id`/`carousel_content_id` both explicitly
+  null — never a fabricated Topic Package/Carousel Content Object
+  identifier, since neither exists anywhere in this pipeline.
+- Any other combination (all three set, all three null/absent, or a
+  partial mix) is rejected by the schema as ambiguous/inconsistent.
+
+`topic_id`/`carousel_content_id` stay in the schema's own top-level
+`required` list unchanged (always present, now nullable);
+`production_package_id` is deliberately NOT added to that list (fully
+optional/omittable) — this is exactly why zero pre-existing fixtures or
+tests needed to change: an absent `production_package_id` is equivalent
+to `null`.
+
+`finished-carousel-builder.mjs`'s `createFinishedCarousel()` now accepts
+`fields.productionPackageId` as an alternative to `fields.carouselContent`
+— exactly one of the two, never both, never neither. Every check and code
+path used when `fields.carouselContent` is supplied
+(`checkCarouselContent`/`checkTemplatedPayload`/`checkSlideConsistency`,
+and the exact shape/order of the assembled object) is completely
+unchanged — confirmed by the full existing `finished-carousel-builder.test.mjs`/
+`finished-carousel-store.test.mjs` suites passing unmodified. The new
+lineage's own checks (`checkProductionPackageId`/
+`checkTemplatedPayloadForProductionPackageLineage`) never require or read
+`payload_id`/`carousel_content_id` — they simply don't exist on this
+lineage's own renderer payloads.
+
+`finished-carousel-store.mjs` gained `findByProductionPackageId()` — a
+read-only lookup returning full matching records, mirroring
+`createSocialMediaPackageStore()`'s own `findByEditorialPackageId()`
+precedent exactly (extracted a shared `readAllRecords()` helper from
+`list()`'s own body in the process; `list()`'s own summary shape is
+completely unchanged).
+
+**A small, necessary, related fix**: `control-centre.schema.json`
+required `topic_id` as a non-nullable string in three nested structures
+(`jobSummary`/`activityEntry`/`jobDetail`), all populated by pass-through
+reads of `carousel.topic_id`. Left unfixed, the Control Centre would
+throw its own `ControlCentreAssemblyError` the moment an I034-produced
+carousel (`topic_id: null`) appeared in `recent_jobs`/`recent_activity`/
+`job <id>`. Fixed by widening those three declarations to
+`["string", "null"]` — reported to and confirmed with the Strategy
+Office before being made, since it touches the Control Centre schema;
+no new field or section was added, and no other Control Centre
+architecture changed. **Investigated separately, per the brief's own
+ask**: the Control Centre's existing sections already surface everything
+necessary for I034 output once this fix is in place — the dedicated,
+optional `production_package` overview section from I033 already exists
+independently and needed no I034-specific change at all.
+
+### Rendering Sequence
+
+Deterministic: renders each of the Production Package's 6 slides exactly
+once, in slide order (`slide_number` 1-6, matching
+`mapToRendererPayload()`'s own output order), via one shared transport.
+Per-slide `RenderRejected` becomes a `"failed"` slide entry, never
+silently omitted — `overall_status` correctly becomes `"partial"`/
+`"failed"` via `finished-carousel-builder.mjs`'s own pre-existing,
+unmodified logic. A genuine transport-level failure aborts the whole run
+before anything is persisted — mirrors `build-finished-carousel.mjs`'s
+own unguarded render loop exactly.
+
+### Duplicate protection
+
+Mirrors DC-003-I029's own `DuplicateDeliveryError` precedent exactly:
+only a Finished Carousel with `overall_status === "completed"` blocks a
+retry (`DuplicateRenderError`) — a prior `"failed"`/`"partial"` attempt
+is designed to be retried after correction, never silently blocked.
+Verified directly: a `"rejected"`-mode retry followed by a genuinely
+successful retry produces two distinct Finished Carousels, the second
+never blocked.
+
+### CLI
+
+`tests/validation/render-production-package.mjs`, `npm run
+render-production-package`. A single flat action (no subcommands, per
+the brief's own expected invocation shape):
+
+```bash
+npm run render-production-package -- <productionPackageId> <productionPackageStoreDirectory> <finishedCarouselStoreDirectory> [--live] [--live-max-attempts=N]
+```
+
+Mock transport by default. `--live` selects the real Templated HTTP
+transport (requires `TEMPLATED_API_KEY`); `--live-max-attempts=N`
+overrides the safe one-attempt-per-slide default, mirroring I006's own
+Live Verification Gate safety rule exactly (`renderer-config.mjs`'s
+`loadRendererConfig()`/`resolveLiveMaxAttempts()`, reused unmodified). A
+finished carousel is already inspectable via I015's own existing
+`npm run store -- get|list` CLI — this CLI does not duplicate that.
+
+### Asset export
+
+Not composed into this CLI — see "Investigation" above for why
+(`approval.approved` is never true immediately after a fresh render).
+The documented next operational step, once a carousel has been approved:
+
+```bash
+npm run export:windows -- <carouselId> <finishedCarouselStoreDirectory> [--replace]
+```
+
+No export logic was duplicated or modified for this milestone.
+
+### Live Request Safety
+
+**No live Templated request occurred during implementation.** Before any
+future live run, this is the exact request budget for one full 6-slide
+Production Package:
+
+- **Expected Templated requests**: up to 6 (one per slide, no retries by
+  default under `--live`).
+- **Maximum attempts**: 1 per slide by default (`resolveLiveMaxAttempts()`,
+  independent of `TEMPLATED_RENDER_MAX_ATTEMPTS`); raising it requires an
+  explicit `--live-max-attempts=N` on that specific invocation.
+- **Retry behaviour**: only `TimeoutError`/`TransportError` are
+  retryable at all (I006's own established rule); `AuthenticationError`/
+  `ValidationError`/`RenderRejected` propagate on the first attempt,
+  never retried.
+- **Template IDs used**: `config/templates.json`'s real `cover` template
+  (`748d17c5-c58e-48eb-9f12-434252a6d17f`) for slides 1-5, real `cta`
+  template (`366ceefc-d9ea-4fbc-9ffc-eac8f978fa59`) for slide 6 — both
+  already-live, already-verified templates from DC-002/I001, not new.
+- **Expected asset count**: 6 rendered images (one per slide) on full
+  success.
+- **Estimated cost**: not available from this codebase — Templated's own
+  account/plan pricing, outside this repository's knowledge.
+
+The intended first live-test candidate is **GS01**, once I030-I034 are
+merged to `main` and GS01 has been genuinely ingested/generated through
+the full pipeline — matching the brief's own stated plan. Real rendering
+requires this project's existing unmistakable live gate (`--live`, a
+present `TEMPLATED_API_KEY`) plus fresh Strategy Office + CEO approval,
+exactly as every prior live-capable milestone in this project has
+required.
+
+### Out of scope (per this milestone's own brief)
+
+Generating or rewriting social copy, enriching missing slide content,
+creating statistics or quotations, calling an LLM, publishing to
+Instagram/LinkedIn, scheduling posts, collecting analytics, modifying
+Google Docs, a second rendering provider, redesigning the six creative
+templates. No I035+ concern of any kind.
+
+### Verification performed
+
+- Full unit test suite: **32 new tests** across 5 new/changed test files
+  (`finished-carousel-dual-lineage.test.mjs` — 10 tests proving old
+  fixtures/records remain valid, the legacy builder path is unchanged,
+  the new lineage works end to end through a real mock-rendered
+  pipeline, and ambiguous/inconsistent lineage combinations are
+  rejected; `carousel-rendering-engine.test.mjs` — 12 tests;
+  `render-production-package-cli.test.mjs` — 7 tests, chaining through
+  the full real I030-I034 CLI pipeline; `control-centre-finished-carousel-dual-lineage.test.mjs`
+  — 3 tests), plus 2 new assertions added to `templated-renderer-adapter.test.mjs`'s
+  own existing test (the `slide_type` field this milestone added to
+  `mapToRendererPayload()`'s output). Full suite **2039/2039 passing** in
+  Docker (2007 baseline + 32, zero regressions — including every
+  pre-existing `finished-carousel-builder.test.mjs`/
+  `finished-carousel-store.test.mjs` test, unmodified).
+- Fixture validation: **23/23 fixtures pass** (`npm run validate`,
+  unchanged count — no new fixture was needed for this milestone, since
+  Finished Carousel already had one and Production Package's own fixture
+  already exists from I033).
+- Manual smoke test (Docker), the real new pipeline boundary end to end,
+  via the actual CLIs, not simulated: `content-ingestion` →
+  `editorial-package` → `social-media-package` → `production-package` →
+  `render-production-package`, chained for real. Result: 6/6 slides
+  completed, correct slide ordering (`slide_number` 1-6), correct
+  slide-type assignment (`cover` ×5, `cta` ×1), `overall_status:
+  "completed"`, a real round-trip store read matching the rendered
+  record, genuine duplicate-render rejection, genuine
+  unknown-Production-Package-ID rejection, and confirmation that the
+  provider recorded is `"mock-transport"` — no live request occurred at
+  any point.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -8613,6 +8885,7 @@ needed).
 | Editorial Package Generator (canonical strategic representation of one approved article: AI-assisted editorial analysis of an Ingested Content record into structured editorial intelligence) | Done (DC-003-I031) — `src/editorial-package.mjs`, `src/editorial-package-store.mjs` + adapter files, `src/editorial-analysis-provider.mjs`, `src/editorial-analysis-mock-provider.mjs`, `src/editorial-analysis-anthropic-provider.mjs`, `src/editorial-analysis-transport-http.mjs`, `src/editorial-package-prompt-builder.mjs`, `src/editorial-package-generator.mjs`, CLI `npm run editorial-package`; see "Editorial Package Generator (DC-003-I031)"; new `schemas/editorial-package.schema.json`; consumes ONLY an I030 Ingested Content record by ID — confirmed by inspection that no Content Source Adapter of any kind is imported; reuses `retry.mjs`/`llm-provider-errors.mjs`/`llm-provider-config.mjs`/`llm-error-diagnostics.mjs`/`llm-response-validator.mjs` from I004/I019 completely unmodified (all five already provider-agnostic), writing only genuinely editorial-package-shaped new files rather than touching those already-shipped ones; at most one Editorial Package per Ingested Content record (`DuplicateEditorialPackageError`); Control Centre's `editorialPackageStore` dependency is additive/optional, mirroring `ingestedContentStore`'s own precedent; mock remains the default without `--live`; **no live Anthropic request has been made for editorial analysis** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019/I030's own precedent |
 | Social Media Package Generator (canonical marketing package used by every downstream rendering milestone: AI-assisted platform-copy generation from an Editorial Package into LinkedIn/Facebook/X/Instagram variations plus renderer-agnostic carousel content) | Done (DC-003-I032) — `src/social-media-package.mjs`, `src/social-media-package-store.mjs` + adapter files, `src/social-media-provider.mjs`, `src/social-media-mock-provider.mjs`, `src/social-media-anthropic-provider.mjs`, `src/social-media-transport-http.mjs`, `src/social-media-package-prompt-builder.mjs`, `src/social-media-package-generator.mjs`, CLI `npm run social-media-package`; see "Social Media Package Generator (DC-003-I032)"; new `schemas/social-media-package.schema.json`; consumes ONLY an I031 Editorial Package record by ID — confirmed by inspection that no Ingested Content/Content Source/Google Docs import exists anywhere in this milestone; reuses `retry.mjs`/`llm-provider-errors.mjs`/`llm-provider-config.mjs`/`llm-error-diagnostics.mjs`/`llm-response-validator.mjs` from I004/I019/I031 completely unmodified, writing only genuinely social-media-package-shaped new files; at most one Social Media Package per Editorial Package record (`DuplicateSocialMediaPackageError`); Control Centre's `socialMediaPackageStore` dependency is additive/optional, mirroring `editorialPackageStore`'s own precedent; mock remains the default without `--live`; **no live Anthropic request has been made for social media package generation** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019/I030/I031's own precedent |
 | Production Package Generator (canonical renderer-ready package used by every downstream rendering engine: pure deterministic transformation of a Social Media Package into renderer-agnostic per-slide headline/body/CTA/image-guidance mappings, with renderer-specific mapping isolated behind a pluggable Renderer Adapter) | Done (DC-003-I033) — `src/production-package.mjs`, `src/production-package-store.mjs` + adapter files, `src/production-package-renderer-adapter.mjs` (generic adapter interface), `src/templated-renderer-adapter.mjs` (the only concrete adapter implemented), `src/production-package-generator.mjs`, CLI `npm run production-package`; see "Production Package Generator (DC-003-I033)"; new `schemas/production-package.schema.json`; consumes ONLY an I032 Social Media Package record by ID — confirmed by inspection that no Editorial Package/Ingested Content/Content Source/Google Docs import exists anywhere in this milestone; **no AI/LLM step at all**, unlike I030-I032 — a pure, synchronous, deterministic mapping, no `--live` flag exists; key investigation finding: the OLDER six-heterogeneous-Templated-template pipeline (I003-I007) is not a natural fit for I032's deliberately uniform carousel content (would leave `statistic`/`quote` slides with zero real content mapped) — resolved by mapping every slide onto the `cover` template's shape and the final slide additionally onto `cta`'s `button_label`, a documented scope decision, not an oversight; at most one Production Package per Social Media Package record (`DuplicateProductionPackageError`); Control Centre's `productionPackageStore` dependency is additive/optional, mirroring `socialMediaPackageStore`'s own precedent |
+| Carousel Rendering Engine (first real visual-output milestone: renders a Production Package into a persisted Finished Carousel by reusing existing I006 rendering/I007 composition/I015 storage infrastructure unmodified) | Done (DC-003-I034) — `src/carousel-rendering-engine.mjs`, `src/carousel-rendering-engine-errors.mjs`, CLI `npm run render-production-package`; see "Carousel Rendering Engine (DC-003-I034)"; genuine incompatibility found and reported before coding — `finished-carousel.schema.json` required `topic_id`/`carousel_content_id`, which don't exist in the I030-I034 pipeline's lineage — resolved, per explicit Strategy Office approval, with an additive dual-lineage `oneOf` (`$defs.legacyLineage`/`$defs.productionPackageLineage`) rather than a second competing object; `finished-carousel-builder.mjs` extended additively (`fields.productionPackageId` as an alternative to `fields.carouselContent`, legacy path completely unchanged); `finished-carousel-store.mjs` gained `findByProductionPackageId()`; `control-centre.schema.json`'s `topic_id` widened to nullable in three places (small, necessary, reported before being made) so existing dashboard/job/activity sections don't crash on I034 output — no new Control Centre section needed; real behavior finding — a Templated-rejected render throws `RenderRejected` rather than returning a non-throwing "failed" status, so this milestone catches only that specific error and converts it via I006's own `createRenderResult()`, everything else still aborts the whole run; duplicate protection mirrors I029's own `DuplicateDeliveryError` precedent (only a genuinely completed prior render blocks a retry); asset export (I021/I026) deliberately not composed into the CLI since a freshly-rendered carousel is never yet approved; mock transport remains the default without `--live`; **no live Templated request has been made** — pending a future, separately-authorised Live Verification Gate, first candidate GS01 once I030-I034 are merged |
 | Unit test suite | Done — 1834 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before), 10 from I029.4.1 — 3 added to `automated-operations-bridge-service.test.mjs` (the single-call enrichment, sourced from fake `getExecutionStatus()`/`getReviewStatus()`) + 4 added to `operations-bridge-cli.test.mjs` (`--json` mode: banner suppression, the unified failure shape, backward-compatible plain-text mode) + 3 added to `operations-bridge-delivery-status-regression.test.mjs` (`rejected` and a model-proposed `correction_required`, both through real I029.2+I029.3+I029.4 services, extending its existing failed/completed coverage) — no existing test file's own assertions were weakened or removed, only extended), 72 from I030 — 11 new (`ingested-content.test.mjs`) + 7 new (`ingested-content-store.test.mjs`) + 4 new (`content-source-adapter.test.mjs`) + 6 new (`content-source-mock-adapter.test.mjs`) + 10 new (`content-ingestion-service.test.mjs`) + 10 new (`content-ingestion-cli.test.mjs`) + 6 new (`google-service-account-auth.test.mjs`, a real RSA-keypair-signed JWT verified against its own matching public key) + 9 new (`google-docs-source-adapter.test.mjs`) + 5 new (`google-docs-config.test.mjs`) + 4 new (`control-centre-content-ingestion.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `content_ingestion: null` key, 95 from I031 — 29 new (`editorial-package.test.mjs`, parameterised loops over every required string/array field) + 7 new (`editorial-package-store.test.mjs`) + 15 new (`editorial-analysis-provider.test.mjs`, parameterised loops over every required Editorial Analysis Result field) + 7 new (`editorial-analysis-mock-provider.test.mjs`) + 6 new (`editorial-package-prompt-builder.test.mjs`) + 10 new (`editorial-package-generator.test.mjs`) + 8 new (`editorial-analysis-anthropic-provider.test.mjs`, covering the HTTP transport and real provider together via a mocked `fetch`) + 9 new (`editorial-package-cli.test.mjs`) + 4 new (`control-centre-editorial-package.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `editorial_package: null` key; DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |
 | Render polling / batch rendering / queueing | Not started — explicitly out of scope for I006 |
 | Parallel/concurrent stage execution | Not started — explicitly out of scope for I009; sequential only |
