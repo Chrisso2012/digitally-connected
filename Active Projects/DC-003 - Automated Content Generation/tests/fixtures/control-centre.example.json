@@ -84,5 +84,6 @@
   "delivery_office": null,
   "strategy_review": null,
   "content_ingestion": null,
-  "editorial_package": null
+  "editorial_package": null,
+  "social_media_package": null
 }

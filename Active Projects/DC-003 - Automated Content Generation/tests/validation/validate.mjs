@@ -38,6 +38,7 @@ const APPROVED_FIXTURES = [
   ["controlCentre", "control-centre.example.json"],
   ["ingestedContent", "ingested-content.example.json"],
   ["editorialPackage", "editorial-package.example.json"],
+  ["socialMediaPackage", "social-media-package.example.json"],
 ];
 
 const validator = createValidator();

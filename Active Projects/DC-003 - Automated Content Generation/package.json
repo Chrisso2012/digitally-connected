@@ -38,6 +38,7 @@
     "operations-bridge": "node tests/validation/operations-bridge.mjs",
     "content-ingestion": "node tests/validation/content-ingestion.mjs",
     "editorial-package": "node tests/validation/editorial-package.mjs",
+    "social-media-package": "node tests/validation/social-media-package.mjs",
     "test": "node --test tests/unit/"
   },
   "dependencies": {

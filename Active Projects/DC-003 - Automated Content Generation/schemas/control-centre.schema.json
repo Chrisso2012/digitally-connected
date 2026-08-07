@@ -7,7 +7,7 @@
   "oneOf": [
     {
       "type": "object",
-      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review", "content_ingestion", "editorial_package"],
+      "required": ["kind", "generated_at", "health", "dashboard", "recent_jobs", "recent_activity", "engineering", "bridge", "delivery_office", "strategy_review", "content_ingestion", "editorial_package", "social_media_package"],
       "additionalProperties": false,
       "properties": {
         "kind": { "const": "overview" },
@@ -21,7 +21,8 @@
         "delivery_office": { "$ref": "#/$defs/deliveryOfficeSummary" },
         "strategy_review": { "$ref": "#/$defs/strategyReviewSummary" },
         "content_ingestion": { "$ref": "#/$defs/contentIngestionSummary" },
-        "editorial_package": { "$ref": "#/$defs/editorialPackageSummary" }
+        "editorial_package": { "$ref": "#/$defs/editorialPackageSummary" },
+        "social_media_package": { "$ref": "#/$defs/socialMediaPackageSummary" }
       }
     },
     {
@@ -466,6 +467,38 @@
                     "editorial_package_id": { "type": "string", "pattern": "^ep_[A-Za-z0-9]+$" },
                     "ingested_content_id": { "type": "string", "pattern": "^ic_[A-Za-z0-9]+$" },
                     "primary_headline": { "type": "string" },
+                    "status": { "type": "string" },
+                    "generated_at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              ]
+            },
+            "latest_status": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "socialMediaPackageSummary": {
+      "description": "DC-003-I032 — sourced entirely from the Social Media Package Store, read-only, standalone, no networking of any kind. null when no Social Media Package Store was supplied. A LEAN summary — latest_package never embeds the full platforms/carousel content, mirroring editorialPackageSummary's own precedent.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["total_social_media_packages", "latest_package", "latest_status"],
+          "additionalProperties": false,
+          "properties": {
+            "total_social_media_packages": { "type": "integer", "minimum": 0 },
+            "latest_package": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["social_media_package_id", "editorial_package_id", "hook", "status", "generated_at"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "social_media_package_id": { "type": "string", "pattern": "^sm_[A-Za-z0-9]+$" },
+                    "editorial_package_id": { "type": "string", "pattern": "^ep_[A-Za-z0-9]+$" },
+                    "hook": { "type": "string" },
                     "status": { "type": "string" },
                     "generated_at": { "type": "string", "format": "date-time" }
                   }

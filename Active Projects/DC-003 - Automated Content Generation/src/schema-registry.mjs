@@ -88,6 +88,15 @@ const SCHEMA_FILES = {
   // Centre's own Editorial Package section embeds a lean summary shape,
   // not a $ref to this schema (see README "Control Centre").
   editorialPackage: "editorial-package.schema.json",
+  // DC-003-I032 — the canonical marketing package used by every
+  // downstream rendering milestone, derived from exactly one Editorial
+  // Package above. Unrelated to socialPublishingManifest (that's a
+  // downstream, human-approved, post-rendering publishing instruction;
+  // this is an upstream, AI-generated, pre-rendering draft). Registered
+  // before controlCentre for consistency, though the Control Centre's
+  // own Social Media Package section embeds a lean summary shape, not a
+  // $ref to this schema.
+  socialMediaPackage: "social-media-package.schema.json",
   // DC-003-I024, extended by DC-003-I028/I029/I029.1/I029.3 — the Control
   // Centre's in-memory read model. Must be compiled AFTER
   // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport/bridgeTransportRecord/engineeringStrategyReview
@@ -99,7 +108,7 @@ const SCHEMA_FILES = {
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
 
 /**
- * Loads all twenty-one schemas and returns them keyed by identifier, e.g.
+ * Loads all twenty-two schemas and returns them keyed by identifier, e.g.
  * `registry.topicPackage`. Fails fast on the first missing or malformed
  * schema file.
  */

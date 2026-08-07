@@ -1,0 +1,79 @@
+{
+  "social_media_package_id": "sm_a1b2c3d4e5f60708",
+  "editorial_package_id": "ep_a1b2c3d4e5f60708",
+  "status": "generated",
+  "hook": "Why Local Businesses Need a Digital Marketing Strategy in 2026",
+  "call_to_action": "Learn more about building a digital marketing strategy",
+  "tone": "professional and confident",
+  "audience": "Owners and marketing leads at small and mid-sized local businesses",
+  "platforms": {
+    "linkedin": {
+      "post_text": "A coherent digital marketing strategy is no longer optional for local businesses. Local businesses across every sector are discovering that a coherent digital marketing strategy is no longer optional. Learn more about building a digital marketing strategy.",
+      "hashtags": [
+        "digitalmarketing",
+        "localbusiness",
+        "seo",
+        "contentmarketing"
+      ],
+      "character_count": 256
+    },
+    "facebook": {
+      "post_text": "Why Local Businesses Need a Digital Marketing Strategy in 2026 — A coherent digital marketing strategy is no longer optional for local businesses. Learn more about building a digital marketing strategy.",
+      "hashtags": [
+        "digitalmarketing",
+        "localbusiness"
+      ],
+      "character_count": 202
+    },
+    "x": {
+      "post_text": "Why Local Businesses Need a Digital Marketing Strategy in 2026 #digitalmarketing #localbusiness",
+      "hashtags": [
+        "digitalmarketing",
+        "localbusiness"
+      ],
+      "character_count": 95
+    },
+    "instagram": {
+      "caption": "Why Local Businesses Need a Digital Marketing Strategy in 2026\n\nA coherent digital marketing strategy is no longer optional for local businesses.\n\nLearn more about building a digital marketing strategy.",
+      "hashtags": [
+        "digitalmarketing",
+        "localbusiness",
+        "seo",
+        "contentmarketing"
+      ],
+      "character_count": 202
+    }
+  },
+  "carousel": {
+    "headings": [
+      "A Strategy Is No Longer Optional",
+      "Search Visibility Matters",
+      "Social Proof Compounds Trust",
+      "Content Consistency Pays Off",
+      "Scattered Activity, Real Cost",
+      "A Structured Three-Pillar Approach"
+    ],
+    "slide_copy": [
+      "A coherent digital marketing strategy is no longer optional for local businesses.",
+      "Search visibility matters because most buying journeys begin with a search engine query.",
+      "Social proof compounds trust in a way advertising alone cannot buy.",
+      "Content consistency is rewarded by both algorithms and audiences over time.",
+      "Marketing activity is scattered and inconsistent rather than a repeatable system.",
+      "The reader adopts a structured, three-pillar approach to digital marketing."
+    ],
+    "image_guidance": [
+      "Slide 1: a local storefront with a subtle digital overlay motif — illustrative guidance only, not a real creative brief [mock].",
+      "Slide 2: a search results page with a highlighted local business listing — illustrative guidance only [mock].",
+      "Slide 3: a customer leaving a five-star review on a phone — illustrative guidance only [mock].",
+      "Slide 4: a content calendar with evenly spaced posts — illustrative guidance only [mock].",
+      "Slide 5: a cluttered desk with scattered marketing materials — illustrative guidance only [mock].",
+      "Slide 6: three clean pillars labelled Search, Social, Content — illustrative guidance only [mock]."
+    ]
+  },
+  "metadata": null,
+  "generated_at": "2026-08-07T11:30:00.000Z",
+  "llm_model": "mock-social-media-provider-v1",
+  "prompt_version": "social-media-package.v1",
+  "schema_version": "1.0",
+  "checksum": "d734fd7f65fce3498ee98ef948f538caa02346dfd80498b68b81776e522727c7"
+}
