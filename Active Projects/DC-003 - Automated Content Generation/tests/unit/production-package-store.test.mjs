@@ -26,15 +26,19 @@ function buildStore(storageDir) {
   return createProductionPackageStore({ adapter: createLocalJsonProductionPackageStoreAdapter({ storageDir }) });
 }
 
+const SLIDE_ROLES = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+
 function buildSlide(slideNumber, overrides = {}) {
   const isFinal = slideNumber === 6;
   return {
     slideNumber,
+    slideRole: SLIDE_ROLES[slideNumber - 1],
     headlineMapping: `Headline ${slideNumber}.`,
     bodyCopyMapping: `Body ${slideNumber}.`,
     ctaMapping: isFinal ? "Act now." : null,
     imageGuidanceMapping: `Guidance ${slideNumber}.`,
     placeholderTagMapping: { headline: `Headline ${slideNumber}.`, body: `Body ${slideNumber}.`, cta: isFinal ? "Act now." : null, image_guidance: `Guidance ${slideNumber}.` },
+    structuredContent: { statistic: null, quote: null, keyPoints: [] },
     ...overrides,
   };
 }

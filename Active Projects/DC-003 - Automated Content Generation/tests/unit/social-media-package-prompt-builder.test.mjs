@@ -54,5 +54,32 @@ test("never reads ingested content or raw article fields — only Editorial Pack
 });
 
 test("PROMPT_VERSION is exported and stable", () => {
-  assert.equal(PROMPT_VERSION, "social-media-package.v1");
+  assert.equal(PROMPT_VERSION, "social-media-package.v2");
+});
+
+// --- DC-003-I032.1 — six semantic roles / evidence-only policy in the prompt
+
+test("prompt enumerates the six fixed semantic slide roles in order", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /1\. cover/);
+  assert.match(prompt, /2\. insight/);
+  assert.match(prompt, /3\. statistic/);
+  assert.match(prompt, /4\. quote/);
+  assert.match(prompt, /5\. takeaway/);
+  assert.match(prompt, /6\. cta/);
+});
+
+test("prompt states the evidence-only policy for statistics and quotes explicitly", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /statistic.*MUST be null unless a real number/s);
+  assert.match(prompt, /quote.*MUST be null unless a real quote genuinely exists/s);
+  assert.match(prompt, /never invent a speaker name or title/);
+});
+
+test("prompt describes the carousel.slides output shape with slideRole/statistic/quote/keyPoints", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /"slideRole"/);
+  assert.match(prompt, /"statistic"/);
+  assert.match(prompt, /"quote"/);
+  assert.match(prompt, /"keyPoints"/);
 });

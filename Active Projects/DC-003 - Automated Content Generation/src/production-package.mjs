@@ -20,6 +20,7 @@ import { InvalidProductionPackageInputError, ProductionPackageValidationError } 
 
 const SOCIAL_MEDIA_PACKAGE_ID_PATTERN = /^sm_[A-Za-z0-9]+$/;
 const SLIDE_COUNT = 6;
+const SLIDE_ROLES = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
 
 function generateProductionPackageId() {
   return "pp_" + randomUUID().replace(/-/g, "").slice(0, 16);
@@ -41,17 +42,48 @@ function checkNullableString(value, label) {
   }
 }
 
+// DC-003-I032.1 — validates the renderer-agnostic evidence container
+// (statistic/quote/keyPoints) copied verbatim from the source Social
+// Media Package. Never fabricates: a null statistic/quote here means
+// exactly what it means upstream — no real evidence exists, and this
+// factory never invents a substitute.
+function checkStructuredContent(structuredContent, label) {
+  if (!structuredContent || typeof structuredContent !== "object") {
+    throw new InvalidProductionPackageInputError(`fields.${label} is required`);
+  }
+  if (structuredContent.statistic !== null) {
+    const statistic = structuredContent.statistic;
+    if (!statistic || typeof statistic !== "object" || !isNonEmptyString(statistic.value) || !isNonEmptyString(statistic.context)) {
+      throw new InvalidProductionPackageInputError(`fields.${label}.statistic must be null or { value, context } with non-empty strings`);
+    }
+  }
+  if (structuredContent.quote !== null) {
+    const quote = structuredContent.quote;
+    if (!quote || typeof quote !== "object" || !isNonEmptyString(quote.quoteText)) {
+      throw new InvalidProductionPackageInputError(`fields.${label}.quote must be null or { quoteText } with a non-empty string`);
+    }
+  }
+  const keyPoints = structuredContent.keyPoints ?? [];
+  if (!Array.isArray(keyPoints) || keyPoints.length > 4 || !keyPoints.every(isNonEmptyString)) {
+    throw new InvalidProductionPackageInputError(`fields.${label}.keyPoints must be an array of 0-4 non-empty strings`);
+  }
+}
+
 function checkSlideSequence(slideSequence) {
   if (!Array.isArray(slideSequence) || slideSequence.length !== SLIDE_COUNT) {
     throw new InvalidProductionPackageInputError(`fields.slideSequence must be an array of exactly ${SLIDE_COUNT} slides`);
   }
   slideSequence.forEach((slide, index) => {
     const expectedNumber = index + 1;
+    const expectedRole = SLIDE_ROLES[index];
     if (!slide || typeof slide !== "object") {
       throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}] is required`);
     }
     if (slide.slideNumber !== expectedNumber) {
       throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}].slideNumber must be ${expectedNumber}, got ${JSON.stringify(slide.slideNumber)}`);
+    }
+    if (slide.slideRole !== expectedRole) {
+      throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}].slideRole must be "${expectedRole}" (fixed positional order), got ${JSON.stringify(slide.slideRole)}`);
     }
     checkNonEmptyString(slide.headlineMapping, `slideSequence[${index}].headlineMapping`);
     checkNonEmptyString(slide.bodyCopyMapping, `slideSequence[${index}].bodyCopyMapping`);
@@ -73,6 +105,8 @@ function checkSlideSequence(slideSequence) {
     checkNonEmptyString(tags.body, `slideSequence[${index}].placeholderTagMapping.body`);
     checkNonEmptyString(tags.image_guidance, `slideSequence[${index}].placeholderTagMapping.image_guidance`);
     checkNullableString(tags.cta ?? null, `slideSequence[${index}].placeholderTagMapping.cta`);
+
+    checkStructuredContent(slide.structuredContent, `slideSequence[${index}].structuredContent`);
   });
 }
 
@@ -83,6 +117,7 @@ function checksumOf(value) {
 function toSnakeCaseSlide(slide) {
   return {
     slide_number: slide.slideNumber,
+    slide_role: slide.slideRole,
     headline_mapping: slide.headlineMapping,
     body_copy_mapping: slide.bodyCopyMapping,
     cta_mapping: slide.ctaMapping ?? null,
@@ -92,6 +127,11 @@ function toSnakeCaseSlide(slide) {
       body: slide.placeholderTagMapping.body,
       cta: slide.placeholderTagMapping.cta ?? null,
       image_guidance: slide.placeholderTagMapping.image_guidance,
+    },
+    structured_content: {
+      statistic: slide.structuredContent.statistic ?? null,
+      quote: slide.structuredContent.quote ? { quote_text: slide.structuredContent.quote.quoteText } : null,
+      key_points: slide.structuredContent.keyPoints ?? [],
     },
   };
 }
@@ -107,9 +147,14 @@ function toSnakeCaseSlide(slide) {
  * fields.platform — optional, string or null (default null).
  * fields.designId / templateId — required, non-empty strings.
  * fields.slideSequence — required, array of exactly 6
- *   { slideNumber, headlineMapping, bodyCopyMapping, ctaMapping,
- *     imageGuidanceMapping, placeholderTagMapping } — ctaMapping must be
- *   non-null on slide 6 and null everywhere else.
+ *   { slideNumber, slideRole, headlineMapping, bodyCopyMapping, ctaMapping,
+ *     imageGuidanceMapping, placeholderTagMapping, structuredContent } —
+ *   ctaMapping must be non-null on slide 6 and null everywhere else;
+ *   slideRole must follow the fixed positional order (DC-003-I032.1)
+ *   cover/insight/statistic/quote/takeaway/cta; structuredContent is
+ *   { statistic, quote, keyPoints }, copied verbatim from the source
+ *   Social Media Package — statistic/quote are null when no real
+ *   evidence exists, never fabricated here.
  * fields.renderingMetadata — required object
  *   { mappingStrategy, slideCount, generator }.
  * fields.validationMetadata — required object

@@ -102,10 +102,15 @@
   "$defs": {
     "productionSlide": {
       "type": "object",
-      "required": ["slide_number", "headline_mapping", "body_copy_mapping", "cta_mapping", "image_guidance_mapping", "placeholder_tag_mapping"],
+      "required": ["slide_number", "slide_role", "headline_mapping", "body_copy_mapping", "cta_mapping", "image_guidance_mapping", "placeholder_tag_mapping", "structured_content"],
       "additionalProperties": false,
       "properties": {
         "slide_number": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "slide_role": {
+          "type": "string",
+          "enum": ["cover", "insight", "statistic", "quote", "takeaway", "cta"],
+          "description": "DC-003-I032.1 — copied verbatim from the source Social Media Package's own carousel.slides[i].slide_role. Renderer-agnostic (never a Templated field/template name) — a chosen Renderer Adapter resolves this into its own real per-slide template selection (see templated-renderer-adapter.mjs's templateKeyForSlide())."
+        },
         "headline_mapping": { "type": "string", "minLength": 1 },
         "body_copy_mapping": { "type": "string", "minLength": 1 },
         "cta_mapping": {
@@ -123,6 +128,47 @@
             "body": { "type": "string", "minLength": 1 },
             "cta": { "type": ["string", "null"] },
             "image_guidance": { "type": "string", "minLength": 1 }
+          }
+        },
+        "structured_content": {
+          "type": "object",
+          "description": "DC-003-I032.1 — copied verbatim from the source Social Media Package's own carousel.slides[i] evidence fields. Renderer-agnostic (a generic evidence container, never a Templated layer name) — never fabricated here or anywhere downstream; a null statistic/quote must stay null through to whatever a Renderer Adapter does with it (e.g. omitting that template's optional layer entirely rather than inventing a value).",
+          "required": ["statistic", "quote", "key_points"],
+          "additionalProperties": false,
+          "properties": {
+            "statistic": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["value", "context"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "value": { "type": "string", "minLength": 1 },
+                    "context": { "type": "string", "minLength": 1 }
+                  }
+                }
+              ]
+            },
+            "quote": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["quote_text"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "quote_text": { "type": "string", "minLength": 1 }
+                  }
+                }
+              ]
+            },
+            "key_points": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 0,
+              "maxItems": 4
+            }
           }
         }
       }

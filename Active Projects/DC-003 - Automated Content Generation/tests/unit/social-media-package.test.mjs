@@ -20,6 +20,16 @@ function buildFields(overrides = {}) {
       headings: ["H1", "H2", "H3", "H4", "H5", "H6"],
       slideCopy: ["S1", "S2", "S3", "S4", "S5", "S6"],
       imageGuidance: ["G1", "G2", "G3", "G4", "G5", "G6"],
+      slides: ["cover", "insight", "statistic", "quote", "takeaway", "cta"].map((slideRole, index) => ({
+        slideNumber: index + 1,
+        slideRole,
+        heading: `H${index + 1}`,
+        body: `S${index + 1}`,
+        imageGuidance: `G${index + 1}`,
+        statistic: slideRole === "statistic" ? { value: "50%", context: "S3" } : null,
+        quote: slideRole === "quote" ? { quoteText: "S4" } : null,
+        keyPoints: slideRole === "takeaway" ? ["S5"] : [],
+      })),
     },
     llmModel: "mock-social-media-provider-v1",
     promptVersion: "social-media-package.v1",
@@ -117,4 +127,71 @@ test("throws InvalidSocialMediaPackageInputError when metadata is a non-object, 
 test("throws SocialMediaPackageValidationError when the assembled record still fails schema validation", () => {
   const fakeValidator = { validate: () => ({ valid: false, errors: [{ path: "(root)", message: "forced failure" }] }) };
   assert.throws(() => createSocialMediaPackage(buildFields(), { validator: fakeValidator }), SocialMediaPackageValidationError);
+});
+
+// --- DC-003-I032.1 — carousel.slides persistence -----------------------
+
+test("persists carousel.slides with snake_case keys, statistic/quote/key_points preserved verbatim", () => {
+  const record = createSocialMediaPackage(buildFields());
+  assert.equal(record.carousel.slides.length, 6);
+  const statisticSlide = record.carousel.slides.find((s) => s.slide_role === "statistic");
+  assert.deepEqual(statisticSlide.statistic, { value: "50%", context: "S3" });
+  const quoteSlide = record.carousel.slides.find((s) => s.slide_role === "quote");
+  assert.deepEqual(quoteSlide.quote, { quote_text: "S4" });
+  const takeawaySlide = record.carousel.slides.find((s) => s.slide_role === "takeaway");
+  assert.deepEqual(takeawaySlide.key_points, ["S5"]);
+  const coverSlide = record.carousel.slides.find((s) => s.slide_role === "cover");
+  assert.equal(coverSlide.statistic, null);
+  assert.equal(coverSlide.quote, null);
+  assert.deepEqual(coverSlide.key_points, []);
+});
+
+test("throws InvalidSocialMediaPackageInputError when carousel.slides has fewer than 6 entries", () => {
+  const fields = buildFields();
+  fields.carousel.slides = fields.carousel.slides.slice(0, 5);
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test("throws InvalidSocialMediaPackageInputError when a slide's slideRole is out of the fixed positional order", () => {
+  const fields = buildFields();
+  fields.carousel.slides[2] = { ...fields.carousel.slides[2], slideRole: "quote" };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test("throws InvalidSocialMediaPackageInputError when a slide's heading is blank", () => {
+  const fields = buildFields();
+  fields.carousel.slides[0] = { ...fields.carousel.slides[0], heading: "" };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test("throws InvalidSocialMediaPackageInputError when statistic is a malformed non-null object", () => {
+  const fields = buildFields();
+  const index = fields.carousel.slides.findIndex((s) => s.slideRole === "statistic");
+  fields.carousel.slides[index] = { ...fields.carousel.slides[index], statistic: { value: "50%" } };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test("throws InvalidSocialMediaPackageInputError when quote is a malformed non-null object", () => {
+  const fields = buildFields();
+  const index = fields.carousel.slides.findIndex((s) => s.slideRole === "quote");
+  fields.carousel.slides[index] = { ...fields.carousel.slides[index], quote: {} };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test("throws InvalidSocialMediaPackageInputError when keyPoints has more than 4 entries", () => {
+  const fields = buildFields();
+  const index = fields.carousel.slides.findIndex((s) => s.slideRole === "takeaway");
+  fields.carousel.slides[index] = { ...fields.carousel.slides[index], keyPoints: ["1", "2", "3", "4", "5"] };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test("accepts statistic: null and quote: null (honest no-evidence fallback) on their respective slides", () => {
+  const fields = buildFields();
+  const statisticIndex = fields.carousel.slides.findIndex((s) => s.slideRole === "statistic");
+  const quoteIndex = fields.carousel.slides.findIndex((s) => s.slideRole === "quote");
+  fields.carousel.slides[statisticIndex] = { ...fields.carousel.slides[statisticIndex], statistic: null };
+  fields.carousel.slides[quoteIndex] = { ...fields.carousel.slides[quoteIndex], quote: null };
+  const record = createSocialMediaPackage(fields);
+  assert.equal(record.carousel.slides[statisticIndex].statistic, null);
+  assert.equal(record.carousel.slides[quoteIndex].quote, null);
 });

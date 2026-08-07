@@ -12,7 +12,7 @@
 
 import { SocialMediaPromptBuilderError } from "./social-media-analysis-errors.mjs";
 
-export const PROMPT_VERSION = "social-media-package.v1";
+export const PROMPT_VERSION = "social-media-package.v2";
 
 const REQUIRED_FIELDS = ["primary_headline", "core_message", "call_to_action"];
 
@@ -74,6 +74,21 @@ export function buildSocialMediaPackagePrompt(editorialPackage) {
     "- Tailor each platform's own tone and length to that platform's own real conventions (LinkedIn: professional, longer form; X: concise, under 280 characters; Facebook: conversational; Instagram: visual-first, caption supports the image).",
     "- Never invent a statistic, quote, or client name presented as real.",
     "",
+    "## Carousel structure — six semantic slide roles",
+    "The carousel must follow this EXACT six-slide structure, in this exact order. Each slide has a fixed role; do not reorder, skip, or merge roles:",
+    "  1. cover — the headline concept that opens the carousel.",
+    "  2. insight — one real, substantive insight from the editorial intelligence above.",
+    "  3. statistic — a real, already-present numeric/percentage/data figure, IF AND ONLY IF one genuinely appears in the editorial intelligence above.",
+    "  4. quote — a real pull quote from the editorial intelligence above.",
+    "  5. takeaway — a practical, actionable summary point drawn from the editorial intelligence above.",
+    "  6. cta — the call to action.",
+    "",
+    "## Evidence-only policy — read carefully, this is a hard constraint",
+    "- The \"statistic\" slide's `statistic` field MUST be null unless a real number, percentage, or figure is ALREADY PRESENT somewhere in the editorial intelligence above (the key insights, pull quotes, executive summary, core message, primary problem, or desired outcome). If no such figure exists, set `statistic` to null and instead use another real key insight as that slide's heading/body — do NOT invent, estimate, round, or paraphrase a number into existence.",
+    "- The \"quote\" slide's `quote` field MUST be null unless a real quote genuinely exists in the pull quotes above. Never invent a quotation, and never invent a speaker name or title (attribution) for any quote — this package has no attribution field for a reason: none is available.",
+    "- The \"takeaway\" slide's `keyPoints` array may contain 0 to 4 entries — only as many REAL key insights as genuinely exist. Never pad it with invented or paraphrased-to-sound-different filler to reach 4.",
+    "- Never invent a case study, a company name, a research finding, or a financial figure not already present above.",
+    "",
     "## Output format",
     "Return exactly one JSON object with these fields:",
     '  "hook": string — the single attention-grabbing opening concept used to seed every platform variation.',
@@ -87,9 +102,20 @@ export function buildSocialMediaPackagePrompt(editorialPackage) {
     '    "instagram": { "caption": string, "hashtags": array of strings }',
     "  }",
     '  "carousel": {',
-    '    "headings": array of exactly 6 strings — one short heading per slide, in order,',
-    '    "slideCopy": array of exactly 6 strings — one body copy string per slide, in order, matching headings,',
-    '    "imageGuidance": array of exactly 6 strings — one visual-direction note per slide, in order',
+    '    "headings": array of exactly 6 strings — one short heading per slide, in order, matching slides[].heading,',
+    '    "slideCopy": array of exactly 6 strings — one body copy string per slide, in order, matching slides[].body,',
+    '    "imageGuidance": array of exactly 6 strings — one visual-direction note per slide, in order, matching slides[].imageGuidance,',
+    '    "slides": array of exactly 6 objects, one per fixed role above, each:',
+    "      {",
+    '        "slideNumber": integer 1-6,',
+    '        "slideRole": one of "cover", "insight", "statistic", "quote", "takeaway", "cta" (must match the fixed order above exactly),',
+    '        "heading": string,',
+    '        "body": string,',
+    '        "imageGuidance": string,',
+    '        "statistic": { "value": string, "context": string } OR null (see Evidence-only policy),',
+    '        "quote": { "quoteText": string } OR null (see Evidence-only policy),',
+    '        "keyPoints": array of 0-4 strings (used only by the "takeaway" slide; empty array for every other role)',
+    "      }",
     "  }",
     "No other top-level fields. No trailing commentary before or after the JSON.",
   ];

@@ -30,6 +30,13 @@ const TEXT_PLATFORMS = ["linkedin", "facebook", "x"];
 const CAROUSEL_ARRAY_FIELDS = ["headings", "slideCopy", "imageGuidance"];
 const CAROUSEL_SLIDE_COUNT = 6;
 
+// DC-003-I032.1 — fixed positional role order every carousel must follow.
+// Not caller-configurable: the six real Templated templates are selected
+// by POSITION (see templated-renderer-adapter.mjs's templateKeyForSlide()),
+// so slide_role is a self-documenting/verifiable label, not something a
+// provider gets to reorder.
+export const CAROUSEL_SLIDE_ROLE_ORDER = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+
 export function assertValidSocialMediaProvider(provider) {
   if (!provider || typeof provider.name !== "string" || typeof provider.generateSocialMedia !== "function") {
     throw new InvalidSocialMediaProviderError();
@@ -84,6 +91,39 @@ export function assertValidSocialMediaResult(result) {
       fail(`carousel.${field} must be an array of exactly ${CAROUSEL_SLIDE_COUNT} non-empty strings`);
     }
   }
+
+  const slides = carousel.slides;
+  if (!Array.isArray(slides) || slides.length !== CAROUSEL_SLIDE_COUNT) {
+    fail(`carousel.slides must be an array of exactly ${CAROUSEL_SLIDE_COUNT} entries`);
+  }
+  slides.forEach((slide, index) => {
+    const expectedNumber = index + 1;
+    const expectedRole = CAROUSEL_SLIDE_ROLE_ORDER[index];
+    if (!slide || typeof slide !== "object") fail(`carousel.slides[${index}] is required`);
+    if (slide.slideNumber !== expectedNumber) {
+      fail(`carousel.slides[${index}].slideNumber must be ${expectedNumber}, got ${JSON.stringify(slide.slideNumber)}`);
+    }
+    if (slide.slideRole !== expectedRole) {
+      fail(`carousel.slides[${index}].slideRole must be "${expectedRole}" (fixed positional order), got ${JSON.stringify(slide.slideRole)}`);
+    }
+    if (!isNonEmptyString(slide.heading)) fail(`carousel.slides[${index}].heading is required and must be a non-empty string`);
+    if (!isNonEmptyString(slide.body)) fail(`carousel.slides[${index}].body is required and must be a non-empty string`);
+    if (!isNonEmptyString(slide.imageGuidance)) fail(`carousel.slides[${index}].imageGuidance is required and must be a non-empty string`);
+
+    if (slide.statistic !== null) {
+      if (!slide.statistic || typeof slide.statistic !== "object" || !isNonEmptyString(slide.statistic.value) || !isNonEmptyString(slide.statistic.context)) {
+        fail(`carousel.slides[${index}].statistic must be null or { value, context } with non-empty strings`);
+      }
+    }
+    if (slide.quote !== null) {
+      if (!slide.quote || typeof slide.quote !== "object" || !isNonEmptyString(slide.quote.quoteText)) {
+        fail(`carousel.slides[${index}].quote must be null or { quoteText } with a non-empty string`);
+      }
+    }
+    if (!Array.isArray(slide.keyPoints) || slide.keyPoints.length > 4 || !slide.keyPoints.every(isNonEmptyString)) {
+      fail(`carousel.slides[${index}].keyPoints must be an array of 0-4 non-empty strings`);
+    }
+  });
 
   return result;
 }

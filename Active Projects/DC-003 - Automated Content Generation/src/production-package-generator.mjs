@@ -108,10 +108,16 @@ export async function generateProductionPackage(socialMediaPackageId, dependenci
   // invalid."
   const candidateSlideSequence = slideSequence.map((slide) => ({
     slide_number: slide.slideNumber,
+    slide_role: slide.slideRole,
     headline_mapping: slide.headlineMapping,
     body_copy_mapping: slide.bodyCopyMapping,
     cta_mapping: slide.ctaMapping,
     image_guidance_mapping: slide.imageGuidanceMapping,
+    structured_content: {
+      statistic: slide.structuredContent?.statistic ?? null,
+      quote: slide.structuredContent?.quote ?? null,
+      key_points: slide.structuredContent?.keyPoints ?? [],
+    },
   }));
   rendererAdapter.mapToRendererPayload({ slide_sequence: candidateSlideSequence }, dependencies);
 

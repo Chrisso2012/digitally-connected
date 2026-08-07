@@ -8486,12 +8486,170 @@ templates. No I035+ concern of any kind.
   `editorial-package` → `social-media-package` → `production-package` →
   `render-production-package`, chained for real. Result: 6/6 slides
   completed, correct slide ordering (`slide_number` 1-6), correct
-  slide-type assignment (`cover` ×5, `cta` ×1), `overall_status:
-  "completed"`, a real round-trip store read matching the rendered
-  record, genuine duplicate-render rejection, genuine
-  unknown-Production-Package-ID rejection, and confirmation that the
-  provider recorded is `"mock-transport"` — no live request occurred at
-  any point.
+  slide-type assignment (originally `cover` ×5, `cta` ×1 — **superseded by
+  DC-003-I032.1 below**, which upgraded this to all six real distinct
+  templates: `cover`/`content`/`statistic`/`quote`/`infographic`/`cta`,
+  reverified end-to-end the same way), `overall_status: "completed"`, a
+  real round-trip store read matching the rendered record, genuine
+  duplicate-render rejection, genuine unknown-Production-Package-ID
+  rejection, and confirmation that the provider recorded is
+  `"mock-transport"` — no live request occurred at any point.
+
+## Semantic Carousel Structure Upgrade (DC-003-I032.1)
+
+Upgrades the Social Media Package Generator (I032) and the Templated
+Renderer Adapter (I033) so a generated carousel uses all six real,
+visually-differentiated Templated designs — not just `cover`/`cta`. I033
+originally mapped every slide onto only two templates (see "Investigation"
+in the I033 section above) because I032's ORIGINAL carousel content was
+deliberately uniform (one heading + one body per slide, no slide-type
+differentiation) — a real, load-bearing gap discovered and reported
+before implementation, not a cosmetic one: it meant a live GS01 run would
+have rendered slides 2-5 visually identical to slide 1.
+
+### The six fixed semantic slide roles
+
+`carousel.slides` (new, additive — the original `headings`/`slide_copy`/
+`image_guidance` parallel arrays are untouched, still required, still
+kept byte-identical to `slides[i].heading`/`body`/`imageGuidance` at the
+same position) always has exactly 6 entries in this fixed order:
+
+| # | Role | Templated template | Extra evidence field |
+|---|---|---|---|
+| 1 | `cover` | `cover` | — |
+| 2 | `insight` | `content` | — |
+| 3 | `statistic` | `statistic` | `statistic: { value, context }` or `null` |
+| 4 | `quote` | `quote` | `quote: { quoteText }` or `null` |
+| 5 | `takeaway` | `infographic` | `keyPoints: string[]` (0-4) |
+| 6 | `cta` | `cta` | — |
+
+Role names are deliberately renderer-agnostic (never a Templated field or
+template name) — I033's `templateKeyForSlide()` is the only place role →
+template is resolved, via a fixed position lookup (`ROLE_TO_TEMPLATE_KEY`
+in `templated-renderer-adapter.mjs`), not content-driven routing.
+
+### No-fabrication policy
+
+This is the load-bearing constraint the whole design serves. Never
+invented, in the mock provider, the Anthropic prompt, or I033's mapping:
+a percentage/figure, a quotation, a speaker name or title (attribution —
+the Editorial Package schema has no attribution field of any kind, and
+none was added), a case study, or a research finding.
+
+- **Statistic**: `statistic.value`/`.context` are populated ONLY when a
+  real numeric/percentage/currency figure is already present somewhere in
+  the Editorial Package's own prose (key insights, pull quotes, executive
+  summary, core message, primary problem, desired outcome). The mock
+  provider's `detectStatistic()` scans for a conservative pattern
+  (`%`, `$`, or an explicit "percent"/"times"/"x" magnitude word attached
+  to digits) specifically so a bare year ("2026") or a list marker ("01")
+  is never misread as a statistic — verified by a dedicated test. The
+  Anthropic path relies on the prompt's explicit "MUST be null unless a
+  real number... is ALREADY PRESENT" instruction instead of code-level
+  detection (code cannot verify a live model's factual claims — see
+  "Live-path limitation" below).
+- **Quote**: `quote.quoteText` is populated only from a real
+  `pull_quotes` entry. No attribution is ever synthesised.
+- **Takeaway**: `keyPoints` holds 0-4 REAL key insights, never padded
+  with invented filler to reach 4.
+
+### Honest fallback, investigated and defined
+
+When a role has no real evidence, its `statistic`/`quote` stays `null` —
+`heading`/`body` fall back to a different genuine Editorial Package
+string (never a placeholder like "no data available", which would itself
+misrepresent the slide as content-bearing). Concretely: the statistic
+slide falls back to a different real key insight than the insight slide
+already used; the quote slide (defensive only — `pull_quotes` is
+schema-guaranteed non-empty) falls back to `core_message`.
+
+At the rendering layer (I033's `buildLayersForTemplate()`), a `null`
+evidence field means the corresponding Templated layers are **omitted
+from the payload entirely** — never filled with fallback prose stuffed
+into a field shaped for something else. Concretely: a `statistic` slide
+with no real figure sends `{}` (empty layers, the Studio template's own
+default renders); a `quote` slide with no real quote likewise sends
+`{}`; a `takeaway` slide with fewer than 4 real key points sends only as
+many `step_N_title`/`step_N_description` layers as it has real content
+for, never all 4. `eyebrow_text` and quote attribution are never
+populated anywhere — no source in this pipeline honestly supplies them
+(same discipline the original I033 mapping already applied).
+
+**Known gap, reported rather than papered over**: the `content` template
+(role `insight`) has its own `list_item_1-3(-4)_text` layers, but I032's
+"insight" role supplies one real heading + one real body, not 3-4
+distinct real list items — inventing list items would fabricate
+structure the Social Media Package doesn't have, so `buildLayersForTemplate()`
+deliberately omits them; a live render of that slide shows only
+`headline_text`/`body_text`, with the template's own default list-item
+placeholders underneath. Enriching I032 to genuinely produce distinct
+list items is a real, separate future milestone, not solved here.
+
+### I031 investigated, not modified
+
+Checked directly against `schemas/editorial-package.schema.json` before
+writing any code: no dedicated statistic field, no attribution field,
+`key_insights`/`pull_quotes` both schema-guaranteed ≥1 entry. **No
+genuine gap required an I031 change** — every fallback above is resolvable
+entirely within I032 using I031's existing fields, which is also this
+milestone's own explicit preference. I031 is unmodified.
+
+### I032 / I033 responsibility boundary, unchanged
+
+I032 remains the only place the social narrative is shaped — both
+providers (mock, and the Anthropic prompt) produce the six roles
+directly; I033 performs a pure, deterministic transform onto real
+template IDs and layer names, generating and rewriting no copy of its
+own. `MAPPING_STRATEGY` is now `"semantic-six-template-v1"` (was
+`"uniform-cover-cta-v1"`) in `production-package.rendering_metadata`.
+
+### Schema evolution
+
+`social-media-package.schema.json` (`1.0` → `1.1`) and
+`production-package.schema.json` (`1.0` → `1.1`) both gained purely
+additive fields — no existing field renamed or removed.
+`social_media_package_prompt_version` is now `social-media-package.v2`.
+
+### Live-path limitation, stated plainly
+
+Code-level fabrication checks (regex detection, schema shape) only apply
+to the MOCK provider — they cannot verify a live Anthropic response's
+factual claims. The live path's only defense is the prompt's explicit
+evidence-only instructions plus the forced tool schema shape; this
+milestone did not, and structurally cannot, add a code-level "is this
+quote real" check for live output. No live Anthropic or Templated
+request was made at any point in this milestone.
+
+### Verification performed
+
+- Docker `npm test`: 2088/2088 passing (was 2039 before this milestone).
+- Docker `npm run validate`: 23/23 fixtures passing, including the
+  updated `social-media-package.example.json`/`production-package.example.json`
+  (now carrying real six-role content, one worked statistic/quote/takeaway
+  example each).
+- Genuine end-to-end mock smoke test, real CLIs chained against the real
+  GS01 content asset, not simulated: `content-ingestion` →
+  `editorial-package` → `social-media-package` → `production-package` →
+  `render-production-package`. Result: `overall_status: "completed"`,
+  6/6 slides, and — the point of this milestone — six DISTINCT real
+  slide types reported (`cover`/`content`/`statistic`/`quote`/
+  `infographic`/`cta`), not the old two-template split. The real mock
+  GS01 article has no detectable statistic, so the statistic slide
+  correctly showed `statistic: null` in the Social Media/Production
+  Package output — the honest-fallback path exercised for real, not just
+  in a unit test.
+- Zero live Anthropic or Templated requests made at any point.
+
+### Files changed
+
+`schemas/social-media-package.schema.json`, `schemas/production-package.schema.json`,
+`config/versions.json`, `src/social-media-package.mjs`,
+`src/social-media-provider.mjs`, `src/social-media-package-prompt-builder.mjs`,
+`src/social-media-mock-provider.mjs`, `src/social-media-transport-http.mjs`,
+`src/production-package.mjs`, `src/production-package-generator.mjs`,
+`src/templated-renderer-adapter.mjs`, plus test files across both
+milestones' own unit-test suites and the two example fixtures. `src/social-media-anthropic-provider.mjs`
+and `src/editorial-package*.mjs` (all of I031) are unmodified.
 
 ## Running tests
 

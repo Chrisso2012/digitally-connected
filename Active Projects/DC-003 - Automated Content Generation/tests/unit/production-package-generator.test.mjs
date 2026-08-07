@@ -47,6 +47,16 @@ function seedSocialMediaPackage(store, overrides = {}) {
           headings: ["H1", "H2", "H3", "H4", "H5", "H6"],
           slideCopy: ["S1", "S2", "S3", "S4", "S5", "S6"],
           imageGuidance: ["G1", "G2", "G3", "G4", "G5", "G6"],
+          slides: ["cover", "insight", "statistic", "quote", "takeaway", "cta"].map((slideRole, index) => ({
+            slideNumber: index + 1,
+            slideRole,
+            heading: `H${index + 1}`,
+            body: `S${index + 1}`,
+            imageGuidance: `G${index + 1}`,
+            statistic: slideRole === "statistic" ? { value: "50%", context: "S3" } : null,
+            quote: slideRole === "quote" ? { quoteText: "S4" } : null,
+            keyPoints: slideRole === "takeaway" ? ["S5"] : [],
+          })),
         },
         llmModel: "mock-social-media-provider-v1",
         promptVersion: "social-media-package.v1",
@@ -70,14 +80,23 @@ function fakeRendererAdapter({ buildSlideSequenceImpl, mapToRendererPayloadImpl 
     buildSlideSequence:
       buildSlideSequenceImpl ??
       (() => ({
-        slideSequence: [1, 2, 3, 4, 5, 6].map((n) => ({
-          slideNumber: n,
-          headlineMapping: `H${n}`,
-          bodyCopyMapping: `B${n}`,
-          ctaMapping: n === 6 ? "CTA" : null,
-          imageGuidanceMapping: `G${n}`,
-          placeholderTagMapping: { headline: `H${n}`, body: `B${n}`, cta: n === 6 ? "CTA" : null, image_guidance: `G${n}` },
-        })),
+        slideSequence: ["cover", "insight", "statistic", "quote", "takeaway", "cta"].map((slideRole, index) => {
+          const n = index + 1;
+          return {
+            slideNumber: n,
+            slideRole,
+            headlineMapping: `H${n}`,
+            bodyCopyMapping: `B${n}`,
+            ctaMapping: n === 6 ? "CTA" : null,
+            imageGuidanceMapping: `G${n}`,
+            placeholderTagMapping: { headline: `H${n}`, body: `B${n}`, cta: n === 6 ? "CTA" : null, image_guidance: `G${n}` },
+            structuredContent: {
+              statistic: slideRole === "statistic" ? { value: "50%", context: "B3" } : null,
+              quote: slideRole === "quote" ? { quoteText: "B4" } : null,
+              keyPoints: slideRole === "takeaway" ? ["B5"] : [],
+            },
+          };
+        }),
         templateId: "fake-template-family-v1",
         renderingMetadata: { mappingStrategy: "fake-strategy", slideCount: 6, generator: "fake-renderer-adapter" },
       })),

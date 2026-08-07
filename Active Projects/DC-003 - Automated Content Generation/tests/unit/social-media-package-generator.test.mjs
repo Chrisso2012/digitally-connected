@@ -74,6 +74,16 @@ const VALID_ANALYSIS = {
     headings: ["1", "2", "3", "4", "5", "6"],
     slideCopy: ["1", "2", "3", "4", "5", "6"],
     imageGuidance: ["1", "2", "3", "4", "5", "6"],
+    slides: ["cover", "insight", "statistic", "quote", "takeaway", "cta"].map((slideRole, index) => ({
+      slideNumber: index + 1,
+      slideRole,
+      heading: String(index + 1),
+      body: String(index + 1),
+      imageGuidance: String(index + 1),
+      statistic: slideRole === "statistic" ? { value: "50%", context: "3" } : null,
+      quote: slideRole === "quote" ? { quoteText: "4" } : null,
+      keyPoints: slideRole === "takeaway" ? ["5"] : [],
+    })),
   },
 };
 

@@ -60,14 +60,25 @@ async function buildLegacyInputs() {
   return { carouselContent, slideRenders, executionMetadata };
 }
 
+const SLIDE_ROLES = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+
 function buildProductionPackage(overrides = {}, idGenerator = () => "pp_dualtest0000001") {
   const slide = (n) => ({
     slideNumber: n,
+    slideRole: SLIDE_ROLES[n - 1],
     headlineMapping: `Headline ${n}.`,
     bodyCopyMapping: `Body ${n}.`,
     ctaMapping: n === 6 ? "Act now." : null,
     imageGuidanceMapping: `Guidance ${n}.`,
     placeholderTagMapping: { headline: `Headline ${n}.`, body: `Body ${n}.`, cta: n === 6 ? "Act now." : null, image_guidance: `Guidance ${n}.` },
+    structuredContent:
+      SLIDE_ROLES[n - 1] === "statistic"
+        ? { statistic: { value: "50%", context: `Body ${n}.` }, quote: null, keyPoints: [] }
+        : SLIDE_ROLES[n - 1] === "quote"
+          ? { statistic: null, quote: { quoteText: `Body ${n}.` }, keyPoints: [] }
+          : SLIDE_ROLES[n - 1] === "takeaway"
+            ? { statistic: null, quote: null, keyPoints: [`Body ${n}.`] }
+            : { statistic: null, quote: null, keyPoints: [] },
   });
   return createProductionPackage(
     {
@@ -77,7 +88,7 @@ function buildProductionPackage(overrides = {}, idGenerator = () => "pp_dualtest
       designId: "dc-002-v1",
       templateId: "dc-carousel-v1",
       slideSequence: [1, 2, 3, 4, 5, 6].map(slide),
-      renderingMetadata: { mappingStrategy: "uniform-cover-cta-v1", slideCount: 6, generator: "templated-renderer-adapter" },
+      renderingMetadata: { mappingStrategy: "semantic-six-template-v1", slideCount: 6, generator: "templated-renderer-adapter" },
       validationMetadata: {
         socialMediaPackageChecksum: "d734fd7f65fce3498ee98ef948f538caa02346dfd80498b68b81776e522727c7",
         allSlidesPopulated: true,

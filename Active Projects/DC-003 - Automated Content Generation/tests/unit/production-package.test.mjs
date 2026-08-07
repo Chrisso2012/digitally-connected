@@ -3,14 +3,18 @@ import assert from "node:assert/strict";
 import { createProductionPackage } from "../../src/production-package.mjs";
 import { InvalidProductionPackageInputError, ProductionPackageValidationError } from "../../src/production-package-errors.mjs";
 
+const SLIDE_ROLES = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+
 function buildSlide(overrides = {}) {
   return {
     slideNumber: 1,
+    slideRole: "cover",
     headlineMapping: "Headline.",
     bodyCopyMapping: "Body copy.",
     ctaMapping: null,
     imageGuidanceMapping: "Guidance.",
     placeholderTagMapping: { headline: "Headline.", body: "Body copy.", cta: null, image_guidance: "Guidance." },
+    structuredContent: { statistic: null, quote: null, keyPoints: [] },
     ...overrides,
   };
 }
@@ -18,16 +22,35 @@ function buildSlide(overrides = {}) {
 function buildSlideSequence() {
   const slides = [];
   for (let i = 1; i <= 5; i += 1) {
-    slides.push(buildSlide({ slideNumber: i, headlineMapping: `Headline ${i}.`, bodyCopyMapping: `Body ${i}.`, imageGuidanceMapping: `Guidance ${i}.`, placeholderTagMapping: { headline: `Headline ${i}.`, body: `Body ${i}.`, cta: null, image_guidance: `Guidance ${i}.` } }));
+    slides.push(
+      buildSlide({
+        slideNumber: i,
+        slideRole: SLIDE_ROLES[i - 1],
+        headlineMapping: `Headline ${i}.`,
+        bodyCopyMapping: `Body ${i}.`,
+        imageGuidanceMapping: `Guidance ${i}.`,
+        placeholderTagMapping: { headline: `Headline ${i}.`, body: `Body ${i}.`, cta: null, image_guidance: `Guidance ${i}.` },
+        structuredContent:
+          SLIDE_ROLES[i - 1] === "statistic"
+            ? { statistic: { value: "50%", context: "Body 3." }, quote: null, keyPoints: [] }
+            : SLIDE_ROLES[i - 1] === "quote"
+              ? { statistic: null, quote: { quoteText: "Body 4." }, keyPoints: [] }
+              : SLIDE_ROLES[i - 1] === "takeaway"
+                ? { statistic: null, quote: null, keyPoints: ["Body 5."] }
+                : { statistic: null, quote: null, keyPoints: [] },
+      })
+    );
   }
   slides.push(
     buildSlide({
       slideNumber: 6,
+      slideRole: "cta",
       headlineMapping: "Headline 6.",
       bodyCopyMapping: "Body 6.",
       ctaMapping: "Act now.",
       imageGuidanceMapping: "Guidance 6.",
       placeholderTagMapping: { headline: "Headline 6.", body: "Body 6.", cta: "Act now.", image_guidance: "Guidance 6." },
+      structuredContent: { statistic: null, quote: null, keyPoints: [] },
     })
   );
   return slides;
@@ -41,7 +64,7 @@ function buildFields(overrides = {}) {
     designId: "dc-002-v1",
     templateId: "dc-carousel-v1",
     slideSequence: buildSlideSequence(),
-    renderingMetadata: { mappingStrategy: "uniform-cover-cta-v1", slideCount: 6, generator: "templated-renderer-adapter" },
+    renderingMetadata: { mappingStrategy: "semantic-six-template-v1", slideCount: 6, generator: "templated-renderer-adapter" },
     validationMetadata: {
       socialMediaPackageChecksum: "d734fd7f65fce3498ee98ef948f538caa02346dfd80498b68b81776e522727c7",
       allSlidesPopulated: true,
@@ -170,4 +193,58 @@ test("throws InvalidProductionPackageInputError when validationMetadata.allSlide
 test("throws ProductionPackageValidationError when the assembled record still fails schema validation", () => {
   const fakeValidator = { validate: () => ({ valid: false, errors: [{ path: "(root)", message: "forced failure" }] }) };
   assert.throws(() => createProductionPackage(buildFields(), { validator: fakeValidator }), ProductionPackageValidationError);
+});
+
+// --- DC-003-I032.1 — slide_role / structured_content ------------------
+
+test("persists slide_role and structured_content verbatim, snake_cased", () => {
+  const record = createProductionPackage(buildFields(), { idGenerator: () => "pp_test00000000002" });
+  assert.deepEqual(
+    record.slide_sequence.map((s) => s.slide_role),
+    SLIDE_ROLES
+  );
+  const statisticSlide = record.slide_sequence.find((s) => s.slide_role === "statistic");
+  assert.deepEqual(statisticSlide.structured_content.statistic, { value: "50%", context: "Body 3." });
+  const quoteSlide = record.slide_sequence.find((s) => s.slide_role === "quote");
+  assert.deepEqual(quoteSlide.structured_content.quote, { quote_text: "Body 4." });
+  const takeawaySlide = record.slide_sequence.find((s) => s.slide_role === "takeaway");
+  assert.deepEqual(takeawaySlide.structured_content.key_points, ["Body 5."]);
+  const coverSlide = record.slide_sequence.find((s) => s.slide_role === "cover");
+  assert.equal(coverSlide.structured_content.statistic, null);
+  assert.equal(coverSlide.structured_content.quote, null);
+  assert.deepEqual(coverSlide.structured_content.key_points, []);
+});
+
+test("throws InvalidProductionPackageInputError when a slide's slideRole deviates from the fixed positional order", () => {
+  const slides = buildSlideSequence();
+  slides[2] = { ...slides[2], slideRole: "quote" };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test("throws InvalidProductionPackageInputError when structuredContent is missing", () => {
+  const slides = buildSlideSequence();
+  delete slides[0].structuredContent;
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test("throws InvalidProductionPackageInputError when structuredContent.statistic is a malformed non-null object", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "statistic");
+  slides[index] = { ...slides[index], structuredContent: { statistic: { value: "50%" }, quote: null, keyPoints: [] } };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test("throws InvalidProductionPackageInputError when structuredContent.keyPoints has more than 4 entries", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "takeaway");
+  slides[index] = { ...slides[index], structuredContent: { statistic: null, quote: null, keyPoints: ["1", "2", "3", "4", "5"] } };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test("accepts null statistic/quote on their own slides (honest no-evidence fallback carried through unchanged)", () => {
+  const slides = buildSlideSequence();
+  const statisticIndex = slides.findIndex((s) => s.slideRole === "statistic");
+  slides[statisticIndex] = { ...slides[statisticIndex], structuredContent: { statistic: null, quote: null, keyPoints: [] } };
+  const record = createProductionPackage(buildFields({ slideSequence: slides }));
+  assert.equal(record.slide_sequence[statisticIndex].structured_content.statistic, null);
 });

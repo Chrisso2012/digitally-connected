@@ -58,7 +58,7 @@ test("carousel headings/slideCopy/imageGuidance each have exactly 6 entries draw
   assert.equal(parsed.carousel.headings.length, 6);
   assert.equal(parsed.carousel.slideCopy.length, 6);
   assert.equal(parsed.carousel.imageGuidance.length, 6);
-  const pool = [ep.primary_headline, ep.supporting_headline, ep.core_message, ep.desired_outcome, ep.primary_problem, ep.executive_summary, ...ep.key_insights, ...ep.pull_quotes];
+  const pool = [ep.primary_headline, ep.supporting_headline, ep.core_message, ep.desired_outcome, ep.primary_problem, ep.executive_summary, ep.call_to_action, ...ep.key_insights, ...ep.pull_quotes];
   for (const copy of parsed.carousel.slideCopy) {
     assert.ok(pool.includes(copy), `expected "${copy}" to be a real Editorial Package string, not fabricated`);
   }
@@ -85,4 +85,127 @@ test("still returns a fully valid result for an Editorial Package with only the 
 test("throws a plain Error when context.editorialPackage is missing", async () => {
   const provider = createSocialMediaMockProvider();
   await assert.rejects(() => provider.generateSocialMedia("prompt", {}));
+});
+
+// --- DC-003-I032.1 — semantic six-role carousel ------------------------
+
+const EXPECTED_ROLE_ORDER = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+
+test("carousel.slides has exactly 6 entries in the fixed positional role order", async () => {
+  const provider = createSocialMediaMockProvider();
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: buildEditorialPackage() });
+  const parsed = JSON.parse(raw);
+  assert.equal(parsed.carousel.slides.length, 6);
+  parsed.carousel.slides.forEach((slide, index) => {
+    assert.equal(slide.slideNumber, index + 1);
+    assert.equal(slide.slideRole, EXPECTED_ROLE_ORDER[index]);
+  });
+});
+
+test("carousel.slides[].heading/body/imageGuidance are byte-identical to the legacy headings/slideCopy/imageGuidance arrays at the same position", async () => {
+  const provider = createSocialMediaMockProvider();
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: buildEditorialPackage() });
+  const parsed = JSON.parse(raw);
+  parsed.carousel.slides.forEach((slide, index) => {
+    assert.equal(slide.heading, parsed.carousel.headings[index]);
+    assert.equal(slide.body, parsed.carousel.slideCopy[index]);
+    assert.equal(slide.imageGuidance, parsed.carousel.imageGuidance[index]);
+  });
+});
+
+test("only the statistic slide ever carries a non-null statistic, and only the quote slide ever carries a non-null quote", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ key_insights: ["Nearly 73% of local searches lead to a same-day visit.", "Social proof compounds trust over time."] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  parsed.carousel.slides.forEach((slide) => {
+    if (slide.slideRole !== "statistic") assert.equal(slide.statistic, null, `${slide.slideRole} slide must never carry a statistic`);
+    if (slide.slideRole !== "quote") assert.equal(slide.quote, null, `${slide.slideRole} slide must never carry a quote`);
+    if (slide.slideRole !== "takeaway") assert.deepEqual(slide.keyPoints, [], `${slide.slideRole} slide must never carry keyPoints`);
+  });
+});
+
+test("statistic-with-evidence: a real percentage present in a key insight is detected verbatim, never re-derived or rounded", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({
+    key_insights: ["Nearly 73% of local searches lead to a same-day store visit.", "Social proof compounds trust over time."],
+  });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const statisticSlide = parsed.carousel.slides.find((s) => s.slideRole === "statistic");
+  assert.deepEqual(statisticSlide.statistic, {
+    value: "73%",
+    context: "Nearly 73% of local searches lead to a same-day store visit.",
+  });
+});
+
+test("statistic-without-evidence: no percentage/currency/magnitude figure anywhere in the Editorial Package yields statistic: null, never a fabricated figure", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage(); // buildEditorialPackage()'s own default content has no detectable figure
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const statisticSlide = parsed.carousel.slides.find((s) => s.slideRole === "statistic");
+  assert.equal(statisticSlide.statistic, null);
+  // Fallback heading/body still real Editorial Package content, not a placeholder string.
+  assert.ok(statisticSlide.body.length > 0);
+  const pool = [ep.primary_headline, ep.supporting_headline, ep.core_message, ep.desired_outcome, ep.primary_problem, ep.executive_summary, ...ep.key_insights, ...ep.pull_quotes];
+  assert.ok(pool.includes(statisticSlide.body), "fallback statistic-slide body must be real Editorial Package content");
+});
+
+test("a bare year or list-style number is never misread as a statistic", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ key_insights: ["This trend accelerated through 2026 and shows no sign of slowing.", "Social proof compounds trust over time."] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const statisticSlide = parsed.carousel.slides.find((s) => s.slideRole === "statistic");
+  assert.equal(statisticSlide.statistic, null, "a bare year must not be treated as a real statistic");
+});
+
+test("quote-with-evidence: the quote slide's quote.quoteText is a real, verbatim pull_quotes entry", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ pull_quotes: ["A coherent digital marketing strategy is no longer optional."] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const quoteSlide = parsed.carousel.slides.find((s) => s.slideRole === "quote");
+  assert.deepEqual(quoteSlide.quote, { quoteText: "A coherent digital marketing strategy is no longer optional." });
+  assert.equal(quoteSlide.body, "A coherent digital marketing strategy is no longer optional.");
+});
+
+test("quote-without-evidence fallback: an empty pull_quotes array yields quote: null and a real, non-blank fallback body — defensive, since the schema normally guarantees at least one entry", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ pull_quotes: [] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const quoteSlide = parsed.carousel.slides.find((s) => s.slideRole === "quote");
+  assert.equal(quoteSlide.quote, null);
+  assert.equal(quoteSlide.body, ep.core_message);
+});
+
+test("no attribution field of any kind ever appears on a quote slide — the Editorial Package has no attribution source and none is invented", async () => {
+  const provider = createSocialMediaMockProvider();
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: buildEditorialPackage() });
+  const parsed = JSON.parse(raw);
+  const quoteSlide = parsed.carousel.slides.find((s) => s.slideRole === "quote");
+  assert.ok(quoteSlide.quote === null || !("attribution" in quoteSlide.quote), "quote object must never carry an attribution field");
+  assert.ok(quoteSlide.quote === null || !("attributionName" in quoteSlide.quote));
+  assert.ok(quoteSlide.quote === null || !("attributionRole" in quoteSlide.quote));
+});
+
+test("takeaway slide's keyPoints holds only real key_insights entries, never padded to 4 with invented content", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ key_insights: ["Only one real insight exists here."] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const takeawaySlide = parsed.carousel.slides.find((s) => s.slideRole === "takeaway");
+  assert.deepEqual(takeawaySlide.keyPoints, ["Only one real insight exists here."]);
+});
+
+test("takeaway slide's keyPoints caps at 4 even when more than 4 real key insights exist", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ key_insights: ["Insight one.", "Insight two.", "Insight three.", "Insight four.", "Insight five."] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const takeawaySlide = parsed.carousel.slides.find((s) => s.slideRole === "takeaway");
+  assert.equal(takeawaySlide.keyPoints.length, 4);
+  assert.deepEqual(takeawaySlide.keyPoints, ["Insight one.", "Insight two.", "Insight three.", "Insight four."]);
 });

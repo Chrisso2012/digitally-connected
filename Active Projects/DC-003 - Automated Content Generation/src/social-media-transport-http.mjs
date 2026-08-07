@@ -22,6 +22,30 @@ const textVariationSchema = {
   required: ["postText", "hashtags"],
 };
 
+// DC-003-I032.1 — one carousel slide, semantically typed. `statistic`/
+// `quote` are nullable evidence containers (Anthropic's structured-output
+// tool_choice requires every property listed even when the value is
+// null, so both remain in `required` — the model must explicitly choose
+// null rather than omit the field when no real evidence exists).
+const carouselSlideSchema = {
+  type: "object",
+  properties: {
+    slideNumber: { type: "integer", minimum: 1, maximum: 6 },
+    slideRole: { type: "string", enum: ["cover", "insight", "statistic", "quote", "takeaway", "cta"] },
+    heading: { type: "string" },
+    body: { type: "string" },
+    imageGuidance: { type: "string" },
+    statistic: {
+      anyOf: [{ type: "null" }, { type: "object", properties: { value: { type: "string" }, context: { type: "string" } }, required: ["value", "context"] }],
+    },
+    quote: {
+      anyOf: [{ type: "null" }, { type: "object", properties: { quoteText: { type: "string" } }, required: ["quoteText"] }],
+    },
+    keyPoints: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 4 },
+  },
+  required: ["slideNumber", "slideRole", "heading", "body", "imageGuidance", "statistic", "quote", "keyPoints"],
+};
+
 const TOOL_INPUT_SCHEMA = {
   type: "object",
   properties: {
@@ -49,8 +73,9 @@ const TOOL_INPUT_SCHEMA = {
         headings: { type: "array", items: { type: "string" }, minItems: 6, maxItems: 6 },
         slideCopy: { type: "array", items: { type: "string" }, minItems: 6, maxItems: 6 },
         imageGuidance: { type: "array", items: { type: "string" }, minItems: 6, maxItems: 6 },
+        slides: { type: "array", items: carouselSlideSchema, minItems: 6, maxItems: 6 },
       },
-      required: ["headings", "slideCopy", "imageGuidance"],
+      required: ["headings", "slideCopy", "imageGuidance", "slides"],
     },
   },
   required: ["hook", "callToAction", "tone", "audience", "platforms", "carousel"],

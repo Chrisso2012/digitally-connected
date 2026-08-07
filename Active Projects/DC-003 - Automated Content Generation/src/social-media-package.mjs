@@ -20,6 +20,7 @@ const EDITORIAL_PACKAGE_ID_PATTERN = /^ep_[A-Za-z0-9]+$/;
 const TEXT_PLATFORMS = ["linkedin", "facebook", "x"];
 const CAROUSEL_ARRAY_FIELDS = ["headings", "slideCopy", "imageGuidance"];
 const CAROUSEL_SLIDE_COUNT = 6;
+const CAROUSEL_SLIDE_ROLE_ORDER = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
 
 function generateSocialMediaPackageId() {
   return "sm_" + randomUUID().replace(/-/g, "").slice(0, 16);
@@ -63,6 +64,66 @@ function checkCarouselArray(value, label) {
   if (!Array.isArray(value) || value.length !== CAROUSEL_SLIDE_COUNT || !value.every(isNonEmptyString)) {
     throw new InvalidSocialMediaPackageInputError(`fields.carousel.${label} must be an array of exactly ${CAROUSEL_SLIDE_COUNT} non-empty strings`);
   }
+}
+
+// DC-003-I032.1 — validates and normalises the structured, semantically-typed
+// carousel slides. Mirrors checkCarouselArray()'s own "throw
+// InvalidSocialMediaPackageInputError on any structural problem" discipline.
+// `statistic`/`quote` are honest evidence containers — null is a valid,
+// expected value here, never coerced into a fabricated placeholder.
+function buildCarouselSlides(value) {
+  if (!Array.isArray(value) || value.length !== CAROUSEL_SLIDE_COUNT) {
+    throw new InvalidSocialMediaPackageInputError(`fields.carousel.slides must be an array of exactly ${CAROUSEL_SLIDE_COUNT} entries`);
+  }
+  return value.map((slide, index) => {
+    const label = `carousel.slides[${index}]`;
+    const expectedNumber = index + 1;
+    const expectedRole = CAROUSEL_SLIDE_ROLE_ORDER[index];
+    if (!slide || typeof slide !== "object") {
+      throw new InvalidSocialMediaPackageInputError(`fields.${label} is required`);
+    }
+    if (slide.slideNumber !== expectedNumber) {
+      throw new InvalidSocialMediaPackageInputError(`fields.${label}.slideNumber must be ${expectedNumber}`);
+    }
+    if (slide.slideRole !== expectedRole) {
+      throw new InvalidSocialMediaPackageInputError(`fields.${label}.slideRole must be "${expectedRole}" (fixed positional order)`);
+    }
+    checkNonEmptyString(slide.heading, `${label}.heading`);
+    checkNonEmptyString(slide.body, `${label}.body`);
+    checkNonEmptyString(slide.imageGuidance, `${label}.imageGuidance`);
+
+    let statistic = null;
+    if (slide.statistic !== null && slide.statistic !== undefined) {
+      if (typeof slide.statistic !== "object" || !isNonEmptyString(slide.statistic.value) || !isNonEmptyString(slide.statistic.context)) {
+        throw new InvalidSocialMediaPackageInputError(`fields.${label}.statistic must be null or { value, context } with non-empty strings`);
+      }
+      statistic = { value: slide.statistic.value, context: slide.statistic.context };
+    }
+
+    let quote = null;
+    if (slide.quote !== null && slide.quote !== undefined) {
+      if (typeof slide.quote !== "object" || !isNonEmptyString(slide.quote.quoteText)) {
+        throw new InvalidSocialMediaPackageInputError(`fields.${label}.quote must be null or { quoteText } with a non-empty string`);
+      }
+      quote = { quote_text: slide.quote.quoteText };
+    }
+
+    const keyPoints = slide.keyPoints ?? [];
+    if (!Array.isArray(keyPoints) || keyPoints.length > 4 || !keyPoints.every(isNonEmptyString)) {
+      throw new InvalidSocialMediaPackageInputError(`fields.${label}.keyPoints must be an array of 0-4 non-empty strings`);
+    }
+
+    return {
+      slide_number: expectedNumber,
+      slide_role: expectedRole,
+      heading: slide.heading,
+      body: slide.body,
+      image_guidance: slide.imageGuidance,
+      statistic,
+      quote,
+      key_points: keyPoints,
+    };
+  });
 }
 
 function checksumOf(value) {
@@ -120,6 +181,7 @@ export function createSocialMediaPackage(fields = {}, options = {}) {
   for (const field of CAROUSEL_ARRAY_FIELDS) {
     checkCarouselArray(carouselInput[field], field);
   }
+  const carouselSlides = buildCarouselSlides(carouselInput.slides);
 
   checkNonEmptyString(fields.llmModel, "llmModel");
   checkNonEmptyString(fields.promptVersion, "promptVersion");
@@ -142,6 +204,7 @@ export function createSocialMediaPackage(fields = {}, options = {}) {
       headings: carouselInput.headings,
       slide_copy: carouselInput.slideCopy,
       image_guidance: carouselInput.imageGuidance,
+      slides: carouselSlides,
     },
     metadata: fields.metadata ?? null,
     generated_at: now(),

@@ -24,10 +24,10 @@
     "bridge_transport_record": "1.0",
     "engineering_strategy_review": "1.0",
     "editorial_package": "1.0",
-    "social_media_package": "1.0",
-    "production_package": "1.0"
+    "social_media_package": "1.1",
+    "production_package": "1.1"
   },
   "prompt_version": "carousel-copy.v1",
   "editorial_package_prompt_version": "editorial-package.v1",
-  "social_media_package_prompt_version": "social-media-package.v1"
+  "social_media_package_prompt_version": "social-media-package.v2"
 }

@@ -46,34 +46,105 @@
   },
   "carousel": {
     "headings": [
-      "A Strategy Is No Longer Optional",
+      "Why Local Businesses Need a Digital Marketing Strategy in 2026",
       "Search Visibility Matters",
+      "Nearly 90% Start With Search",
       "Social Proof Compounds Trust",
-      "Content Consistency Pays Off",
-      "Scattered Activity, Real Cost",
-      "A Structured Three-Pillar Approach"
+      "A Repeatable Three-Pillar System",
+      "Learn More Today"
     ],
     "slide_copy": [
       "A coherent digital marketing strategy is no longer optional for local businesses.",
       "Search visibility matters because most buying journeys begin with a search engine query.",
+      "Nearly 90% of local buying journeys begin with a search engine query before a purchase decision is made.",
       "Social proof compounds trust in a way advertising alone cannot buy.",
-      "Content consistency is rewarded by both algorithms and audiences over time.",
-      "Marketing activity is scattered and inconsistent rather than a repeatable system.",
-      "The reader adopts a structured, three-pillar approach to digital marketing."
+      "The reader adopts a structured, three-pillar approach to digital marketing.",
+      "Learn more about building a digital marketing strategy"
     ],
     "image_guidance": [
       "Slide 1: a local storefront with a subtle digital overlay motif — illustrative guidance only, not a real creative brief [mock].",
       "Slide 2: a search results page with a highlighted local business listing — illustrative guidance only [mock].",
-      "Slide 3: a customer leaving a five-star review on a phone — illustrative guidance only [mock].",
-      "Slide 4: a content calendar with evenly spaced posts — illustrative guidance only [mock].",
-      "Slide 5: a cluttered desk with scattered marketing materials — illustrative guidance only [mock].",
-      "Slide 6: three clean pillars labelled Search, Social, Content — illustrative guidance only [mock]."
+      "Slide 3: a bold percentage figure over a subtle search-bar motif — illustrative guidance only [mock].",
+      "Slide 4: a customer leaving a five-star review on a phone — illustrative guidance only [mock].",
+      "Slide 5: three clean pillars labelled Search, Social, Content — illustrative guidance only [mock].",
+      "Slide 6: a clear call-to-action button on a clean background — illustrative guidance only [mock]."
+    ],
+    "slides": [
+      {
+        "slide_number": 1,
+        "slide_role": "cover",
+        "heading": "Why Local Businesses Need a Digital Marketing Strategy in 2026",
+        "body": "A coherent digital marketing strategy is no longer optional for local businesses.",
+        "image_guidance": "Slide 1: a local storefront with a subtle digital overlay motif — illustrative guidance only, not a real creative brief [mock].",
+        "statistic": null,
+        "quote": null,
+        "key_points": []
+      },
+      {
+        "slide_number": 2,
+        "slide_role": "insight",
+        "heading": "Search Visibility Matters",
+        "body": "Search visibility matters because most buying journeys begin with a search engine query.",
+        "image_guidance": "Slide 2: a search results page with a highlighted local business listing — illustrative guidance only [mock].",
+        "statistic": null,
+        "quote": null,
+        "key_points": []
+      },
+      {
+        "slide_number": 3,
+        "slide_role": "statistic",
+        "heading": "Nearly 90% Start With Search",
+        "body": "Nearly 90% of local buying journeys begin with a search engine query before a purchase decision is made.",
+        "image_guidance": "Slide 3: a bold percentage figure over a subtle search-bar motif — illustrative guidance only [mock].",
+        "statistic": {
+          "value": "90%",
+          "context": "Nearly 90% of local buying journeys begin with a search engine query before a purchase decision is made."
+        },
+        "quote": null,
+        "key_points": []
+      },
+      {
+        "slide_number": 4,
+        "slide_role": "quote",
+        "heading": "Social Proof Compounds Trust",
+        "body": "Social proof compounds trust in a way advertising alone cannot buy.",
+        "image_guidance": "Slide 4: a customer leaving a five-star review on a phone — illustrative guidance only [mock].",
+        "statistic": null,
+        "quote": {
+          "quote_text": "Social proof compounds trust in a way advertising alone cannot buy."
+        },
+        "key_points": []
+      },
+      {
+        "slide_number": 5,
+        "slide_role": "takeaway",
+        "heading": "A Repeatable Three-Pillar System",
+        "body": "The reader adopts a structured, three-pillar approach to digital marketing.",
+        "image_guidance": "Slide 5: three clean pillars labelled Search, Social, Content — illustrative guidance only [mock].",
+        "statistic": null,
+        "quote": null,
+        "key_points": [
+          "Search visibility matters because most buying journeys begin with a search engine query.",
+          "Social proof compounds trust in a way advertising alone cannot buy.",
+          "Content consistency is rewarded by both algorithms and audiences over time."
+        ]
+      },
+      {
+        "slide_number": 6,
+        "slide_role": "cta",
+        "heading": "Learn More Today",
+        "body": "Learn more about building a digital marketing strategy",
+        "image_guidance": "Slide 6: a clear call-to-action button on a clean background — illustrative guidance only [mock].",
+        "statistic": null,
+        "quote": null,
+        "key_points": []
+      }
     ]
   },
   "metadata": null,
   "generated_at": "2026-08-07T11:30:00.000Z",
   "llm_model": "mock-social-media-provider-v1",
-  "prompt_version": "social-media-package.v1",
-  "schema_version": "1.0",
+  "prompt_version": "social-media-package.v2",
+  "schema_version": "1.1",
   "checksum": "d734fd7f65fce3498ee98ef948f538caa02346dfd80498b68b81776e522727c7"
 }

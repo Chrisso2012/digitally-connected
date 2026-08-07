@@ -56,13 +56,20 @@
     },
     "carousel": {
       "type": "object",
-      "description": "Generic, renderer-agnostic slide content — headings/slide_copy/image_guidance are parallel arrays (same length, same order). Six entries each, matching this codebase's own established six-slide convention (config/templates.json, carousel-slide-spec.mjs's SLIDE_ORDER) — the entry SHAPE stays generic; only the COUNT matches, so a future I033 Carousel Builder can map this content onto the specific six template slot types without this milestone needing to know their field names.",
-      "required": ["headings", "slide_copy", "image_guidance"],
+      "description": "Six-slide carousel content. `headings`/`slide_copy`/`image_guidance` are the original DC-003-I032 parallel arrays (same length, same order) — preserved unchanged for backward compatibility with any existing consumer. `slides` (DC-003-I032.1, additive) carries the same six entries as structured, semantically-typed objects — one per fixed carousel position (cover/insight/statistic/quote/takeaway/cta, in that order) — so a Renderer Adapter can map each slide onto a visually-differentiated template without inventing structure this package doesn't have. `slides[i].heading`/`body`/`image_guidance` are always identical to `headings[i]`/`slide_copy[i]`/`image_guidance[i]` — the two shapes describe the same six slides, never diverging content.",
+      "required": ["headings", "slide_copy", "image_guidance", "slides"],
       "additionalProperties": false,
       "properties": {
         "headings": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 },
         "slide_copy": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 },
-        "image_guidance": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 }
+        "image_guidance": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 },
+        "slides": {
+          "type": "array",
+          "description": "Exactly 6 entries, in fixed positional order — slide 1 is always \"cover\", slide 2 \"insight\", slide 3 \"statistic\", slide 4 \"quote\", slide 5 \"takeaway\", slide 6 \"cta\". `statistic`/`quote` are null whenever the Editorial Package this package was derived from contains no genuine supporting evidence for that slide — see DC-003-I032.1 README \"No-fabrication policy\": a null here must never be papered over with invented data by any downstream consumer.",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/carouselSlide" }
+        }
       }
     },
     "metadata": {
@@ -80,6 +87,54 @@
     }
   },
   "$defs": {
+    "carouselSlide": {
+      "type": "object",
+      "description": "DC-003-I032.1 — one semantically-typed carousel slide. `statistic` and `quote` are honest evidence containers, never fabricated: each is either a real value drawn from the source Editorial Package, or null when no genuine evidence exists for that slide's role. `key_points` (used only by the \"takeaway\" role) holds 0-4 real key insights, never padded with invented content when fewer than 4 exist.",
+      "required": ["slide_number", "slide_role", "heading", "body", "image_guidance", "statistic", "quote", "key_points"],
+      "additionalProperties": false,
+      "properties": {
+        "slide_number": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "slide_role": { "type": "string", "enum": ["cover", "insight", "statistic", "quote", "takeaway", "cta"] },
+        "heading": { "type": "string", "minLength": 1 },
+        "body": { "type": "string", "minLength": 1 },
+        "image_guidance": { "type": "string", "minLength": 1 },
+        "statistic": {
+          "description": "Non-null ONLY when the source Editorial Package contains a real, detectable numeric/percentage/currency figure — `value` is that figure verbatim, `context` is the real sentence it was found in. Never synthesised.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["value", "context"],
+              "additionalProperties": false,
+              "properties": {
+                "value": { "type": "string", "minLength": 1 },
+                "context": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        },
+        "quote": {
+          "description": "Non-null ONLY when the source Editorial Package's own pull_quotes contains a usable entry — `quote_text` is that entry verbatim. No attribution field exists here: the Editorial Package schema carries no attribution_name/attribution_role of any kind, and this object never invents one (see DC-003-I032.1 README).",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["quote_text"],
+              "additionalProperties": false,
+              "properties": {
+                "quote_text": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        },
+        "key_points": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 0,
+          "maxItems": 4
+        }
+      }
+    },
     "textPlatformVariation": {
       "type": "object",
       "required": ["post_text", "hashtags", "character_count"],
