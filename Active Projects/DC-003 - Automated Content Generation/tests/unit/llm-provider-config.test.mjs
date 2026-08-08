@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadLlmProviderConfig, resolveLiveMaxAttempts, DEFAULT_LIVE_MAX_ATTEMPTS } from "../../src/llm-provider-config.mjs";
+import {
+  loadLlmProviderConfig,
+  resolveLiveMaxAttempts,
+  DEFAULT_LIVE_MAX_ATTEMPTS,
+  resolveLiveRequestTimeoutMs,
+  DEFAULT_LIVE_REQUEST_TIMEOUT_MS,
+} from "../../src/llm-provider-config.mjs";
 
 test("loadLlmProviderConfig applies documented defaults when no env vars are set", () => {
   const config = loadLlmProviderConfig({});
@@ -62,4 +68,48 @@ test("resolveLiveMaxAttempts rejects a non-positive-integer override", () => {
   assert.throws(() => resolveLiveMaxAttempts("-1"), RangeError);
   assert.throws(() => resolveLiveMaxAttempts("abc"), RangeError);
   assert.throws(() => resolveLiveMaxAttempts("1.5"), RangeError);
+});
+
+// --- DC-003-I031.1 — live request timeout, decoupled from the shared
+// loadLlmProviderConfig().requestTimeoutMs default (still 15000, still
+// what I032's own --live path uses unchanged) -----------------------
+
+test("DEFAULT_LIVE_REQUEST_TIMEOUT_MS is 60000", () => {
+  assert.equal(DEFAULT_LIVE_REQUEST_TIMEOUT_MS, 60000);
+});
+
+test("resolveLiveRequestTimeoutMs defaults to 60000 when no override is given", () => {
+  assert.equal(resolveLiveRequestTimeoutMs(undefined), 60000);
+  assert.equal(resolveLiveRequestTimeoutMs(null), 60000);
+  assert.equal(resolveLiveRequestTimeoutMs(""), 60000);
+});
+
+test("resolveLiveRequestTimeoutMs is completely independent of LLM_REQUEST_TIMEOUT_MS", () => {
+  // loadLlmProviderConfig would resolve requestTimeoutMs: 5000 from this
+  // env (this is exactly what I032's own --live path still reads), but
+  // resolveLiveRequestTimeoutMs must never read it — I031's own live
+  // timeout is deliberately disconnected from the shared config value.
+  const productionConfig = loadLlmProviderConfig({ LLM_REQUEST_TIMEOUT_MS: "5000" });
+  assert.equal(productionConfig.requestTimeoutMs, 5000);
+  assert.equal(resolveLiveRequestTimeoutMs(undefined), 60000);
+});
+
+test("resolveLiveRequestTimeoutMs honors an explicit positive-integer override", () => {
+  assert.equal(resolveLiveRequestTimeoutMs("1000"), 1000);
+  assert.equal(resolveLiveRequestTimeoutMs("30000"), 30000);
+  assert.equal(resolveLiveRequestTimeoutMs("90000"), 90000);
+});
+
+test("resolveLiveRequestTimeoutMs rejects a non-positive-integer override", () => {
+  assert.throws(() => resolveLiveRequestTimeoutMs("0"), RangeError);
+  assert.throws(() => resolveLiveRequestTimeoutMs("-1"), RangeError);
+  assert.throws(() => resolveLiveRequestTimeoutMs("abc"), RangeError);
+  assert.throws(() => resolveLiveRequestTimeoutMs("1.5"), RangeError);
+});
+
+test("resolveLiveRequestTimeoutMs accepts an injected default distinct from DEFAULT_LIVE_REQUEST_TIMEOUT_MS", () => {
+  // Confirms the function is generically reusable (a future milestone
+  // could call it with its own default) without hardcoding 60000 as the
+  // only possible value.
+  assert.equal(resolveLiveRequestTimeoutMs(undefined, 15000), 15000);
 });

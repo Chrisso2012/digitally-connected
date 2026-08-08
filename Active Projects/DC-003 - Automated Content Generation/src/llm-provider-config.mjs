@@ -58,3 +58,35 @@ export function resolveLiveMaxAttempts(explicitOverride) {
   }
   return parsed;
 }
+
+// --- DC-003-I031.1 — live request timeout override, same shape as the
+// live-max-attempts safety above but deliberately NOT shared between
+// milestones. Strategy Office approved a narrowly-scoped increase for
+// I031 only, after two independent genuine live Anthropic requests both
+// timed out at the shared config's own 15000ms default
+// (loadLlmProviderConfig().requestTimeoutMs, still 15000, still used
+// unchanged by I032's own --live path). Only editorial-package.mjs (I031)
+// calls resolveLiveRequestTimeoutMs() — social-media-package.mjs (I032)
+// is untouched by this change and keeps reading config.requestTimeoutMs
+// directly, per Strategy Office's explicit "do not change any other I031
+// responsibility" instruction.
+
+export const DEFAULT_LIVE_REQUEST_TIMEOUT_MS = 60000;
+
+/**
+ * Resolves the per-attempt timeout (ms) a --live CLI invocation should
+ * use. `explicitOverride` is whatever the caller typed after
+ * --live-timeout-ms= (a string) — undefined/null/blank means no override
+ * was given, so `defaultMs` applies. Throws RangeError for anything that
+ * isn't a positive integer.
+ */
+export function resolveLiveRequestTimeoutMs(explicitOverride, defaultMs = DEFAULT_LIVE_REQUEST_TIMEOUT_MS) {
+  if (explicitOverride === undefined || explicitOverride === null || explicitOverride === "") {
+    return defaultMs;
+  }
+  const parsed = Number(explicitOverride);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new RangeError(`--live-timeout-ms must be a positive integer, got "${explicitOverride}"`);
+  }
+  return parsed;
+}

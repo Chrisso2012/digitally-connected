@@ -8,7 +8,7 @@
 // architectural boundary set before this milestone began.
 //
 // Usage:
-//   node tests/validation/editorial-package.mjs create <ingestedContentId> <ingestedContentStoreDirectory> <editorialPackageStoreDirectory> [--live] [--live-max-attempts=N]
+//   node tests/validation/editorial-package.mjs create <ingestedContentId> <ingestedContentStoreDirectory> <editorialPackageStoreDirectory> [--live] [--live-max-attempts=N] [--live-timeout-ms=N]
 //   node tests/validation/editorial-package.mjs inspect <editorialPackageId> <editorialPackageStoreDirectory>
 //   node tests/validation/editorial-package.mjs status <editorialPackageStoreDirectory>
 //   node tests/validation/editorial-package.mjs list <editorialPackageStoreDirectory>
@@ -18,6 +18,14 @@
 // DC-003-I006/I019's own Live Verification Gate safety rule applies
 // identically here: --live defaults to exactly one attempt, independent
 // of LLM_MAX_ATTEMPTS, unless --live-max-attempts=N is explicitly given.
+//
+// DC-003-I031.1 — the --live per-request timeout defaults to 60000ms
+// (resolveLiveRequestTimeoutMs(), llm-provider-config.mjs), independent
+// of the shared loadLlmProviderConfig().requestTimeoutMs (still 15000ms,
+// still what I032's own --live path uses, deliberately unchanged) —
+// raised here only, after two independent genuine live Anthropic
+// requests timed out at the old shared 15000ms default. Override with
+// --live-timeout-ms=N for a one-off run.
 
 import { createLocalJsonIngestedContentStoreAdapter } from "../../src/local-json-ingested-content-store-adapter.mjs";
 import { createIngestedContentStore } from "../../src/ingested-content-store.mjs";
@@ -27,7 +35,7 @@ import { generateEditorialPackage } from "../../src/editorial-package-generator.
 import { createEditorialAnalysisMockProvider } from "../../src/editorial-analysis-mock-provider.mjs";
 import { createAnthropicEditorialAnalysisProvider } from "../../src/editorial-analysis-anthropic-provider.mjs";
 import { createEditorialAnalysisHttpTransport } from "../../src/editorial-analysis-transport-http.mjs";
-import { loadLlmProviderConfig, resolveLiveMaxAttempts } from "../../src/llm-provider-config.mjs";
+import { loadLlmProviderConfig, resolveLiveMaxAttempts, resolveLiveRequestTimeoutMs } from "../../src/llm-provider-config.mjs";
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
 import { DuplicateEditorialPackageError, EditorialPackageGenerationFailedError } from "../../src/editorial-package-errors.mjs";
 import {
@@ -127,6 +135,8 @@ const args = process.argv.slice(2);
 const isLive = args.includes("--live");
 const liveMaxAttemptsArg = args.find((arg) => arg.startsWith("--live-max-attempts="));
 const liveMaxAttemptsValue = liveMaxAttemptsArg ? liveMaxAttemptsArg.split("=")[1] : undefined;
+const liveTimeoutMsArg = args.find((arg) => arg.startsWith("--live-timeout-ms="));
+const liveTimeoutMsValue = liveTimeoutMsArg ? liveTimeoutMsArg.split("=")[1] : undefined;
 const positional = args.filter((arg) => !arg.startsWith("--"));
 const [subcommand, ...rest] = positional;
 
@@ -150,12 +160,16 @@ try {
         process.exit(1);
       }
       maxAttempts = resolveLiveMaxAttempts(liveMaxAttemptsValue); // throws RangeError on a bad override
+      const liveTimeoutMs = resolveLiveRequestTimeoutMs(liveTimeoutMsValue); // throws RangeError on a bad override
       console.log(`Generating LIVE via Anthropic (${config.baseUrl}, model: ${config.model}) — this performs a real API call.`);
       console.log(
         `  maxAttempts: ${maxAttempts}${liveMaxAttemptsValue ? " (explicit --live-max-attempts override)" : " (safe default, independent of LLM_MAX_ATTEMPTS)"}`
       );
+      console.log(
+        `  timeoutMs:   ${liveTimeoutMs}${liveTimeoutMsValue ? " (explicit --live-timeout-ms override)" : " (I031.1 live default, independent of LLM_REQUEST_TIMEOUT_MS)"}`
+      );
       const transport = createEditorialAnalysisHttpTransport(config);
-      provider = createAnthropicEditorialAnalysisProvider({ transport, model: config.model, timeoutMs: config.requestTimeoutMs });
+      provider = createAnthropicEditorialAnalysisProvider({ transport, model: config.model, timeoutMs: liveTimeoutMs });
     } else {
       maxAttempts = config.maxAttempts;
       provider = createEditorialAnalysisMockProvider();
