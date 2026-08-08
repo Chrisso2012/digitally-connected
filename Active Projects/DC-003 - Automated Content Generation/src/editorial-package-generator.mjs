@@ -28,7 +28,7 @@
 import { createEditorialPackage } from "./editorial-package.mjs";
 import { buildEditorialPackagePrompt, PROMPT_VERSION } from "./editorial-package-prompt-builder.mjs";
 import { createEditorialAnalysisMockProvider } from "./editorial-analysis-mock-provider.mjs";
-import { assertValidEditorialAnalysisProvider, assertValidEditorialAnalysisResult } from "./editorial-analysis-provider.mjs";
+import { assertValidEditorialAnalysisProvider, assertValidEditorialAnalysisResult, describeKeyInsightsShape } from "./editorial-analysis-provider.mjs";
 import { MalformedEditorialAnalysisResultError } from "./editorial-analysis-errors.mjs";
 import { withRetry } from "./retry.mjs";
 import { loadVersions } from "./config-loader.mjs";
@@ -123,7 +123,13 @@ export async function generateEditorialPackage(ingestedContentId, dependencies =
         assertValidEditorialAnalysisResult(parsed);
       } catch (cause) {
         if (!(cause instanceof MalformedEditorialAnalysisResultError)) throw cause;
-        return { ok: false, stage: "result-shape", message: cause.message };
+        // DC-003-I031.3 — safe, content-free structural diagnostics only
+        // (see describeKeyInsightsShape()'s own header comment) attached
+        // for whichever caller wants to inspect a "result-shape" failure
+        // more closely (editorial-package.mjs's own --live path does);
+        // never logged/printed here, and never anything but shape/type/
+        // length/boolean facts about keyInsights specifically.
+        return { ok: false, stage: "result-shape", message: cause.message, keyInsightsDiagnostics: describeKeyInsightsShape(parsed?.keyInsights) };
       }
 
       return { ok: true, result: parsed };

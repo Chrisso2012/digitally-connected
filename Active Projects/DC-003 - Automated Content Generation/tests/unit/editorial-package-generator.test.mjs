@@ -154,6 +154,85 @@ test("generateEditorialPackage() throws EditorialPackageGenerationFailedError wh
     );
   }));
 
+// --- DC-003-I031.3 — safe, content-free keyInsightsDiagnostics attached
+// to a "result-shape" failed attempt, reproducing the two real live
+// failure hypotheses (whitespace-only entry; non-array shape) ---------
+
+test("a whitespace-only keyInsights entry surfaces keyInsightsDiagnostics.anyBlankAfterTrim=true, anyZeroLength=false", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const provider = fakeProvider("whitespace-insight", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: ["   "] }));
+
+    try {
+      await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+      assert.fail("expected EditorialPackageGenerationFailedError");
+    } catch (error) {
+      assert.ok(error instanceof EditorialPackageGenerationFailedError);
+      const diagnostics = error.attempts[0].keyInsightsDiagnostics;
+      assert.deepEqual(diagnostics, {
+        exists: true,
+        isUndefined: false,
+        isNull: false,
+        type: "object",
+        isArray: true,
+        length: 1,
+        itemTypes: ["string"],
+        itemLengths: [3],
+        anyZeroLength: false,
+        anyBlankAfterTrim: true,
+      });
+      // The whitespace value itself must never appear anywhere on the error.
+      assert.doesNotMatch(JSON.stringify(error.attempts), /"   "/);
+    }
+  }));
+
+test("an empty-string keyInsights entry surfaces keyInsightsDiagnostics.anyZeroLength=true, anyBlankAfterTrim=true", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const provider = fakeProvider("empty-insight", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: ["a real one", ""] }));
+
+    try {
+      await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+      assert.fail("expected EditorialPackageGenerationFailedError");
+    } catch (error) {
+      const diagnostics = error.attempts[0].keyInsightsDiagnostics;
+      assert.equal(diagnostics.length, 2);
+      assert.equal(diagnostics.anyZeroLength, true);
+      assert.equal(diagnostics.anyBlankAfterTrim, true);
+      assert.deepEqual(diagnostics.itemLengths, [10, 0]);
+    }
+  }));
+
+test("a non-array keyInsights surfaces keyInsightsDiagnostics.isArray=false with its real JS type", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const provider = fakeProvider("wrong-shape-insight", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: "not an array" }));
+
+    try {
+      await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+      assert.fail("expected EditorialPackageGenerationFailedError");
+    } catch (error) {
+      const diagnostics = error.attempts[0].keyInsightsDiagnostics;
+      assert.equal(diagnostics.isArray, false);
+      assert.equal(diagnostics.type, "string");
+      assert.equal(diagnostics.length, null);
+    }
+  }));
+
+test("keyInsightsDiagnostics is absent from a successful attempt", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const provider = fakeProvider("fake-provider", async () => JSON.stringify(VALID_ANALYSIS));
+
+    await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+    // No assertion needed beyond "did not throw" — success attempts never
+    // reach the result-shape catch block that attaches diagnostics.
+  }));
+
 test("generateEditorialPackage() propagates a non-retryable provider error immediately, bypassing retry", () =>
   withTempDir(async (base) => {
     const { ingestedContentStore, editorialPackageStore } = buildStores(base);

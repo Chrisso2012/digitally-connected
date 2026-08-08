@@ -59,6 +59,42 @@ function isNonEmptyString(value) {
  * ingestedContentId/llmModel/promptVersion/schemaVersion, which
  * editorial-package-generator.mjs supplies itself, never the provider.
  */
+// DC-003-I031.3 — safe, content-free structural diagnostics for the one
+// field that has failed validation twice in live use (keyInsights).
+// Reports shape/type/length/boolean facts only — NEVER the actual string
+// values, never article text, never any generated content — so a live
+// failure can be diagnosed without exposing anything this project treats
+// as sensitive. See editorial-package.mjs's own --live path, the only
+// caller: it prints this object (never the raw result) when a
+// "result-shape" attempt fails.
+export function describeKeyInsightsShape(value) {
+  if (value === undefined) {
+    return { exists: false, isUndefined: true, isNull: false, type: "undefined", isArray: false, length: null, itemTypes: null, itemLengths: null, anyZeroLength: null, anyBlankAfterTrim: null };
+  }
+  if (value === null) {
+    return { exists: true, isUndefined: false, isNull: true, type: "object", isArray: false, length: null, itemTypes: null, itemLengths: null, anyZeroLength: null, anyBlankAfterTrim: null };
+  }
+  if (!Array.isArray(value)) {
+    return { exists: true, isUndefined: false, isNull: false, type: typeof value, isArray: false, length: null, itemTypes: null, itemLengths: null, anyZeroLength: null, anyBlankAfterTrim: null };
+  }
+  const itemTypes = value.map((item) => typeof item);
+  const itemLengths = value.map((item) => (typeof item === "string" ? item.length : null));
+  const anyZeroLength = value.some((item) => typeof item === "string" && item.length === 0);
+  const anyBlankAfterTrim = value.some((item) => typeof item === "string" && item.trim() === "");
+  return {
+    exists: true,
+    isUndefined: false,
+    isNull: false,
+    type: "object",
+    isArray: true,
+    length: value.length,
+    itemTypes,
+    itemLengths,
+    anyZeroLength,
+    anyBlankAfterTrim,
+  };
+}
+
 export function assertValidEditorialAnalysisResult(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     throw new MalformedEditorialAnalysisResultError("result is not an object");
