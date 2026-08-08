@@ -20,6 +20,10 @@ function runCli(...args) {
   return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: "utf-8" });
 }
 
+function runCliWithEnv(env, ...args) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: "utf-8", env });
+}
+
 function withTempDir(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "dc003-content-ingestion-cli-"));
   try {
@@ -127,4 +131,26 @@ test("status prints an aggregate summary, including for an empty store", () =>
     assert.match(populated.stdout, /total_ingested:\s+1/);
     assert.match(populated.stdout, /"google_docs":1/);
     assert.match(populated.stdout, /"pending":1/);
+  }));
+
+// --- Google Docs authentication reporting (DC-003 credential-wiring session) ---
+
+test("status reports Google Docs authentication as not available when GOOGLE_SERVICE_ACCOUNT_JSON is unset", () =>
+  withTempDir((dir) => {
+    const { GOOGLE_SERVICE_ACCOUNT_JSON, ...envWithoutCredential } = process.env;
+    const result = runCliWithEnv(envWithoutCredential, "status", dir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /google_docs_auth:\s+not available/);
+  }));
+
+test("status reports Google Docs authentication as available when GOOGLE_SERVICE_ACCOUNT_JSON is set — structural signal only, never the value itself", () =>
+  withTempDir((dir) => {
+    // Deliberately fake, test-only JSON — never a real credential. Only the
+    // presence/non-blankness of the env var is checked by
+    // describeGoogleDocsAuthenticationAvailability(), not its shape.
+    const env = { ...process.env, GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ type: "service_account", client_email: "test@example.invalid", private_key: "test-only-not-real" }) };
+    const result = runCliWithEnv(env, "status", dir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /google_docs_auth:\s+available/);
+    assert.doesNotMatch(result.stdout, /test-only-not-real/, "the credential value must never appear in CLI output");
   }));

@@ -22,7 +22,7 @@ import { createIngestedContentStore } from "../../src/ingested-content-store.mjs
 import { ingestContent, DEFAULT_MIN_WORD_COUNT } from "../../src/content-ingestion-service.mjs";
 import { createContentSourceMockAdapter } from "../../src/content-source-mock-adapter.mjs";
 import { createGoogleDocsSourceAdapter } from "../../src/google-docs-source-adapter.mjs";
-import { loadGoogleDocsSourceConfig } from "../../src/google-docs-config.mjs";
+import { loadGoogleDocsSourceConfig, describeGoogleDocsAuthenticationAvailability } from "../../src/google-docs-config.mjs";
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
 import { ArticleTooShortError, DuplicateIngestionError } from "../../src/content-ingestion-errors.mjs";
 import {
@@ -169,12 +169,14 @@ try {
       byApprovalState[summary.approval_state] = (byApprovalState[summary.approval_state] ?? 0) + 1;
     }
     const latest = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+    const googleDocsAuth = describeGoogleDocsAuthenticationAvailability();
 
     console.log("Content Ingestion status");
-    console.log(`  total_ingested:  ${summaries.length}`);
-    console.log(`  by_source_type:  ${JSON.stringify(bySourceType)}`);
-    console.log(`  by_approval:     ${JSON.stringify(byApprovalState)}`);
-    console.log(`  latest:          ${latest ? `[${latest.ingested_content_id}] "${latest.title}"` : "(none)"}`);
+    console.log(`  total_ingested:          ${summaries.length}`);
+    console.log(`  by_source_type:          ${JSON.stringify(bySourceType)}`);
+    console.log(`  by_approval:             ${JSON.stringify(byApprovalState)}`);
+    console.log(`  latest:                  ${latest ? `[${latest.ingested_content_id}] "${latest.title}"` : "(none)"}`);
+    console.log(`  google_docs_auth:        ${googleDocsAuth.available ? "available" : "not available"} (${googleDocsAuth.mechanism})`);
   } else if (subcommand === "list") {
     const [storeDirectory] = positional;
     if (!storeDirectory) usageAndExit();
