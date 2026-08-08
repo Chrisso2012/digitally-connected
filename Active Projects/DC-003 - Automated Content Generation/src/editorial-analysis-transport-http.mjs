@@ -22,25 +22,42 @@ import { buildSafeDiagnostic } from "./llm-error-diagnostics.mjs";
 
 export const TOOL_NAME = "return_editorial_package";
 
+// DC-003-I031.2 — every string leaf here carries minLength: 1. Root
+// cause of a genuine live failure: this schema's own string/array-item
+// fields previously had no minLength, so Anthropic's structured-output
+// enforcement (which validates strictly against whatever JSON schema is
+// supplied) treated an empty string as schema-valid — while
+// editorial-analysis-provider.mjs's own assertValidEditorialAnalysisResult()
+// has always required every one of these strings to be non-empty. A live
+// response containing a blank keyInsights entry passed Anthropic's own
+// schema check (nothing forbade it) and only then failed local
+// validation, surfacing as a generic "malformed result" rather than
+// being prevented at the source. Fixing this at the schema boundary
+// (never generating an empty string in the first place) is preferred
+// over any post-hoc repair of already-invalid output — see this
+// milestone's own README section for the full investigation.
+const NON_EMPTY_STRING = { type: "string", minLength: 1 };
+const NON_EMPTY_STRING_ARRAY = { type: "array", items: NON_EMPTY_STRING, minItems: 1 };
+
 const TOOL_INPUT_SCHEMA = {
   type: "object",
   properties: {
-    primaryHeadline: { type: "string" },
-    supportingHeadline: { type: "string" },
-    executiveSummary: { type: "string" },
-    coreMessage: { type: "string" },
-    primaryAudience: { type: "string" },
-    primaryProblem: { type: "string" },
-    desiredOutcome: { type: "string" },
-    keyInsights: { type: "array", items: { type: "string" }, minItems: 1 },
-    pullQuotes: { type: "array", items: { type: "string" }, minItems: 1 },
-    callToAction: { type: "string" },
-    keywords: { type: "array", items: { type: "string" }, minItems: 1 },
-    seoTitle: { type: "string" },
-    seoDescription: { type: "string" },
-    suggestedHashtags: { type: "array", items: { type: "string" }, minItems: 1 },
-    editorialThemes: { type: "array", items: { type: "string" }, minItems: 1 },
-    contentCategories: { type: "array", items: { type: "string" }, minItems: 1 },
+    primaryHeadline: NON_EMPTY_STRING,
+    supportingHeadline: NON_EMPTY_STRING,
+    executiveSummary: NON_EMPTY_STRING,
+    coreMessage: NON_EMPTY_STRING,
+    primaryAudience: NON_EMPTY_STRING,
+    primaryProblem: NON_EMPTY_STRING,
+    desiredOutcome: NON_EMPTY_STRING,
+    keyInsights: NON_EMPTY_STRING_ARRAY,
+    pullQuotes: NON_EMPTY_STRING_ARRAY,
+    callToAction: NON_EMPTY_STRING,
+    keywords: NON_EMPTY_STRING_ARRAY,
+    seoTitle: NON_EMPTY_STRING,
+    seoDescription: NON_EMPTY_STRING,
+    suggestedHashtags: NON_EMPTY_STRING_ARRAY,
+    editorialThemes: NON_EMPTY_STRING_ARRAY,
+    contentCategories: NON_EMPTY_STRING_ARRAY,
   },
   required: [
     "primaryHeadline", "supportingHeadline", "executiveSummary", "coreMessage", "primaryAudience", "primaryProblem",

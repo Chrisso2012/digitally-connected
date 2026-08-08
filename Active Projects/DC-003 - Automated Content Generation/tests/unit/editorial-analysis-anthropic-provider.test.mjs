@@ -98,3 +98,48 @@ test("analyzeContent() propagates a transport error unmodified", async () => {
   const provider = createAnthropicEditorialAnalysisProvider({ transport, model: "claude-sonnet-5" });
   await assert.rejects(() => provider.analyzeContent("prompt"), LlmAuthenticationError);
 });
+
+// --- DC-003-I031.2 — the forced tool's own input_schema must reject an
+// empty string at the source, not merely after a local re-validation.
+// Regression coverage for the discovered live failure: Anthropic's
+// structured-output enforcement previously allowed a blank keyInsights
+// entry (or any other string field) because this schema had no
+// minLength, even though editorial-analysis-provider.mjs's own
+// assertValidEditorialAnalysisResult() has always rejected it. -------
+
+function captureSentSchema() {
+  let capturedBody;
+  global.fetch = async (url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return jsonResponse(200, { content: [{ type: "tool_use", name: TOOL_NAME, input: VALID_TOOL_INPUT }] });
+  };
+  return () => capturedBody.tools[0].input_schema;
+}
+
+test("the tool input_schema sent to Anthropic requires minLength: 1 on every top-level string field", async () => {
+  const getSchema = captureSentSchema();
+  const transport = createEditorialAnalysisHttpTransport({ apiKey: "key" });
+  await transport.send({ model: "m", prompt: "p", maxTokens: 100, toolName: TOOL_NAME });
+
+  const schema = getSchema();
+  const stringFields = ["primaryHeadline", "supportingHeadline", "executiveSummary", "coreMessage", "primaryAudience", "primaryProblem", "desiredOutcome", "callToAction", "seoTitle", "seoDescription"];
+  for (const field of stringFields) {
+    assert.equal(schema.properties[field].type, "string", `${field} must be typed string`);
+    assert.equal(schema.properties[field].minLength, 1, `${field} must require minLength: 1`);
+  }
+});
+
+test("the tool input_schema sent to Anthropic requires minLength: 1 on every array field's own string items", async () => {
+  const getSchema = captureSentSchema();
+  const transport = createEditorialAnalysisHttpTransport({ apiKey: "key" });
+  await transport.send({ model: "m", prompt: "p", maxTokens: 100, toolName: TOOL_NAME });
+
+  const schema = getSchema();
+  const arrayFields = ["keyInsights", "pullQuotes", "keywords", "suggestedHashtags", "editorialThemes", "contentCategories"];
+  for (const field of arrayFields) {
+    assert.equal(schema.properties[field].type, "array", `${field} must be typed array`);
+    assert.equal(schema.properties[field].minItems, 1, `${field} must require minItems: 1`);
+    assert.equal(schema.properties[field].items.type, "string", `${field} items must be typed string`);
+    assert.equal(schema.properties[field].items.minLength, 1, `${field} items must require minLength: 1 — this is the exact gap that let a live response's blank keyInsights entry through`);
+  }
+});
