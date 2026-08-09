@@ -96,3 +96,37 @@ test("generateSocialMedia() propagates a transport error unmodified", async () =
   const provider = createAnthropicSocialMediaProvider({ transport, model: "claude-sonnet-5" });
   await assert.rejects(() => provider.generateSocialMedia("prompt"), LlmAuthenticationError);
 });
+
+// --- DC-003-I032.3: onStopReason ---------------------------------------
+// Additive callback, mirroring onUsage's own established pattern exactly.
+// A "max_tokens" stop_reason is the safe, content-free diagnostic signal
+// this milestone exists to surface for the real live carousel failure.
+
+test("generateSocialMedia() surfaces Anthropic's raw stop_reason via onStopReason", async () => {
+  global.fetch = async () => jsonResponse(200, { content: [{ type: "tool_use", name: TOOL_NAME, input: VALID_TOOL_INPUT }], stop_reason: "tool_use" });
+  const transport = createSocialMediaHttpTransport({ apiKey: "key" });
+
+  let capturedStopReason;
+  const provider = createAnthropicSocialMediaProvider({ transport, model: "claude-sonnet-5", onStopReason: (r) => (capturedStopReason = r) });
+  await provider.generateSocialMedia("prompt");
+
+  assert.equal(capturedStopReason, "tool_use");
+});
+
+test("generateSocialMedia() surfaces a max_tokens stop_reason unmodified, even alongside an otherwise-valid tool_use block", async () => {
+  global.fetch = async () => jsonResponse(200, { content: [{ type: "tool_use", name: TOOL_NAME, input: VALID_TOOL_INPUT }], stop_reason: "max_tokens" });
+  const transport = createSocialMediaHttpTransport({ apiKey: "key" });
+
+  let capturedStopReason;
+  const provider = createAnthropicSocialMediaProvider({ transport, model: "claude-sonnet-5", onStopReason: (r) => (capturedStopReason = r) });
+  await provider.generateSocialMedia("prompt");
+
+  assert.equal(capturedStopReason, "max_tokens");
+});
+
+test("generateSocialMedia() works without onStopReason supplied at all (optional, mirrors onUsage)", async () => {
+  global.fetch = async () => jsonResponse(200, { content: [{ type: "tool_use", name: TOOL_NAME, input: VALID_TOOL_INPUT }], stop_reason: "tool_use" });
+  const transport = createSocialMediaHttpTransport({ apiKey: "key" });
+  const provider = createAnthropicSocialMediaProvider({ transport, model: "claude-sonnet-5" });
+  await assert.doesNotReject(() => provider.generateSocialMedia("prompt"));
+});

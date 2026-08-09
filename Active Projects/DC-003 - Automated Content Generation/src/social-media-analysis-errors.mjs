@@ -14,9 +14,19 @@ export class InvalidSocialMediaProviderError extends Error {
 }
 
 export class MalformedSocialMediaResultError extends Error {
-  constructor(reason) {
+  // DC-003-I032.3 — `field` (optional, null for a whole-result shape
+  // failure like "result is not an object") names exactly which field
+  // assertValidSocialMediaResult() rejected, a dot/bracket path
+  // (e.g. "carousel", "carousel.slides[2].statistic"), structured rather
+  // than left to string-parsing this error's own message — lets a caller
+  // (social-media-package-generator.mjs) attach safe, field-scoped
+  // structural diagnostics without guessing which field actually failed.
+  // Mirrors MalformedEditorialAnalysisResultError's own `field` param
+  // (editorial-analysis-errors.mjs, DC-003-I031.5) exactly.
+  constructor(reason, field = null) {
     super(`Social Media Provider returned a malformed result — ${reason}`);
     this.name = "MalformedSocialMediaResultError";
+    this.field = field;
   }
 }
 

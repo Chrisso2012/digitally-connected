@@ -28,7 +28,7 @@
 import { createSocialMediaPackage } from "./social-media-package.mjs";
 import { buildSocialMediaPackagePrompt, PROMPT_VERSION } from "./social-media-package-prompt-builder.mjs";
 import { createSocialMediaMockProvider } from "./social-media-mock-provider.mjs";
-import { assertValidSocialMediaProvider, assertValidSocialMediaResult } from "./social-media-provider.mjs";
+import { assertValidSocialMediaProvider, assertValidSocialMediaResult, describeResultFieldShape, getResultFieldByPath } from "./social-media-provider.mjs";
 import { MalformedSocialMediaResultError } from "./social-media-analysis-errors.mjs";
 import { withRetry } from "./retry.mjs";
 import { loadVersions } from "./config-loader.mjs";
@@ -119,7 +119,23 @@ export async function generateSocialMediaPackage(editorialPackageId, dependencie
         assertValidSocialMediaResult(parsed);
       } catch (cause) {
         if (!(cause instanceof MalformedSocialMediaResultError)) throw cause;
-        return { ok: false, stage: "result-shape", message: cause.message };
+        // DC-003-I032.3 — safe, content-free structural diagnostics only
+        // (see describeResultFieldShape()'s own header comment), scoped
+        // to whichever field actually failed (cause.field) — never
+        // logged/printed here, and never anything but shape/type/length/
+        // key-name facts. topLevelKeys additionally shows every key the
+        // provider's result DID have, so a missing "carousel" key is
+        // distinguishable from a present-but-wrong-typed one at a glance.
+        return {
+          ok: false,
+          stage: "result-shape",
+          message: cause.message,
+          fieldDiagnostics: {
+            field: cause.field,
+            shape: describeResultFieldShape(getResultFieldByPath(parsed, cause.field)),
+            topLevelKeys: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed) : null,
+          },
+        };
       }
 
       return { ok: true, result: parsed };

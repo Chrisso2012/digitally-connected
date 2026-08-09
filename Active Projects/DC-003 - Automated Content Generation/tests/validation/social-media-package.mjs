@@ -134,6 +134,16 @@ const [subcommand, ...rest] = positional;
 
 if (!subcommand) usageAndExit();
 
+// DC-003-I032.3 — every stop_reason Anthropic returned this run, in call
+// order (one entry per provider call that got a response at all — a
+// network/timeout failure never reaches this callback). Declared outside
+// the try block so the catch block below can still read it. Not paired
+// 1:1 with error.attempts (an attempt can fail before ever calling the
+// provider), but a bare list is enough to answer the one diagnostic
+// question this exists for: did any attempt this run get cut off by
+// max_tokens?
+const stopReasons = [];
+
 try {
   if (subcommand === "create") {
     const [editorialPackageId, editorialPackageStoreDirectory, socialMediaPackageStoreDirectory] = rest;
@@ -161,7 +171,12 @@ try {
         `  timeoutMs:   ${liveTimeoutMs}${liveTimeoutMsValue ? " (explicit --live-timeout-ms override)" : " (I032.2 live default, independent of LLM_REQUEST_TIMEOUT_MS)"}`
       );
       const transport = createSocialMediaHttpTransport(config);
-      provider = createAnthropicSocialMediaProvider({ transport, model: config.model, timeoutMs: liveTimeoutMs });
+      provider = createAnthropicSocialMediaProvider({
+        transport,
+        model: config.model,
+        timeoutMs: liveTimeoutMs,
+        onStopReason: (stopReason) => stopReasons.push(stopReason),
+      });
     } else {
       maxAttempts = config.maxAttempts;
       provider = createSocialMediaMockProvider();
@@ -209,6 +224,22 @@ try {
   if (KNOWN_ERRORS.some((ErrorClass) => error instanceof ErrorClass)) {
     console.error(`FAIL  ${error.name}`);
     console.error(`  ${error.message}`);
+    // DC-003-I032.3 — safe, content-free structural diagnostics only for
+    // the --live path (see describeResultFieldShape()'s own header
+    // comment): shape/type/length/key-name facts about whichever field
+    // actually failed, plus every stop_reason Anthropic returned this
+    // run — never the actual generated strings. Mirrors
+    // tests/validation/editorial-package.mjs's own I031.3 precedent.
+    if (isLive && error instanceof SocialMediaPackageGenerationFailedError) {
+      for (const attempt of error.attempts ?? []) {
+        if (attempt.fieldDiagnostics) {
+          console.error(`  field diagnostics: ${JSON.stringify(attempt.fieldDiagnostics)}`);
+        }
+      }
+      if (stopReasons.length > 0) {
+        console.error(`  stop reasons (call order): ${JSON.stringify(stopReasons)}`);
+      }
+    }
   } else {
     // Genuinely unexpected — a stack trace is warranted here.
     throw error;
