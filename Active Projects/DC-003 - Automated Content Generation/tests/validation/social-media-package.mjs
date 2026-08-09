@@ -8,7 +8,7 @@
 // explicit architectural boundary set before this milestone began.
 //
 // Usage:
-//   node tests/validation/social-media-package.mjs create <editorialPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N]
+//   node tests/validation/social-media-package.mjs create <editorialPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N] [--live-timeout-ms=N]
 //   node tests/validation/social-media-package.mjs inspect <socialMediaPackageId> <socialMediaPackageStoreDirectory>
 //   node tests/validation/social-media-package.mjs status <socialMediaPackageStoreDirectory>
 //   node tests/validation/social-media-package.mjs list <socialMediaPackageStoreDirectory>
@@ -18,6 +18,15 @@
 // DC-003-I006/I019's own Live Verification Gate safety rule applies
 // identically here: --live defaults to exactly one attempt, independent
 // of LLM_MAX_ATTEMPTS, unless --live-max-attempts=N is explicitly given.
+//
+// DC-003-I032.2 — the --live per-request timeout defaults to 60000ms
+// (resolveLiveRequestTimeoutMs(), llm-provider-config.mjs — the same
+// resolver I031.1 already introduced, reused here unmodified), independent
+// of the shared loadLlmProviderConfig().requestTimeoutMs (still 15000ms —
+// no other CLI's own default changed). Raised here after a genuine live
+// I032 attempt timed out at the old shared 15000ms default, mirroring
+// I031.1's own incident exactly. Override with --live-timeout-ms=N for a
+// one-off run.
 
 import { createLocalJsonEditorialPackageStoreAdapter } from "../../src/local-json-editorial-package-store-adapter.mjs";
 import { createEditorialPackageStore } from "../../src/editorial-package-store.mjs";
@@ -27,7 +36,7 @@ import { generateSocialMediaPackage } from "../../src/social-media-package-gener
 import { createSocialMediaMockProvider } from "../../src/social-media-mock-provider.mjs";
 import { createAnthropicSocialMediaProvider } from "../../src/social-media-anthropic-provider.mjs";
 import { createSocialMediaHttpTransport } from "../../src/social-media-transport-http.mjs";
-import { loadLlmProviderConfig, resolveLiveMaxAttempts } from "../../src/llm-provider-config.mjs";
+import { loadLlmProviderConfig, resolveLiveMaxAttempts, resolveLiveRequestTimeoutMs } from "../../src/llm-provider-config.mjs";
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
 import { DuplicateSocialMediaPackageError, SocialMediaPackageGenerationFailedError } from "../../src/social-media-package-errors.mjs";
 import {
@@ -118,6 +127,8 @@ const args = process.argv.slice(2);
 const isLive = args.includes("--live");
 const liveMaxAttemptsArg = args.find((arg) => arg.startsWith("--live-max-attempts="));
 const liveMaxAttemptsValue = liveMaxAttemptsArg ? liveMaxAttemptsArg.split("=")[1] : undefined;
+const liveTimeoutMsArg = args.find((arg) => arg.startsWith("--live-timeout-ms="));
+const liveTimeoutMsValue = liveTimeoutMsArg ? liveTimeoutMsArg.split("=")[1] : undefined;
 const positional = args.filter((arg) => !arg.startsWith("--"));
 const [subcommand, ...rest] = positional;
 
@@ -141,12 +152,16 @@ try {
         process.exit(1);
       }
       maxAttempts = resolveLiveMaxAttempts(liveMaxAttemptsValue); // throws RangeError on a bad override
+      const liveTimeoutMs = resolveLiveRequestTimeoutMs(liveTimeoutMsValue); // throws RangeError on a bad override
       console.log(`Generating LIVE via Anthropic (${config.baseUrl}, model: ${config.model}) — this performs a real API call.`);
       console.log(
         `  maxAttempts: ${maxAttempts}${liveMaxAttemptsValue ? " (explicit --live-max-attempts override)" : " (safe default, independent of LLM_MAX_ATTEMPTS)"}`
       );
+      console.log(
+        `  timeoutMs:   ${liveTimeoutMs}${liveTimeoutMsValue ? " (explicit --live-timeout-ms override)" : " (I032.2 live default, independent of LLM_REQUEST_TIMEOUT_MS)"}`
+      );
       const transport = createSocialMediaHttpTransport(config);
-      provider = createAnthropicSocialMediaProvider({ transport, model: config.model, timeoutMs: config.requestTimeoutMs });
+      provider = createAnthropicSocialMediaProvider({ transport, model: config.model, timeoutMs: liveTimeoutMs });
     } else {
       maxAttempts = config.maxAttempts;
       provider = createSocialMediaMockProvider();
