@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { createEditorialAnalysisHttpTransport, TOOL_NAME } from "../../src/editorial-analysis-transport-http.mjs";
 import { createAnthropicEditorialAnalysisProvider } from "../../src/editorial-analysis-anthropic-provider.mjs";
 import { LlmAuthenticationError, LlmRateLimitError, LlmClientError, LlmConfigurationError, LlmProviderError } from "../../src/llm-provider-errors.mjs";
+import { FIELD_RICHNESS_TARGETS } from "../../src/editorial-package-prompt-builder.mjs";
 
 const VALID_TOOL_INPUT = {
   primaryHeadline: "H",
@@ -175,5 +176,35 @@ test("the tool input_schema sent to Anthropic never gives a scalar string field 
   const scalarFields = ["primaryHeadline", "supportingHeadline", "executiveSummary", "coreMessage", "primaryAudience", "primaryProblem", "desiredOutcome", "callToAction", "seoTitle", "seoDescription"];
   for (const field of scalarFields) {
     assert.equal(schema.properties[field].description, undefined, `${field} is a scalar string, not one of the six canonical array fields — it must not gain an array-style description`);
+  }
+});
+
+// --- DC-003-I031.7 — the tool schema's own description for each
+// canonical array field states its richness TARGET (guidance) while
+// minItems stays 1 (a hard floor is never applied, to avoid forcing
+// fabrication on a genuinely thin source) --------------------------
+
+test("the tool input_schema states each canonical array field's own target range, sourced from FIELD_RICHNESS_TARGETS", async () => {
+  const getSchema = captureSentSchema();
+  const transport = createEditorialAnalysisHttpTransport({ apiKey: "key" });
+  await transport.send({ model: "m", prompt: "p", maxTokens: 100, toolName: TOOL_NAME });
+
+  const schema = getSchema();
+  for (const [field, target] of Object.entries(FIELD_RICHNESS_TARGETS)) {
+    const description = schema.properties[field].description;
+    assert.match(description, new RegExp(`Target ${target.min}-${target.max} distinct items`), `${field}'s description must state its own target range`);
+    assert.match(description, /never fabricate/i, `${field}'s description must forbid fabricating to reach the target`);
+  }
+});
+
+test("minItems stays 1 on every canonical array field — the richness target is never enforced as a hard structural floor", async () => {
+  const getSchema = captureSentSchema();
+  const transport = createEditorialAnalysisHttpTransport({ apiKey: "key" });
+  await transport.send({ model: "m", prompt: "p", maxTokens: 100, toolName: TOOL_NAME });
+
+  const schema = getSchema();
+  for (const field of Object.keys(FIELD_RICHNESS_TARGETS)) {
+    assert.equal(schema.properties[field].minItems, 1, `${field}.minItems must stay 1 — a higher hard floor would force fabrication on a genuinely thin source`);
+    assert.equal(schema.properties[field].maxItems, undefined, `${field} must not gain a hard maxItems either — the target maximum is guidance only`);
   }
 });

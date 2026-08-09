@@ -19,6 +19,7 @@
 
 import { LlmAuthenticationError, LlmClientError, LlmConfigurationError, LlmRateLimitError, LlmTimeoutError, LlmTransportError } from "./llm-provider-errors.mjs";
 import { buildSafeDiagnostic } from "./llm-error-diagnostics.mjs";
+import { FIELD_RICHNESS_TARGETS } from "./editorial-package-prompt-builder.mjs";
 
 export const TOOL_NAME = "return_editorial_package";
 
@@ -62,12 +63,22 @@ const NON_EMPTY_STRING = { type: "string", minLength: 1 };
 // insight/quote/etc.", reinforcing the same constraint the prompt itself
 // now also states in its own "Writing constraints"/"Output format"
 // sections (PROMPT_VERSION bumped to editorial-package.v2).
-function nonEmptyStringArray(itemNoun) {
+//
+// DC-003-I031.7 — a live verification proved the I031.6 fix worked (a
+// genuine array), but the model then satisfied every field with exactly
+// one item — technically valid, not useful downstream. Each
+// description now also states its FIELD_RICHNESS_TARGETS range,
+// imported from editorial-package-prompt-builder.mjs (single source of
+// truth, so the schema's own guidance can never drift from the prompt's)
+// — reinforcement only: `minItems` deliberately stays 1, never bumped to
+// the target minimum, since a hard schema floor would force fabrication
+// on a genuinely thin source, which this milestone forbids.
+function nonEmptyStringArray(itemNoun, target) {
   return {
     type: "array",
     items: NON_EMPTY_STRING,
     minItems: 1,
-    description: `A native JSON array of strings — one ${itemNoun} per array element. Do NOT return a single string. Do NOT use XML tags (e.g. <item>...</item>), newline-delimited lists, or comma-delimited lists inside one string.`,
+    description: `A native JSON array of strings — one ${itemNoun} per array element. Do NOT return a single string. Do NOT use XML tags (e.g. <item>...</item>), newline-delimited lists, or comma-delimited lists inside one string. Target ${target.min}-${target.max} distinct items when the article genuinely supports that many — never fabricate or repeat near-duplicates merely to reach this range; return fewer if the article honestly supports fewer.`,
   };
 }
 
@@ -81,15 +92,15 @@ const TOOL_INPUT_SCHEMA = {
     primaryAudience: NON_EMPTY_STRING,
     primaryProblem: NON_EMPTY_STRING,
     desiredOutcome: NON_EMPTY_STRING,
-    keyInsights: nonEmptyStringArray("insight"),
-    pullQuotes: nonEmptyStringArray("quote"),
+    keyInsights: nonEmptyStringArray("insight", FIELD_RICHNESS_TARGETS.keyInsights),
+    pullQuotes: nonEmptyStringArray("quote", FIELD_RICHNESS_TARGETS.pullQuotes),
     callToAction: NON_EMPTY_STRING,
-    keywords: nonEmptyStringArray("keyword or phrase"),
+    keywords: nonEmptyStringArray("keyword or phrase", FIELD_RICHNESS_TARGETS.keywords),
     seoTitle: NON_EMPTY_STRING,
     seoDescription: NON_EMPTY_STRING,
-    suggestedHashtags: nonEmptyStringArray("hashtag"),
-    editorialThemes: nonEmptyStringArray("theme"),
-    contentCategories: nonEmptyStringArray("category"),
+    suggestedHashtags: nonEmptyStringArray("hashtag", FIELD_RICHNESS_TARGETS.suggestedHashtags),
+    editorialThemes: nonEmptyStringArray("theme", FIELD_RICHNESS_TARGETS.editorialThemes),
+    contentCategories: nonEmptyStringArray("category", FIELD_RICHNESS_TARGETS.contentCategories),
   },
   required: [
     "primaryHeadline", "supportingHeadline", "executiveSummary", "coreMessage", "primaryAudience", "primaryProblem",

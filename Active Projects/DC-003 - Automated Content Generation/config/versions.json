@@ -28,6 +28,6 @@
     "production_package": "1.1"
   },
   "prompt_version": "carousel-copy.v1",
-  "editorial_package_prompt_version": "editorial-package.v2",
+  "editorial_package_prompt_version": "editorial-package.v3",
   "social_media_package_prompt_version": "social-media-package.v2"
 }
