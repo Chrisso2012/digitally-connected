@@ -15,7 +15,18 @@ import { TOOL_NAME } from "./social-media-transport-http.mjs";
 import { validateLlmTransportResponse } from "./llm-response-validator.mjs";
 import { LlmProviderError } from "./llm-provider-errors.mjs";
 
-const DEFAULT_MAX_TOKENS = 4096;
+// DC-003-I032.4 — raised from the shared 4096 default (still used
+// unmodified by I004's llm-provider-anthropic.mjs and I031's own
+// editorial-analysis-anthropic-provider.mjs) after I032.3's controlled
+// live diagnostic confirmed stop_reason: "max_tokens" with `carousel`
+// (the schema's last, and largest, top-level property) missing entirely
+// — genuine token-budget exhaustion, not a shape/serialization bug.
+// Scoped to this file only: I032's own Anthropic result payload
+// (platforms + a full six-slide semantic carousel, each slide carrying
+// heading/body/imageGuidance/statistic/quote/keyPoints) is structurally
+// larger than I004's or I031's own result shapes, so this provider's
+// budget is deliberately independent rather than a shared constant bump.
+const DEFAULT_MAX_TOKENS = 8192;
 
 /**
  * Builds an Anthropic-backed Social Media provider, implementing the
@@ -26,7 +37,8 @@ const DEFAULT_MAX_TOKENS = 4096;
  *   createSocialMediaHttpTransport(). No implicit default.
  * fields.model — required, the exact model identifier.
  * fields.temperature — no default; omitted unless explicitly passed.
- * fields.maxTokens — default 4096.
+ * fields.maxTokens — default 8192 (DC-003-I032.4; independent of I004/I031's
+ *   own 4096 default — see this constant's own header comment above).
  * fields.timeoutMs — per-call timeout, default 15000.
  * fields.onUsage — optional, `(usage) => void`.
  * fields.onStopReason — optional, `(stopReason) => void` (DC-003-I032.3) —

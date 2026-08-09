@@ -130,3 +130,40 @@ test("generateSocialMedia() works without onStopReason supplied at all (optional
   const provider = createAnthropicSocialMediaProvider({ transport, model: "claude-sonnet-5" });
   await assert.doesNotReject(() => provider.generateSocialMedia("prompt"));
 });
+
+// --- DC-003-I032.4: token budget ----------------------------------------
+// Raised from the shared 4096 default (still used unmodified by I004's
+// llm-provider-anthropic.mjs and I031's own
+// editorial-analysis-anthropic-provider.mjs — see each file's own test
+// suite) after I032.3's controlled live diagnostic confirmed
+// stop_reason: "max_tokens" with `carousel` missing entirely. Mirrors
+// llm-provider-anthropic.test.mjs's own "defaults: ... maxTokens is 4096"
+// spy-transport pattern exactly, asserting 8192 here instead.
+
+test("request construction: maxTokens defaults to 8192 (DC-003-I032.4) when not overridden", async () => {
+  let observedRequest = null;
+  const spyTransport = {
+    name: "spy",
+    async send(request) {
+      observedRequest = request;
+      return { content: [{ type: "tool_use", name: request.toolName, input: VALID_TOOL_INPUT }], stop_reason: "tool_use" };
+    },
+  };
+  const provider = createAnthropicSocialMediaProvider({ transport: spyTransport, model: "claude-sonnet-5" });
+  await provider.generateSocialMedia("prompt");
+  assert.equal(observedRequest.maxTokens, 8192);
+});
+
+test("an explicit maxTokens override still takes priority over the 8192 default", async () => {
+  let observedRequest = null;
+  const spyTransport = {
+    name: "spy",
+    async send(request) {
+      observedRequest = request;
+      return { content: [{ type: "tool_use", name: request.toolName, input: VALID_TOOL_INPUT }], stop_reason: "tool_use" };
+    },
+  };
+  const provider = createAnthropicSocialMediaProvider({ transport: spyTransport, model: "claude-sonnet-5", maxTokens: 2048 });
+  await provider.generateSocialMedia("prompt");
+  assert.equal(observedRequest.maxTokens, 2048);
+});
