@@ -154,11 +154,12 @@ test("generateEditorialPackage() throws EditorialPackageGenerationFailedError wh
     );
   }));
 
-// --- DC-003-I031.3 — safe, content-free keyInsightsDiagnostics attached
-// to a "result-shape" failed attempt, reproducing the two real live
-// failure hypotheses (whitespace-only entry; non-array shape) ---------
+// --- DC-003-I031.3/I031.5 — safe, content-free fieldDiagnostics attached
+// to a "result-shape" failed attempt, keyed to whichever canonical
+// array<string> field actually failed, reproducing the real live
+// failure modes discovered across this whole investigation -------------
 
-test("a whitespace-only keyInsights entry surfaces keyInsightsDiagnostics.anyBlankAfterTrim=true, anyZeroLength=false", () =>
+test("a whitespace-only keyInsights entry surfaces fieldDiagnostics.after.anyBlankAfterTrim=true, anyZeroLength=false", () =>
   withTempDir(async (base) => {
     const { ingestedContentStore, editorialPackageStore } = buildStores(base);
     const ic = seedIngestedContent(ingestedContentStore);
@@ -169,8 +170,9 @@ test("a whitespace-only keyInsights entry surfaces keyInsightsDiagnostics.anyBla
       assert.fail("expected EditorialPackageGenerationFailedError");
     } catch (error) {
       assert.ok(error instanceof EditorialPackageGenerationFailedError);
-      const diagnostics = error.attempts[0].keyInsightsDiagnostics;
-      assert.deepEqual(diagnostics, {
+      const { field, after } = error.attempts[0].fieldDiagnostics;
+      assert.equal(field, "keyInsights");
+      assert.deepEqual(after, {
         exists: true,
         isUndefined: false,
         isNull: false,
@@ -187,7 +189,7 @@ test("a whitespace-only keyInsights entry surfaces keyInsightsDiagnostics.anyBla
     }
   }));
 
-test("an empty-string keyInsights entry surfaces keyInsightsDiagnostics.anyZeroLength=true, anyBlankAfterTrim=true", () =>
+test("an empty-string keyInsights entry surfaces fieldDiagnostics.after.anyZeroLength=true, anyBlankAfterTrim=true", () =>
   withTempDir(async (base) => {
     const { ingestedContentStore, editorialPackageStore } = buildStores(base);
     const ic = seedIngestedContent(ingestedContentStore);
@@ -197,20 +199,21 @@ test("an empty-string keyInsights entry surfaces keyInsightsDiagnostics.anyZeroL
       await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
       assert.fail("expected EditorialPackageGenerationFailedError");
     } catch (error) {
-      const diagnostics = error.attempts[0].keyInsightsDiagnostics;
-      assert.equal(diagnostics.length, 2);
-      assert.equal(diagnostics.anyZeroLength, true);
-      assert.equal(diagnostics.anyBlankAfterTrim, true);
-      assert.deepEqual(diagnostics.itemLengths, [10, 0]);
+      const { field, after } = error.attempts[0].fieldDiagnostics;
+      assert.equal(field, "keyInsights");
+      assert.equal(after.length, 2);
+      assert.equal(after.anyZeroLength, true);
+      assert.equal(after.anyBlankAfterTrim, true);
+      assert.deepEqual(after.itemLengths, [10, 0]);
     }
   }));
 
-test("a non-string, non-array keyInsights surfaces keyInsightsDiagnostics.isArray=false with its real JS type", () =>
-  // DC-003-I031.4 note: a lone STRING is no longer a failing case here —
-  // normalizeEditorialAnalysisKeyInsights() now converts it to a valid
-  // one-item array before validation (see the dedicated I031.4 tests
-  // above/below). A number is used here instead, specifically because
-  // it's a shape the I031.4 normalisation deliberately never touches.
+test("a non-string, non-array keyInsights surfaces fieldDiagnostics.after.isArray=false with its real JS type", () =>
+  // A lone STRING is no longer a failing case for a canonical field —
+  // normalizeEditorialAnalysisArrayFields() converts it to a valid
+  // one-item array before validation. A number is used here instead,
+  // specifically because it's a shape normalisation deliberately never
+  // touches.
   withTempDir(async (base) => {
     const { ingestedContentStore, editorialPackageStore } = buildStores(base);
     const ic = seedIngestedContent(ingestedContentStore);
@@ -220,14 +223,18 @@ test("a non-string, non-array keyInsights surfaces keyInsightsDiagnostics.isArra
       await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
       assert.fail("expected EditorialPackageGenerationFailedError");
     } catch (error) {
-      const diagnostics = error.attempts[0].keyInsightsDiagnostics;
-      assert.equal(diagnostics.isArray, false);
-      assert.equal(diagnostics.type, "number");
-      assert.equal(diagnostics.length, null);
+      const { field, before, after } = error.attempts[0].fieldDiagnostics;
+      assert.equal(field, "keyInsights");
+      assert.equal(after.isArray, false);
+      assert.equal(after.type, "number");
+      assert.equal(after.length, null);
+      // A number was never a normalisation candidate — before and after
+      // must be identical.
+      assert.deepEqual(before, after);
     }
   }));
 
-test("keyInsightsDiagnostics is absent from a successful attempt", () =>
+test("fieldDiagnostics is absent from a successful attempt", () =>
   withTempDir(async (base) => {
     const { ingestedContentStore, editorialPackageStore } = buildStores(base);
     const ic = seedIngestedContent(ingestedContentStore);
@@ -238,37 +245,45 @@ test("keyInsightsDiagnostics is absent from a successful attempt", () =>
     // reach the result-shape catch block that attaches diagnostics.
   }));
 
-// --- DC-003-I031.4 — end-to-end effect of the keyInsights provider
+// --- DC-003-I031.5 — end-to-end effect of the generalised provider
 // normalisation, exercised through the real generator, not just the
-// pure helper directly ------------------------------------------------
+// pure helper directly. Covers keyInsights (the field originally
+// discovered) AND pullQuotes (the field that independently surfaced the
+// same issue live), proving the fix generalises rather than being a
+// second one-off patch. -------------------------------------------------
 
-test("generateEditorialPackage() succeeds when the provider returns keyInsights as a single string, normalising it to a one-item array", () =>
-  withTempDir(async (base) => {
-    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
-    const ic = seedIngestedContent(ingestedContentStore);
-    const original = "Timing was the primary issue.";
-    const provider = fakeProvider("string-keyinsights", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: original }));
+for (const field of ["keyInsights", "pullQuotes", "keywords", "suggestedHashtags", "editorialThemes", "contentCategories"]) {
+  test(`generateEditorialPackage() succeeds when the provider returns ${field} as a single string, normalising it to a one-item array`, () =>
+    withTempDir(async (base) => {
+      const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+      const ic = seedIngestedContent(ingestedContentStore);
+      const original = `A real, distinct generated sentence for ${field}.`;
+      const provider = fakeProvider(`string-${field}`, async () => JSON.stringify({ ...VALID_ANALYSIS, [field]: original }));
 
-    const record = await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+      const record = await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
 
-    assert.deepEqual(record.key_insights, [original]);
-  }));
+      const snakeCaseField = field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+      assert.deepEqual(record[snakeCaseField], [original]);
+    }));
 
-test("generateEditorialPackage() still fails when the provider returns keyInsights as a whitespace-only string — normalisation does not paper over it", () =>
-  withTempDir(async (base) => {
-    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
-    const ic = seedIngestedContent(ingestedContentStore);
-    const provider = fakeProvider("blank-keyinsights", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: "   " }));
+  test(`generateEditorialPackage() still fails when the provider returns ${field} as a whitespace-only string — normalisation does not paper over it`, () =>
+    withTempDir(async (base) => {
+      const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+      const ic = seedIngestedContent(ingestedContentStore);
+      const provider = fakeProvider(`blank-${field}`, async () => JSON.stringify({ ...VALID_ANALYSIS, [field]: "   " }));
 
-    try {
-      await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
-      assert.fail("expected EditorialPackageGenerationFailedError");
-    } catch (error) {
-      assert.ok(error instanceof EditorialPackageGenerationFailedError);
-      assert.equal(error.attempts[0].keyInsightsDiagnostics.type, "string");
-      assert.equal(error.attempts[0].keyInsightsDiagnostics.isArray, false);
-    }
-  }));
+      try {
+        await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+        assert.fail("expected EditorialPackageGenerationFailedError");
+      } catch (error) {
+        assert.ok(error instanceof EditorialPackageGenerationFailedError);
+        const { field: failedField, after } = error.attempts[0].fieldDiagnostics;
+        assert.equal(failedField, field);
+        assert.equal(after.type, "string");
+        assert.equal(after.isArray, false);
+      }
+    }));
+}
 
 test("generateEditorialPackage() still fails when the provider returns keyInsights as null — normalisation is a no-op for non-string shapes", () =>
   withTempDir(async (base) => {
@@ -280,6 +295,23 @@ test("generateEditorialPackage() still fails when the provider returns keyInsigh
       () => generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 }),
       EditorialPackageGenerationFailedError
     );
+  }));
+
+test("generateEditorialPackage() normalises multiple lone-string fields in one attempt, reproducing the real live sequence (keyInsights fixed, pullQuotes still a lone string caught by validation)", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const provider = fakeProvider("two-lone-strings", async () =>
+      JSON.stringify({ ...VALID_ANALYSIS, keyInsights: "A real insight, now a lone string.", pullQuotes: "A real quote, also a lone string." })
+    );
+
+    // Both fields are non-blank lone strings, so both get normalised —
+    // this attempt actually succeeds, unlike the real live sequence
+    // where only keyInsights had been fixed at that point. This proves
+    // the generalisation covers pullQuotes too, not just keyInsights.
+    const record = await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+    assert.deepEqual(record.key_insights, ["A real insight, now a lone string."]);
+    assert.deepEqual(record.pull_quotes, ["A real quote, also a lone string."]);
   }));
 
 test("generateEditorialPackage() propagates a non-retryable provider error immediately, bypassing retry", () =>

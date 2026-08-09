@@ -217,14 +217,16 @@ try {
   if (KNOWN_ERRORS.some((ErrorClass) => error instanceof ErrorClass)) {
     console.error(`FAIL  ${error.name}`);
     console.error(`  ${error.message}`);
-    // DC-003-I031.3 — safe, content-free structural diagnostics only for
-    // the --live path (see describeKeyInsightsShape()'s own header
-    // comment): shape/type/length/boolean facts about keyInsights,
-    // never the actual generated strings.
+    // DC-003-I031.3/I031.5 — safe, content-free structural diagnostics
+    // only for the --live path (see describeArrayFieldShape()'s own
+    // header comment): shape/type/length/boolean facts about whichever
+    // canonical array<string> field actually failed, before and after
+    // provider-boundary normalisation — never the actual generated
+    // strings.
     if (isLive && error instanceof EditorialPackageGenerationFailedError) {
       for (const attempt of error.attempts ?? []) {
-        if (attempt.keyInsightsDiagnostics) {
-          console.error(`  keyInsights diagnostics: ${JSON.stringify(attempt.keyInsightsDiagnostics)}`);
+        if (attempt.fieldDiagnostics) {
+          console.error(`  field diagnostics: ${JSON.stringify(attempt.fieldDiagnostics)}`);
         }
       }
     }

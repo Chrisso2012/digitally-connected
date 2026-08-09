@@ -15,9 +15,16 @@ export class InvalidEditorialAnalysisProviderError extends Error {
 }
 
 export class MalformedEditorialAnalysisResultError extends Error {
-  constructor(reason) {
+  // DC-003-I031.5 — `field` (optional, null for a whole-result shape
+  // failure like "result is not an object") names exactly which field
+  // assertValidEditorialAnalysisResult() rejected, structured rather
+  // than left to string-parsing this error's own message — lets a
+  // caller (editorial-package-generator.mjs) attach safe, field-scoped
+  // structural diagnostics without guessing which field actually failed.
+  constructor(reason, field = null) {
     super(`Editorial Analysis Provider returned a malformed result — ${reason}`);
     this.name = "MalformedEditorialAnalysisResultError";
+    this.field = field;
   }
 }
 

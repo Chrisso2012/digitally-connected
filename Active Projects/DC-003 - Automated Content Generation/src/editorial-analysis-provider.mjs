@@ -40,7 +40,15 @@ const REQUIRED_STRING_FIELDS = [
   "seoDescription",
 ];
 
-const REQUIRED_ARRAY_FIELDS = ["keyInsights", "pullQuotes", "keywords", "suggestedHashtags", "editorialThemes", "contentCategories"];
+// DC-003-I031.5 — the canonical, single source of truth for every I031
+// field whose Editorial Analysis Result contract is exactly
+// `array<string>` (non-empty array of non-empty strings). Both
+// assertValidEditorialAnalysisResult() and
+// normalizeEditorialAnalysisArrayFields() below read this same list, so
+// it can never drift between "what's validated" and "what's normalised" —
+// discovering a 7th such field later means adding it here once, not in
+// two places that could disagree.
+export const CANONICAL_ARRAY_OF_STRING_FIELDS = ["keyInsights", "pullQuotes", "keywords", "suggestedHashtags", "editorialThemes", "contentCategories"];
 
 export function assertValidEditorialAnalysisProvider(provider) {
   if (!provider || typeof provider.name !== "string" || typeof provider.analyzeContent !== "function") {
@@ -52,22 +60,15 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-/**
- * Validates a provider's parsed JSON output against the Editorial
- * Analysis Result contract — every field createEditorialPackage() itself
- * requires (in camelCase, matching its own fields.* input), except
- * ingestedContentId/llmModel/promptVersion/schemaVersion, which
- * editorial-package-generator.mjs supplies itself, never the provider.
- */
-// DC-003-I031.3 — safe, content-free structural diagnostics for the one
-// field that has failed validation twice in live use (keyInsights).
-// Reports shape/type/length/boolean facts only — NEVER the actual string
-// values, never article text, never any generated content — so a live
-// failure can be diagnosed without exposing anything this project treats
-// as sensitive. See editorial-package.mjs's own --live path, the only
-// caller: it prints this object (never the raw result) when a
-// "result-shape" attempt fails.
-export function describeKeyInsightsShape(value) {
+// DC-003-I031.3/I031.5 — safe, content-free structural diagnostics for
+// any one of the canonical array<string> fields. Reports shape/type/
+// length/boolean facts only — NEVER the actual string values, never
+// article text, never any generated content — so a live failure can be
+// diagnosed without exposing anything this project treats as sensitive.
+// See editorial-package.mjs's own --live path, the only caller: it
+// prints this object (never the raw result) when a "result-shape"
+// attempt fails, keyed to whichever field actually failed.
+export function describeArrayFieldShape(value) {
   if (value === undefined) {
     return { exists: false, isUndefined: true, isNull: false, type: "undefined", isArray: false, length: null, itemTypes: null, itemLengths: null, anyZeroLength: null, anyBlankAfterTrim: null };
   }
@@ -95,43 +96,65 @@ export function describeKeyInsightsShape(value) {
   };
 }
 
-// DC-003-I031.4 — narrowly-scoped provider-boundary normalisation for
-// keyInsights only. Live evidence (I031.3's own diagnostics) confirmed
-// Anthropic can return keyInsights as a single string despite the tool
-// schema declaring an array — this is model behaviour our own schema
-// (I031.2) cannot force. Called by editorial-package-generator.mjs
-// immediately after JSON.parse(raw), before assertValidEditorialAnalysisResult()
-// ever runs — never alters, rewrites, splits, or otherwise touches the
-// string's own content; a non-empty, non-whitespace string becomes
-// exactly a one-item array wrapping that same string, verbatim. Every
-// other shape (already an array, null, a number, an object, a blank/
-// whitespace-only string) passes through completely unchanged, so the
-// existing validator still rejects it exactly as before — this function
-// never makes an invalid result look valid beyond the one specific,
-// evidence-confirmed shape it targets.
-export function normalizeEditorialAnalysisKeyInsights(result) {
+/**
+ * DC-003-I031.5 — generalises I031.4's keyInsights-only fix across every
+ * CANONICAL_ARRAY_OF_STRING_FIELDS entry. Live evidence confirmed
+ * Anthropic can return any array<string>-contracted field as a single
+ * string despite the tool schema declaring an array (I031.2's schema
+ * constraints cannot force this) — first observed on keyInsights, then
+ * independently on pullQuotes, the same underlying provider-shape
+ * mismatch recurring field by field.
+ *
+ * For each canonical field, independently: if it's already an array,
+ * left completely unchanged; if it's a non-empty, non-whitespace
+ * string, replaced with exactly a one-item array wrapping that same
+ * string, verbatim (no rewriting, splitting, or inference); any other
+ * shape (null, a number, an object, a blank/whitespace-only string)
+ * passes through completely unchanged, so assertValidEditorialAnalysisResult()
+ * still rejects it exactly as before. Never touches a field outside
+ * CANONICAL_ARRAY_OF_STRING_FIELDS (scalar string fields, objects,
+ * arrays-of-objects, or anything I032+ owns).
+ *
+ * Returns `{ result, normalizedFields }` — `normalizedFields` names
+ * exactly which fields were actually converted this call (for safe,
+ * structural before/after diagnostics; see editorial-package-generator.mjs),
+ * never which fields already happened to already be valid arrays.
+ */
+export function normalizeEditorialAnalysisArrayFields(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return result;
+    return { result, normalizedFields: [] };
   }
-  const value = result.keyInsights;
-  if (typeof value === "string" && value.trim() !== "") {
-    return { ...result, keyInsights: [value] };
+  let normalized = result;
+  const normalizedFields = [];
+  for (const field of CANONICAL_ARRAY_OF_STRING_FIELDS) {
+    const value = normalized[field];
+    if (typeof value === "string" && value.trim() !== "") {
+      normalized = { ...normalized, [field]: [value] };
+      normalizedFields.push(field);
+    }
   }
-  return result;
+  return { result: normalized, normalizedFields };
 }
 
+/**
+ * Validates a provider's parsed JSON output against the Editorial
+ * Analysis Result contract — every field createEditorialPackage() itself
+ * requires (in camelCase, matching its own fields.* input), except
+ * ingestedContentId/llmModel/promptVersion/schemaVersion, which
+ * editorial-package-generator.mjs supplies itself, never the provider.
+ */
 export function assertValidEditorialAnalysisResult(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     throw new MalformedEditorialAnalysisResultError("result is not an object");
   }
   for (const field of REQUIRED_STRING_FIELDS) {
     if (!isNonEmptyString(result[field])) {
-      throw new MalformedEditorialAnalysisResultError(`${field} is required and must be a non-empty string`);
+      throw new MalformedEditorialAnalysisResultError(`${field} is required and must be a non-empty string`, field);
     }
   }
-  for (const field of REQUIRED_ARRAY_FIELDS) {
+  for (const field of CANONICAL_ARRAY_OF_STRING_FIELDS) {
     if (!Array.isArray(result[field]) || result[field].length === 0 || !result[field].every(isNonEmptyString)) {
-      throw new MalformedEditorialAnalysisResultError(`${field} must be a non-empty array of non-empty strings`);
+      throw new MalformedEditorialAnalysisResultError(`${field} must be a non-empty array of non-empty strings`, field);
     }
   }
   return result;

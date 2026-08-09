@@ -31,8 +31,8 @@ import { createEditorialAnalysisMockProvider } from "./editorial-analysis-mock-p
 import {
   assertValidEditorialAnalysisProvider,
   assertValidEditorialAnalysisResult,
-  describeKeyInsightsShape,
-  normalizeEditorialAnalysisKeyInsights,
+  describeArrayFieldShape,
+  normalizeEditorialAnalysisArrayFields,
 } from "./editorial-analysis-provider.mjs";
 import { MalformedEditorialAnalysisResultError } from "./editorial-analysis-errors.mjs";
 import { withRetry } from "./retry.mjs";
@@ -124,24 +124,43 @@ export async function generateEditorialPackage(ingestedContentId, dependencies =
         return { ok: false, stage: "parse", message: `Provider "${provider.name}" returned invalid JSON: ${cause.message}` };
       }
 
-      // DC-003-I031.4 — provider-boundary normalisation, keyInsights only.
-      // See normalizeEditorialAnalysisKeyInsights()'s own header comment:
-      // a lone non-blank string becomes a one-item array wrapping that
-      // exact string; every other shape passes through untouched, so
-      // validation below still rejects anything genuinely malformed.
-      parsed = normalizeEditorialAnalysisKeyInsights(parsed);
+      // DC-003-I031.5 — provider-boundary normalisation across every
+      // canonical array<string> field (CANONICAL_ARRAY_OF_STRING_FIELDS),
+      // generalising I031.4's keyInsights-only fix. See
+      // normalizeEditorialAnalysisArrayFields()'s own header comment: a
+      // lone non-blank string on any such field becomes a one-item array
+      // wrapping that exact string; every other shape passes through
+      // untouched, so validation below still rejects anything genuinely
+      // malformed. `beforeNormalization` is kept only for safe structural
+      // diagnostics on a later failure — never logged as-is, and never
+      // exposes generated text (describeArrayFieldShape() reports
+      // shape/type/length/boolean facts only).
+      const beforeNormalization = parsed;
+      const { result: normalizedParsed, normalizedFields } = normalizeEditorialAnalysisArrayFields(parsed);
+      parsed = normalizedParsed;
 
       try {
         assertValidEditorialAnalysisResult(parsed);
       } catch (cause) {
         if (!(cause instanceof MalformedEditorialAnalysisResultError)) throw cause;
-        // DC-003-I031.3 — safe, content-free structural diagnostics only
-        // (see describeKeyInsightsShape()'s own header comment) attached
-        // for whichever caller wants to inspect a "result-shape" failure
-        // more closely (editorial-package.mjs's own --live path does);
+        // DC-003-I031.3/I031.5 — safe, content-free structural diagnostics
+        // only (see describeArrayFieldShape()'s own header comment),
+        // scoped to whichever field actually failed (cause.field) —
         // never logged/printed here, and never anything but shape/type/
-        // length/boolean facts about keyInsights specifically.
-        return { ok: false, stage: "result-shape", message: cause.message, keyInsightsDiagnostics: describeKeyInsightsShape(parsed?.keyInsights) };
+        // length/boolean facts. Includes the pre-normalisation shape too,
+        // so a caller can see exactly what normalisation did (or didn't)
+        // do to the failing field.
+        return {
+          ok: false,
+          stage: "result-shape",
+          message: cause.message,
+          fieldDiagnostics: {
+            field: cause.field,
+            normalizedFields,
+            before: describeArrayFieldShape(beforeNormalization?.[cause.field]),
+            after: describeArrayFieldShape(parsed?.[cause.field]),
+          },
+        };
       }
 
       return { ok: true, result: parsed };

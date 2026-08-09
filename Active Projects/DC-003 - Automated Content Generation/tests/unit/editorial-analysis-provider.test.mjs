@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import {
   assertValidEditorialAnalysisProvider,
   assertValidEditorialAnalysisResult,
-  describeKeyInsightsShape,
-  normalizeEditorialAnalysisKeyInsights,
+  describeArrayFieldShape,
+  normalizeEditorialAnalysisArrayFields,
+  CANONICAL_ARRAY_OF_STRING_FIELDS,
 } from "../../src/editorial-analysis-provider.mjs";
 import { InvalidEditorialAnalysisProviderError, MalformedEditorialAnalysisResultError } from "../../src/editorial-analysis-errors.mjs";
 
@@ -52,26 +53,39 @@ for (const field of ["primaryHeadline", "coreMessage", "callToAction", "seoTitle
   });
 }
 
-for (const field of ["keyInsights", "pullQuotes", "keywords", "suggestedHashtags", "editorialThemes", "contentCategories"]) {
+for (const field of CANONICAL_ARRAY_OF_STRING_FIELDS) {
   test(`assertValidEditorialAnalysisResult() throws for an empty ${field} array`, () => {
     assert.throws(() => assertValidEditorialAnalysisResult({ ...VALID_RESULT, [field]: [] }), MalformedEditorialAnalysisResultError);
   });
+
+  test(`assertValidEditorialAnalysisResult() reports field:"${field}" on the thrown error`, () => {
+    try {
+      assertValidEditorialAnalysisResult({ ...VALID_RESULT, [field]: [] });
+      assert.fail("expected MalformedEditorialAnalysisResultError");
+    } catch (error) {
+      assert.equal(error.field, field);
+    }
+  });
 }
 
-// --- DC-003-I031.3 — describeKeyInsightsShape(): safe, content-free
+test("CANONICAL_ARRAY_OF_STRING_FIELDS names exactly the six array<string> fields", () => {
+  assert.deepEqual(CANONICAL_ARRAY_OF_STRING_FIELDS, ["keyInsights", "pullQuotes", "keywords", "suggestedHashtags", "editorialThemes", "contentCategories"]);
+});
+
+// --- DC-003-I031.3/I031.5 — describeArrayFieldShape(): safe, content-free
 // structural diagnostics only. Every assertion here checks TYPES/LENGTHS/
 // BOOLEANS — never asserts on or reproduces actual string content beyond
 // what's needed to construct the test input itself. -------------------
 
-test("describeKeyInsightsShape(undefined) reports exists:false, isUndefined:true", () => {
-  assert.deepEqual(describeKeyInsightsShape(undefined), {
+test("describeArrayFieldShape(undefined) reports exists:false, isUndefined:true", () => {
+  assert.deepEqual(describeArrayFieldShape(undefined), {
     exists: false, isUndefined: true, isNull: false, type: "undefined", isArray: false,
     length: null, itemTypes: null, itemLengths: null, anyZeroLength: null, anyBlankAfterTrim: null,
   });
 });
 
-test("describeKeyInsightsShape(null) reports exists:true, isNull:true", () => {
-  assert.deepEqual(describeKeyInsightsShape(null), {
+test("describeArrayFieldShape(null) reports exists:true, isNull:true", () => {
+  assert.deepEqual(describeArrayFieldShape(null), {
     exists: true, isUndefined: false, isNull: true, type: "object", isArray: false,
     length: null, itemTypes: null, itemLengths: null, anyZeroLength: null, anyBlankAfterTrim: null,
   });
@@ -83,8 +97,8 @@ for (const [label, value, type] of [
   ["a boolean", true, "boolean"],
   ["a plain object", { a: 1 }, "object"],
 ]) {
-  test(`describeKeyInsightsShape() reports isArray:false and the real JS type for ${label}`, () => {
-    const result = describeKeyInsightsShape(value);
+  test(`describeArrayFieldShape() reports isArray:false and the real JS type for ${label}`, () => {
+    const result = describeArrayFieldShape(value);
     assert.equal(result.exists, true);
     assert.equal(result.isArray, false);
     assert.equal(result.type, type);
@@ -92,8 +106,8 @@ for (const [label, value, type] of [
   });
 }
 
-test("describeKeyInsightsShape() reports a fully-valid array correctly", () => {
-  const result = describeKeyInsightsShape(["one", "two", "three"]);
+test("describeArrayFieldShape() reports a fully-valid array correctly", () => {
+  const result = describeArrayFieldShape(["one", "two", "three"]);
   assert.equal(result.isArray, true);
   assert.equal(result.length, 3);
   assert.deepEqual(result.itemTypes, ["string", "string", "string"]);
@@ -102,99 +116,116 @@ test("describeKeyInsightsShape() reports a fully-valid array correctly", () => {
   assert.equal(result.anyBlankAfterTrim, false);
 });
 
-test("describeKeyInsightsShape() detects a zero-length string entry", () => {
-  const result = describeKeyInsightsShape(["real", ""]);
+test("describeArrayFieldShape() detects a zero-length string entry", () => {
+  const result = describeArrayFieldShape(["real", ""]);
   assert.equal(result.anyZeroLength, true);
   assert.equal(result.anyBlankAfterTrim, true);
   assert.deepEqual(result.itemLengths, [4, 0]);
 });
 
-test("describeKeyInsightsShape() detects a whitespace-only entry that is NOT zero-length", () => {
-  // The exact discovered live failure mode: minLength:1 in the Anthropic
-  // tool schema only counts characters, so a single space satisfies it
-  // while still failing .trim() !== "".
-  const result = describeKeyInsightsShape(["real", "   "]);
+test("describeArrayFieldShape() detects a whitespace-only entry that is NOT zero-length", () => {
+  // minLength:1 in the Anthropic tool schema only counts characters, so a
+  // single space satisfies it while still failing .trim() !== "".
+  const result = describeArrayFieldShape(["real", "   "]);
   assert.equal(result.anyZeroLength, false);
   assert.equal(result.anyBlankAfterTrim, true);
   assert.deepEqual(result.itemLengths, [4, 3]);
 });
 
-test("describeKeyInsightsShape() detects a non-string item inside an otherwise-array value", () => {
-  const result = describeKeyInsightsShape(["real", 42, null]);
+test("describeArrayFieldShape() detects a non-string item inside an otherwise-array value", () => {
+  const result = describeArrayFieldShape(["real", 42, null]);
   assert.deepEqual(result.itemTypes, ["string", "number", "object"]);
   assert.deepEqual(result.itemLengths, [4, null, null]);
-  // Non-string items never counted as "zero length" or "blank" —
-  // assertValidEditorialAnalysisResult()'s own isNonEmptyString() already
-  // rejects any non-string item on its own, independent of these flags.
   assert.equal(result.anyZeroLength, false);
   assert.equal(result.anyBlankAfterTrim, false);
 });
 
-test("describeKeyInsightsShape() never includes the actual string content anywhere in its own output shape", () => {
-  const result = describeKeyInsightsShape(["a secret-looking sentence about the article"]);
+test("describeArrayFieldShape() never includes the actual string content anywhere in its own output shape", () => {
+  const result = describeArrayFieldShape(["a secret-looking sentence about the article"]);
   assert.doesNotMatch(JSON.stringify(result), /secret-looking/);
 });
 
-// --- DC-003-I031.4 — normalizeEditorialAnalysisKeyInsights(): narrowly
-// scoped provider-boundary normalisation, keyInsights only -------------
+// --- DC-003-I031.5 — normalizeEditorialAnalysisArrayFields(): the same
+// string -> [string] normalisation applied independently across every
+// CANONICAL_ARRAY_OF_STRING_FIELDS entry, generalising I031.4's
+// keyInsights-only fix. Regression coverage for all 6 canonical fields:
+// (1) arrays pass through unchanged; (2) a valid lone string becomes a
+// one-item array with the exact original string; (3) blank/whitespace
+// strings remain invalid; (4) malformed non-string/non-array values
+// remain invalid; (5) generated text is never altered. -----------------
 
-test("normalizeEditorialAnalysisKeyInsights() leaves an already-valid array completely unchanged", () => {
-  const input = { ...VALID_RESULT, keyInsights: ["one", "two"] };
-  const result = normalizeEditorialAnalysisKeyInsights(input);
-  assert.deepEqual(result.keyInsights, ["one", "two"]);
-  assert.doesNotThrow(() => assertValidEditorialAnalysisResult(result));
-});
+for (const field of CANONICAL_ARRAY_OF_STRING_FIELDS) {
+  test(`normalizeEditorialAnalysisArrayFields() leaves an already-valid ${field} array completely unchanged`, () => {
+    const input = { ...VALID_RESULT, [field]: ["one", "two"] };
+    const { result, normalizedFields } = normalizeEditorialAnalysisArrayFields(input);
+    assert.deepEqual(result[field], ["one", "two"]);
+    assert.equal(normalizedFields.includes(field), false);
+    assert.doesNotThrow(() => assertValidEditorialAnalysisResult(result));
+  });
 
-test("normalizeEditorialAnalysisKeyInsights() converts a single non-blank string into a one-item array containing the exact original string", () => {
-  const original = "Timing was the primary issue.";
-  const input = { ...VALID_RESULT, keyInsights: original };
-  const result = normalizeEditorialAnalysisKeyInsights(input);
-  assert.deepEqual(result.keyInsights, [original]);
-  assert.equal(result.keyInsights[0], original, "the string must be preserved verbatim, not rewritten");
-  assert.doesNotThrow(() => assertValidEditorialAnalysisResult(result));
-});
+  test(`normalizeEditorialAnalysisArrayFields() converts a single non-blank ${field} string into a one-item array containing the exact original string`, () => {
+    const original = `A real, distinct generated sentence for ${field}.`;
+    const input = { ...VALID_RESULT, [field]: original };
+    const { result, normalizedFields } = normalizeEditorialAnalysisArrayFields(input);
+    assert.deepEqual(result[field], [original]);
+    assert.equal(result[field][0], original, "the string must be preserved verbatim, not rewritten");
+    assert.deepEqual(normalizedFields, [field]);
+    assert.doesNotThrow(() => assertValidEditorialAnalysisResult(result));
+  });
 
-test("normalizeEditorialAnalysisKeyInsights() does not mutate any other field on the result", () => {
-  const input = { ...VALID_RESULT, keyInsights: "A lone insight.", primaryHeadline: "Untouched Headline" };
-  const result = normalizeEditorialAnalysisKeyInsights(input);
-  assert.equal(result.primaryHeadline, "Untouched Headline");
-  assert.equal(result.pullQuotes, input.pullQuotes);
-});
+  test(`normalizeEditorialAnalysisArrayFields() does NOT normalise a blank/whitespace-only ${field} string — still fails validation`, () => {
+    for (const blank of ["", "   ", "\n\t"]) {
+      const input = { ...VALID_RESULT, [field]: blank };
+      const { result, normalizedFields } = normalizeEditorialAnalysisArrayFields(input);
+      assert.equal(result[field], blank, "a blank string must pass through unchanged, never coerced into a valid-looking array");
+      assert.equal(normalizedFields.includes(field), false);
+      assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
+    }
+  });
 
-test("normalizeEditorialAnalysisKeyInsights() does NOT normalise a blank/whitespace-only string — still fails validation", () => {
-  for (const blank of ["", "   ", "\n\t"]) {
-    const input = { ...VALID_RESULT, keyInsights: blank };
-    const result = normalizeEditorialAnalysisKeyInsights(input);
-    assert.equal(result.keyInsights, blank, "a blank string must pass through unchanged, never coerced into a valid-looking array");
-    assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
-  }
-});
+  test(`normalizeEditorialAnalysisArrayFields() leaves null/number/object ${field} values unchanged — still rejected by the validator`, () => {
+    for (const malformed of [null, 42, true, { note: "not a list" }]) {
+      const input = { ...VALID_RESULT, [field]: malformed };
+      const { result, normalizedFields } = normalizeEditorialAnalysisArrayFields(input);
+      assert.equal(result[field], malformed);
+      assert.equal(normalizedFields.includes(field), false);
+      assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
+    }
+  });
+}
 
-test("normalizeEditorialAnalysisKeyInsights() leaves null, numbers, booleans, and objects unchanged — still rejected by the validator", () => {
-  for (const malformed of [null, 42, true, { note: "not a list" }]) {
-    const input = { ...VALID_RESULT, keyInsights: malformed };
-    const result = normalizeEditorialAnalysisKeyInsights(input);
-    assert.equal(result.keyInsights, malformed);
-    assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
-  }
-});
-
-test("normalizeEditorialAnalysisKeyInsights() is a no-op when keyInsights is missing entirely", () => {
-  const { keyInsights, ...withoutKeyInsights } = VALID_RESULT;
-  const result = normalizeEditorialAnalysisKeyInsights(withoutKeyInsights);
-  assert.equal("keyInsights" in result, false);
-});
-
-test("normalizeEditorialAnalysisKeyInsights() passes through a non-object result unchanged (defense in depth)", () => {
-  assert.equal(normalizeEditorialAnalysisKeyInsights(null), null);
-  assert.equal(normalizeEditorialAnalysisKeyInsights("a string"), "a string");
-  assert.deepEqual(normalizeEditorialAnalysisKeyInsights(["array"]), ["array"]);
-});
-
-test("normalizeEditorialAnalysisKeyInsights() never alters other array fields (pullQuotes etc.) even if they were also lone strings — scoped to keyInsights only", () => {
-  const input = { ...VALID_RESULT, keyInsights: "A lone insight.", pullQuotes: "A lone quote, deliberately not an array." };
-  const result = normalizeEditorialAnalysisKeyInsights(input);
+test("normalizeEditorialAnalysisArrayFields() normalises multiple canonical fields independently in one call", () => {
+  const input = { ...VALID_RESULT, keyInsights: "A lone insight.", pullQuotes: "A lone quote.", keywords: ["already", "an", "array"] };
+  const { result, normalizedFields } = normalizeEditorialAnalysisArrayFields(input);
   assert.deepEqual(result.keyInsights, ["A lone insight."]);
-  assert.equal(result.pullQuotes, "A lone quote, deliberately not an array.", "pullQuotes must be untouched — this normalisation is keyInsights-only");
-  assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
+  assert.deepEqual(result.pullQuotes, ["A lone quote."]);
+  assert.deepEqual(result.keywords, ["already", "an", "array"]);
+  assert.deepEqual(normalizedFields.sort(), ["keyInsights", "pullQuotes"]);
+  assert.doesNotThrow(() => assertValidEditorialAnalysisResult(result));
+});
+
+test("normalizeEditorialAnalysisArrayFields() never touches a scalar string field even if it looks list-like", () => {
+  const input = { ...VALID_RESULT, primaryHeadline: "Not a canonical array field" };
+  const { result, normalizedFields } = normalizeEditorialAnalysisArrayFields(input);
+  assert.equal(result.primaryHeadline, "Not a canonical array field");
+  assert.equal(normalizedFields.includes("primaryHeadline"), false);
+});
+
+test("normalizeEditorialAnalysisArrayFields() does not mutate unrelated fields on the result", () => {
+  const input = { ...VALID_RESULT, keyInsights: "A lone insight.", primaryHeadline: "Untouched Headline" };
+  const { result } = normalizeEditorialAnalysisArrayFields(input);
+  assert.equal(result.primaryHeadline, "Untouched Headline");
+});
+
+test("normalizeEditorialAnalysisArrayFields() is a no-op when a canonical field is missing entirely", () => {
+  const { keyInsights, ...withoutKeyInsights } = VALID_RESULT;
+  const { result, normalizedFields } = normalizeEditorialAnalysisArrayFields(withoutKeyInsights);
+  assert.equal("keyInsights" in result, false);
+  assert.deepEqual(normalizedFields, []);
+});
+
+test("normalizeEditorialAnalysisArrayFields() passes through a non-object result unchanged (defense in depth)", () => {
+  assert.equal(normalizeEditorialAnalysisArrayFields(null).result, null);
+  assert.equal(normalizeEditorialAnalysisArrayFields("a string").result, "a string");
+  assert.deepEqual(normalizeEditorialAnalysisArrayFields(["array"]).result, ["array"]);
 });
