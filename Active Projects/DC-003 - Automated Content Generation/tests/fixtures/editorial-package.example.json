@@ -44,7 +44,7 @@
   ],
   "generated_at": "2026-08-07T11:00:00.000Z",
   "llm_model": "mock-editorial-analysis-provider-v1",
-  "prompt_version": "editorial-package.v1",
+  "prompt_version": "editorial-package.v2",
   "schema_version": "1.0",
   "checksum": "64c01d6d785f0d24dcbcafc8147e8fded602a702ac52129570607c9f1163b6f2"
 }

@@ -37,7 +37,39 @@ export const TOOL_NAME = "return_editorial_package";
 // over any post-hoc repair of already-invalid output — see this
 // milestone's own README section for the full investigation.
 const NON_EMPTY_STRING = { type: "string", minLength: 1 };
-const NON_EMPTY_STRING_ARRAY = { type: "array", items: NON_EMPTY_STRING, minItems: 1 };
+
+// DC-003-I031.6 — root cause of a live failure downstream of I031.2/I031.5:
+// Anthropic returned every one of these six fields as ONE string
+// containing literal "<item>...</item>"-tagged segments rather than
+// genuine array elements. Investigated and ruled out as the source: the
+// ingested article body itself (Google Drive's own mimeType=text/plain
+// export never produces XML-style markup — see
+// google-docs-source-adapter.mjs). Confirmed instead: this schema's own
+// `type: "array"` declaration alone is NOT sufficient to guarantee
+// Anthropic's tool-use output actually conforms to it — the earlier
+// keyInsights-as-string and pullQuotes-as-string live failures both
+// returned a normal successful HTTP response with a schema-violating
+// shape; nothing on Anthropic's own side rejected it, and this
+// transport never validated the tool_use input's sub-schema itself
+// (only editorial-analysis-provider.mjs's own local validator ever
+// caught it, after the fact). Neither this schema nor the prompt
+// (editorial-package-prompt-builder.mjs) previously told the model
+// explicitly NOT to represent a list as XML-tagged prose inside a single
+// string — a documented Claude habit when asked for "a list" without
+// that constraint spelled out. `description` here is the fix: each
+// array field's own description now explicitly forbids XML tags/
+// `<item>` wrappers/pseudo-lists and states "one element per real
+// insight/quote/etc.", reinforcing the same constraint the prompt itself
+// now also states in its own "Writing constraints"/"Output format"
+// sections (PROMPT_VERSION bumped to editorial-package.v2).
+function nonEmptyStringArray(itemNoun) {
+  return {
+    type: "array",
+    items: NON_EMPTY_STRING,
+    minItems: 1,
+    description: `A native JSON array of strings — one ${itemNoun} per array element. Do NOT return a single string. Do NOT use XML tags (e.g. <item>...</item>), newline-delimited lists, or comma-delimited lists inside one string.`,
+  };
+}
 
 const TOOL_INPUT_SCHEMA = {
   type: "object",
@@ -49,15 +81,15 @@ const TOOL_INPUT_SCHEMA = {
     primaryAudience: NON_EMPTY_STRING,
     primaryProblem: NON_EMPTY_STRING,
     desiredOutcome: NON_EMPTY_STRING,
-    keyInsights: NON_EMPTY_STRING_ARRAY,
-    pullQuotes: NON_EMPTY_STRING_ARRAY,
+    keyInsights: nonEmptyStringArray("insight"),
+    pullQuotes: nonEmptyStringArray("quote"),
     callToAction: NON_EMPTY_STRING,
-    keywords: NON_EMPTY_STRING_ARRAY,
+    keywords: nonEmptyStringArray("keyword or phrase"),
     seoTitle: NON_EMPTY_STRING,
     seoDescription: NON_EMPTY_STRING,
-    suggestedHashtags: NON_EMPTY_STRING_ARRAY,
-    editorialThemes: NON_EMPTY_STRING_ARRAY,
-    contentCategories: NON_EMPTY_STRING_ARRAY,
+    suggestedHashtags: nonEmptyStringArray("hashtag"),
+    editorialThemes: nonEmptyStringArray("theme"),
+    contentCategories: nonEmptyStringArray("category"),
   },
   required: [
     "primaryHeadline", "supportingHeadline", "executiveSummary", "coreMessage", "primaryAudience", "primaryProblem",
