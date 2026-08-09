@@ -29,6 +29,10 @@ const DEFAULT_MAX_TOKENS = 4096;
  * fields.maxTokens — default 4096.
  * fields.timeoutMs — per-call timeout, default 15000.
  * fields.onUsage — optional, `(usage) => void`.
+ * fields.onStopReason — optional, `(stopReason) => void` (DC-003-I032.3) —
+ *   surfaces Anthropic's raw stop_reason for this call so a caller can
+ *   attach it to a result-shape failure's own diagnostics (a "max_tokens"
+ *   value is evidence the tool-call output was cut off mid-object).
  */
 export function createAnthropicSocialMediaProvider(fields = {}) {
   if (!fields.transport) {
@@ -54,8 +58,9 @@ export function createAnthropicSocialMediaProvider(fields = {}) {
     async generateSocialMedia(prompt) {
       const request = { model, prompt, temperature, maxTokens, toolName: TOOL_NAME };
       const rawResponse = await transport.send(request, { timeoutMs });
-      const { slidesJson: resultJson, usage } = validateLlmTransportResponse(rawResponse, TOOL_NAME);
+      const { slidesJson: resultJson, usage, stopReason } = validateLlmTransportResponse(rawResponse, TOOL_NAME);
       fields.onUsage?.(usage);
+      fields.onStopReason?.(stopReason);
       return resultJson;
     },
   };

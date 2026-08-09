@@ -76,12 +76,24 @@ function issue(field, expected, received) {
 
 /**
  * Validates and normalizes a raw Anthropic Messages API response into
- * `{ slidesJson, usage }` — `slidesJson` is a raw JSON string, matching
- * createMockProvider().generateCarousel()'s own return contract exactly.
- * `usage` (DC-003-I023) is `{ inputTokens, outputTokens, totalTokens }`
- * when the raw response carried a usable `usage` object, `null`
- * otherwise — observational only; see this module's own header comment
- * for why adding it never altered slidesJson's own contract.
+ * `{ slidesJson, usage, stopReason }` — `slidesJson` is a raw JSON
+ * string, matching createMockProvider().generateCarousel()'s own return
+ * contract exactly. `usage` (DC-003-I023) is
+ * `{ inputTokens, outputTokens, totalTokens }` when the raw response
+ * carried a usable `usage` object, `null` otherwise — observational
+ * only; see this module's own header comment for why adding it never
+ * altered slidesJson's own contract.
+ *
+ * `stopReason` (DC-003-I032.3) is Anthropic's own raw `stop_reason`
+ * string ("end_turn"/"max_tokens"/"tool_use"/"stop_sequence"/etc.) when
+ * present, `null` otherwise — additive for the identical reason `usage`
+ * was: already returned by the provider on every real response but
+ * previously read only to check for "refusal" and then discarded. Safe
+ * to surface unconditionally: it is a fixed Anthropic enum value, never
+ * generated content. A "max_tokens" value here is diagnostic evidence
+ * that the model's structured tool-call output was cut off mid-object —
+ * exactly the kind of safe, content-free fact DC-003-I032.3's own
+ * diagnostics are for; see social-media-package-generator.mjs.
  *
  * `toolName` — the tool name the request forced via `tool_choice`; the
  * response's `tool_use` block must match it, or the response is treated
@@ -130,5 +142,6 @@ export function validateLlmTransportResponse(rawResponse, toolName) {
     ]);
   }
 
-  return { slidesJson: JSON.stringify(toolUseBlock.input), usage: extractUsage(rawResponse) };
+  const stopReason = typeof rawResponse.stop_reason === "string" ? rawResponse.stop_reason : null;
+  return { slidesJson: JSON.stringify(toolUseBlock.input), usage: extractUsage(rawResponse), stopReason };
 }

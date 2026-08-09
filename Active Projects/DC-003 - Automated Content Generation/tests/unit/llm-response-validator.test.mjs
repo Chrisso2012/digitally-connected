@@ -132,3 +132,39 @@ test("slidesJson's own contract is unaffected by the presence or absence of usag
   const withoutUsage = validateLlmTransportResponse(toolUseResponse(input), TOOL_NAME);
   assert.equal(withUsage.slidesJson, withoutUsage.slidesJson);
 });
+
+// --- DC-003-I032.3: stop_reason preservation -------------------------
+// Additive, mirroring I023's own usage-preservation precedent exactly:
+// stop_reason was already returned by Anthropic on every real response
+// but previously read only to check for "refusal" then discarded. A
+// "max_tokens" value is safe, content-free diagnostic evidence that the
+// model's structured tool-call output was cut off mid-object.
+
+test('a tool_use response with stop_reason: "tool_use" surfaces it verbatim as stopReason', () => {
+  const { stopReason } = validateLlmTransportResponse(toolUseResponse({ slides: [] }), TOOL_NAME);
+  assert.equal(stopReason, "tool_use");
+});
+
+test('a response with stop_reason: "max_tokens" surfaces it verbatim — the truncation signal this milestone exists to catch', () => {
+  const { stopReason } = validateLlmTransportResponse(toolUseResponse({ slides: [] }, { stop_reason: "max_tokens" }), TOOL_NAME);
+  assert.equal(stopReason, "max_tokens");
+});
+
+test("a response with no stop_reason field at all yields stopReason: null, not an error", () => {
+  const response = toolUseResponse({ slides: [] });
+  delete response.stop_reason;
+  const { stopReason } = validateLlmTransportResponse(response, TOOL_NAME);
+  assert.equal(stopReason, null);
+});
+
+test("a non-string stop_reason degrades to stopReason: null rather than throwing", () => {
+  const { stopReason } = validateLlmTransportResponse(toolUseResponse({ slides: [] }, { stop_reason: 42 }), TOOL_NAME);
+  assert.equal(stopReason, null);
+});
+
+test("slidesJson's own contract is unaffected by the presence or value of stop_reason", () => {
+  const input = { slides: [{ slide_type: "cover", content: {} }] };
+  const a = validateLlmTransportResponse(toolUseResponse(input, { stop_reason: "tool_use" }), TOOL_NAME);
+  const b = validateLlmTransportResponse(toolUseResponse(input, { stop_reason: "max_tokens" }), TOOL_NAME);
+  assert.equal(a.slidesJson, b.slidesJson);
+});

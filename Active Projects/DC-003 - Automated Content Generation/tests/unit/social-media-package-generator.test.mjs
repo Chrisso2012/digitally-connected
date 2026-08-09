@@ -205,3 +205,77 @@ test("generateSocialMediaPackage() throws PipelineConfigurationError for missing
     const { editorialPackageStore } = buildStores(base);
     await assert.rejects(() => generateSocialMediaPackage("ep_x", { editorialPackageStore }), PipelineConfigurationError);
   }));
+
+// --- DC-003-I032.3 — fieldDiagnostics wiring ---------------------------
+// Reproduces the exact structural shape of the real live failure this
+// milestone exists to diagnose — a result-shape failure where the whole
+// `carousel` key is missing — using only synthetic, fake-provider test
+// data (never real generated content). Confirms
+// SocialMediaPackageGenerationFailedError.attempts[].fieldDiagnostics now
+// carries enough safe, content-free structural evidence to tell "carousel
+// was never present at all" apart from "carousel had the wrong type",
+// mirroring editorial-package-generator.mjs's own I031.3 precedent.
+
+test('generateSocialMediaPackage() attaches fieldDiagnostics naming "carousel" when the provider omits it entirely', () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const { carousel, ...withoutCarousel } = VALID_ANALYSIS;
+    const provider = fakeProvider("truncated-provider", async () => JSON.stringify(withoutCarousel));
+
+    try {
+      await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, provider, maxAttempts: 1 });
+      assert.fail("expected SocialMediaPackageGenerationFailedError");
+    } catch (error) {
+      assert.ok(error instanceof SocialMediaPackageGenerationFailedError);
+      const [attempt] = error.attempts;
+      assert.equal(attempt.stage, "result-shape");
+      assert.equal(attempt.fieldDiagnostics.field, "carousel");
+      assert.equal(attempt.fieldDiagnostics.shape.exists, false);
+      assert.ok(!attempt.fieldDiagnostics.topLevelKeys.includes("carousel"));
+      assert.deepEqual(attempt.fieldDiagnostics.topLevelKeys, ["hook", "callToAction", "tone", "audience", "platforms"]);
+    }
+  }));
+
+test("generateSocialMediaPackage() attaches fieldDiagnostics distinguishing a wrong-typed carousel from a missing one", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const provider = fakeProvider("wrong-typed-provider", async () => JSON.stringify({ ...VALID_ANALYSIS, carousel: "not an object" }));
+
+    try {
+      await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, provider, maxAttempts: 1 });
+      assert.fail("expected SocialMediaPackageGenerationFailedError");
+    } catch (error) {
+      const [attempt] = error.attempts;
+      assert.equal(attempt.fieldDiagnostics.field, "carousel");
+      assert.equal(attempt.fieldDiagnostics.shape.exists, true);
+      assert.equal(attempt.fieldDiagnostics.shape.type, "string");
+      assert.ok(attempt.fieldDiagnostics.topLevelKeys.includes("carousel"));
+    }
+  }));
+
+test("generateSocialMediaPackage() never leaks a sibling field's generated content inside fieldDiagnostics", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    // heading carries a "secret-looking" real value and is perfectly
+    // valid; body on the SAME slide is deliberately left blank so the
+    // failure is scoped to a sibling field — proves the diagnostic never
+    // leaks a valid neighbouring field's content via shape or key names.
+    const slides = VALID_ANALYSIS.carousel.slides.map((s, i) =>
+      i === 0 ? { ...s, heading: "a secret-looking headline that must never leak", body: "" } : s
+    );
+    const provider = fakeProvider("leaky-check-provider", async () =>
+      JSON.stringify({ ...VALID_ANALYSIS, carousel: { ...VALID_ANALYSIS.carousel, slides } })
+    );
+
+    try {
+      await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, provider, maxAttempts: 1 });
+      assert.fail("expected SocialMediaPackageGenerationFailedError");
+    } catch (error) {
+      const [attempt] = error.attempts;
+      assert.equal(attempt.fieldDiagnostics.field, "carousel.slides[0].body");
+      assert.doesNotMatch(JSON.stringify(attempt.fieldDiagnostics), /secret-looking/);
+    }
+  }));
