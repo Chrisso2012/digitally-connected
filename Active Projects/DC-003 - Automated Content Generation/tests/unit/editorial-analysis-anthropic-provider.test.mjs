@@ -100,6 +100,26 @@ test("analyzeContent() propagates a transport error unmodified", async () => {
   await assert.rejects(() => provider.analyzeContent("prompt"), LlmAuthenticationError);
 });
 
+// --- DC-003-I032.4 regression guard --------------------------------------
+// I032.4 raised social-media-anthropic-provider.mjs's own
+// DEFAULT_MAX_TOKENS to 8192, explicitly scoped to that file only — this
+// provider's default must stay at 4096, unmodified, proving no
+// shared-constant drift.
+
+test("analyzeContent() still defaults maxTokens to 4096, unaffected by I032.4's own independent 8192 default", async () => {
+  let observedRequest = null;
+  const spyTransport = {
+    name: "spy",
+    async send(request) {
+      observedRequest = request;
+      return { content: [{ type: "tool_use", name: request.toolName, input: VALID_TOOL_INPUT }], stop_reason: "tool_use" };
+    },
+  };
+  const provider = createAnthropicEditorialAnalysisProvider({ transport: spyTransport, model: "claude-sonnet-5" });
+  await provider.analyzeContent("prompt");
+  assert.equal(observedRequest.maxTokens, 4096);
+});
+
 // --- DC-003-I031.2 — the forced tool's own input_schema must reject an
 // empty string at the source, not merely after a local re-validation.
 // Regression coverage for the discovered live failure: Anthropic's
