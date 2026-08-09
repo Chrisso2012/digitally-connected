@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertValidEditorialAnalysisProvider, assertValidEditorialAnalysisResult, describeKeyInsightsShape } from "../../src/editorial-analysis-provider.mjs";
+import {
+  assertValidEditorialAnalysisProvider,
+  assertValidEditorialAnalysisResult,
+  describeKeyInsightsShape,
+  normalizeEditorialAnalysisKeyInsights,
+} from "../../src/editorial-analysis-provider.mjs";
 import { InvalidEditorialAnalysisProviderError, MalformedEditorialAnalysisResultError } from "../../src/editorial-analysis-errors.mjs";
 
 test("assertValidEditorialAnalysisProvider() accepts a well-shaped provider", () => {
@@ -128,4 +133,68 @@ test("describeKeyInsightsShape() detects a non-string item inside an otherwise-a
 test("describeKeyInsightsShape() never includes the actual string content anywhere in its own output shape", () => {
   const result = describeKeyInsightsShape(["a secret-looking sentence about the article"]);
   assert.doesNotMatch(JSON.stringify(result), /secret-looking/);
+});
+
+// --- DC-003-I031.4 — normalizeEditorialAnalysisKeyInsights(): narrowly
+// scoped provider-boundary normalisation, keyInsights only -------------
+
+test("normalizeEditorialAnalysisKeyInsights() leaves an already-valid array completely unchanged", () => {
+  const input = { ...VALID_RESULT, keyInsights: ["one", "two"] };
+  const result = normalizeEditorialAnalysisKeyInsights(input);
+  assert.deepEqual(result.keyInsights, ["one", "two"]);
+  assert.doesNotThrow(() => assertValidEditorialAnalysisResult(result));
+});
+
+test("normalizeEditorialAnalysisKeyInsights() converts a single non-blank string into a one-item array containing the exact original string", () => {
+  const original = "Timing was the primary issue.";
+  const input = { ...VALID_RESULT, keyInsights: original };
+  const result = normalizeEditorialAnalysisKeyInsights(input);
+  assert.deepEqual(result.keyInsights, [original]);
+  assert.equal(result.keyInsights[0], original, "the string must be preserved verbatim, not rewritten");
+  assert.doesNotThrow(() => assertValidEditorialAnalysisResult(result));
+});
+
+test("normalizeEditorialAnalysisKeyInsights() does not mutate any other field on the result", () => {
+  const input = { ...VALID_RESULT, keyInsights: "A lone insight.", primaryHeadline: "Untouched Headline" };
+  const result = normalizeEditorialAnalysisKeyInsights(input);
+  assert.equal(result.primaryHeadline, "Untouched Headline");
+  assert.equal(result.pullQuotes, input.pullQuotes);
+});
+
+test("normalizeEditorialAnalysisKeyInsights() does NOT normalise a blank/whitespace-only string — still fails validation", () => {
+  for (const blank of ["", "   ", "\n\t"]) {
+    const input = { ...VALID_RESULT, keyInsights: blank };
+    const result = normalizeEditorialAnalysisKeyInsights(input);
+    assert.equal(result.keyInsights, blank, "a blank string must pass through unchanged, never coerced into a valid-looking array");
+    assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
+  }
+});
+
+test("normalizeEditorialAnalysisKeyInsights() leaves null, numbers, booleans, and objects unchanged — still rejected by the validator", () => {
+  for (const malformed of [null, 42, true, { note: "not a list" }]) {
+    const input = { ...VALID_RESULT, keyInsights: malformed };
+    const result = normalizeEditorialAnalysisKeyInsights(input);
+    assert.equal(result.keyInsights, malformed);
+    assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
+  }
+});
+
+test("normalizeEditorialAnalysisKeyInsights() is a no-op when keyInsights is missing entirely", () => {
+  const { keyInsights, ...withoutKeyInsights } = VALID_RESULT;
+  const result = normalizeEditorialAnalysisKeyInsights(withoutKeyInsights);
+  assert.equal("keyInsights" in result, false);
+});
+
+test("normalizeEditorialAnalysisKeyInsights() passes through a non-object result unchanged (defense in depth)", () => {
+  assert.equal(normalizeEditorialAnalysisKeyInsights(null), null);
+  assert.equal(normalizeEditorialAnalysisKeyInsights("a string"), "a string");
+  assert.deepEqual(normalizeEditorialAnalysisKeyInsights(["array"]), ["array"]);
+});
+
+test("normalizeEditorialAnalysisKeyInsights() never alters other array fields (pullQuotes etc.) even if they were also lone strings — scoped to keyInsights only", () => {
+  const input = { ...VALID_RESULT, keyInsights: "A lone insight.", pullQuotes: "A lone quote, deliberately not an array." };
+  const result = normalizeEditorialAnalysisKeyInsights(input);
+  assert.deepEqual(result.keyInsights, ["A lone insight."]);
+  assert.equal(result.pullQuotes, "A lone quote, deliberately not an array.", "pullQuotes must be untouched — this normalisation is keyInsights-only");
+  assert.throws(() => assertValidEditorialAnalysisResult(result), MalformedEditorialAnalysisResultError);
 });

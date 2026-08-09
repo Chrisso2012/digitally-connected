@@ -205,11 +205,16 @@ test("an empty-string keyInsights entry surfaces keyInsightsDiagnostics.anyZeroL
     }
   }));
 
-test("a non-array keyInsights surfaces keyInsightsDiagnostics.isArray=false with its real JS type", () =>
+test("a non-string, non-array keyInsights surfaces keyInsightsDiagnostics.isArray=false with its real JS type", () =>
+  // DC-003-I031.4 note: a lone STRING is no longer a failing case here —
+  // normalizeEditorialAnalysisKeyInsights() now converts it to a valid
+  // one-item array before validation (see the dedicated I031.4 tests
+  // above/below). A number is used here instead, specifically because
+  // it's a shape the I031.4 normalisation deliberately never touches.
   withTempDir(async (base) => {
     const { ingestedContentStore, editorialPackageStore } = buildStores(base);
     const ic = seedIngestedContent(ingestedContentStore);
-    const provider = fakeProvider("wrong-shape-insight", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: "not an array" }));
+    const provider = fakeProvider("wrong-shape-insight", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: 42 }));
 
     try {
       await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
@@ -217,7 +222,7 @@ test("a non-array keyInsights surfaces keyInsightsDiagnostics.isArray=false with
     } catch (error) {
       const diagnostics = error.attempts[0].keyInsightsDiagnostics;
       assert.equal(diagnostics.isArray, false);
-      assert.equal(diagnostics.type, "string");
+      assert.equal(diagnostics.type, "number");
       assert.equal(diagnostics.length, null);
     }
   }));
@@ -231,6 +236,50 @@ test("keyInsightsDiagnostics is absent from a successful attempt", () =>
     await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
     // No assertion needed beyond "did not throw" — success attempts never
     // reach the result-shape catch block that attaches diagnostics.
+  }));
+
+// --- DC-003-I031.4 — end-to-end effect of the keyInsights provider
+// normalisation, exercised through the real generator, not just the
+// pure helper directly ------------------------------------------------
+
+test("generateEditorialPackage() succeeds when the provider returns keyInsights as a single string, normalising it to a one-item array", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const original = "Timing was the primary issue.";
+    const provider = fakeProvider("string-keyinsights", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: original }));
+
+    const record = await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+
+    assert.deepEqual(record.key_insights, [original]);
+  }));
+
+test("generateEditorialPackage() still fails when the provider returns keyInsights as a whitespace-only string — normalisation does not paper over it", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const provider = fakeProvider("blank-keyinsights", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: "   " }));
+
+    try {
+      await generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 });
+      assert.fail("expected EditorialPackageGenerationFailedError");
+    } catch (error) {
+      assert.ok(error instanceof EditorialPackageGenerationFailedError);
+      assert.equal(error.attempts[0].keyInsightsDiagnostics.type, "string");
+      assert.equal(error.attempts[0].keyInsightsDiagnostics.isArray, false);
+    }
+  }));
+
+test("generateEditorialPackage() still fails when the provider returns keyInsights as null — normalisation is a no-op for non-string shapes", () =>
+  withTempDir(async (base) => {
+    const { ingestedContentStore, editorialPackageStore } = buildStores(base);
+    const ic = seedIngestedContent(ingestedContentStore);
+    const provider = fakeProvider("null-keyinsights", async () => JSON.stringify({ ...VALID_ANALYSIS, keyInsights: null }));
+
+    await assert.rejects(
+      () => generateEditorialPackage(ic.ingested_content_id, { ingestedContentStore, editorialPackageStore, provider, maxAttempts: 1 }),
+      EditorialPackageGenerationFailedError
+    );
   }));
 
 test("generateEditorialPackage() propagates a non-retryable provider error immediately, bypassing retry", () =>

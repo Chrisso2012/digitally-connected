@@ -95,6 +95,31 @@ export function describeKeyInsightsShape(value) {
   };
 }
 
+// DC-003-I031.4 — narrowly-scoped provider-boundary normalisation for
+// keyInsights only. Live evidence (I031.3's own diagnostics) confirmed
+// Anthropic can return keyInsights as a single string despite the tool
+// schema declaring an array — this is model behaviour our own schema
+// (I031.2) cannot force. Called by editorial-package-generator.mjs
+// immediately after JSON.parse(raw), before assertValidEditorialAnalysisResult()
+// ever runs — never alters, rewrites, splits, or otherwise touches the
+// string's own content; a non-empty, non-whitespace string becomes
+// exactly a one-item array wrapping that same string, verbatim. Every
+// other shape (already an array, null, a number, an object, a blank/
+// whitespace-only string) passes through completely unchanged, so the
+// existing validator still rejects it exactly as before — this function
+// never makes an invalid result look valid beyond the one specific,
+// evidence-confirmed shape it targets.
+export function normalizeEditorialAnalysisKeyInsights(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result;
+  }
+  const value = result.keyInsights;
+  if (typeof value === "string" && value.trim() !== "") {
+    return { ...result, keyInsights: [value] };
+  }
+  return result;
+}
+
 export function assertValidEditorialAnalysisResult(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     throw new MalformedEditorialAnalysisResultError("result is not an object");

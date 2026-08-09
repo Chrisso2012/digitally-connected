@@ -28,7 +28,12 @@
 import { createEditorialPackage } from "./editorial-package.mjs";
 import { buildEditorialPackagePrompt, PROMPT_VERSION } from "./editorial-package-prompt-builder.mjs";
 import { createEditorialAnalysisMockProvider } from "./editorial-analysis-mock-provider.mjs";
-import { assertValidEditorialAnalysisProvider, assertValidEditorialAnalysisResult, describeKeyInsightsShape } from "./editorial-analysis-provider.mjs";
+import {
+  assertValidEditorialAnalysisProvider,
+  assertValidEditorialAnalysisResult,
+  describeKeyInsightsShape,
+  normalizeEditorialAnalysisKeyInsights,
+} from "./editorial-analysis-provider.mjs";
 import { MalformedEditorialAnalysisResultError } from "./editorial-analysis-errors.mjs";
 import { withRetry } from "./retry.mjs";
 import { loadVersions } from "./config-loader.mjs";
@@ -118,6 +123,13 @@ export async function generateEditorialPackage(ingestedContentId, dependencies =
       } catch (cause) {
         return { ok: false, stage: "parse", message: `Provider "${provider.name}" returned invalid JSON: ${cause.message}` };
       }
+
+      // DC-003-I031.4 — provider-boundary normalisation, keyInsights only.
+      // See normalizeEditorialAnalysisKeyInsights()'s own header comment:
+      // a lone non-blank string becomes a one-item array wrapping that
+      // exact string; every other shape passes through untouched, so
+      // validation below still rejects anything genuinely malformed.
+      parsed = normalizeEditorialAnalysisKeyInsights(parsed);
 
       try {
         assertValidEditorialAnalysisResult(parsed);
