@@ -19,14 +19,19 @@
 // identically here: --live defaults to exactly one attempt, independent
 // of LLM_MAX_ATTEMPTS, unless --live-max-attempts=N is explicitly given.
 //
-// DC-003-I032.2 — the --live per-request timeout defaults to 60000ms
-// (resolveLiveRequestTimeoutMs(), llm-provider-config.mjs — the same
-// resolver I031.1 already introduced, reused here unmodified), independent
-// of the shared loadLlmProviderConfig().requestTimeoutMs (still 15000ms —
-// no other CLI's own default changed). Raised here after a genuine live
-// I032 attempt timed out at the old shared 15000ms default, mirroring
-// I031.1's own incident exactly. Override with --live-timeout-ms=N for a
-// one-off run.
+// DC-003-I032.2/I032.5 — the --live per-request timeout defaults to
+// 120000ms via I032_DEFAULT_LIVE_TIMEOUT_MS below, passed as
+// resolveLiveRequestTimeoutMs()'s own explicit `defaultMs` parameter
+// (llm-provider-config.mjs) — scoped to this CLI only, deliberately NOT
+// the shared DEFAULT_LIVE_REQUEST_TIMEOUT_MS=60000 constant I031's own
+// editorial-package.mjs still uses unmodified. Independent of the shared
+// loadLlmProviderConfig().requestTimeoutMs (still 15000ms — no other
+// CLI's own default changed). I032.2 first raised this from 15000ms to
+// 60000ms after a genuine live I032 attempt timed out; I032.5 raised it
+// again to 120000ms after confirming (I032.4's own live attempt) that
+// the 8192-token live response genuinely needs longer than 60000ms to
+// arrive, not a shape/serialisation issue. Override with
+// --live-timeout-ms=N for a one-off run.
 
 import { createLocalJsonEditorialPackageStoreAdapter } from "../../src/local-json-editorial-package-store-adapter.mjs";
 import { createEditorialPackageStore } from "../../src/editorial-package-store.mjs";
@@ -58,6 +63,12 @@ import {
 } from "../../src/editorial-package-errors.mjs";
 import { InvalidSocialMediaProviderError, MalformedSocialMediaResultError, SocialMediaPromptBuilderError } from "../../src/social-media-analysis-errors.mjs";
 import { LlmProviderError } from "../../src/llm-provider-errors.mjs";
+
+// DC-003-I032.5 — this CLI's own live timeout default, deliberately
+// independent of llm-provider-config.mjs's shared DEFAULT_LIVE_REQUEST_TIMEOUT_MS
+// (still 60000ms, still I031's own editorial-package.mjs default) — see
+// this file's own header comment for the full history.
+const I032_DEFAULT_LIVE_TIMEOUT_MS = 120000;
 
 const KNOWN_ERRORS = [
   PipelineConfigurationError,
@@ -162,13 +173,13 @@ try {
         process.exit(1);
       }
       maxAttempts = resolveLiveMaxAttempts(liveMaxAttemptsValue); // throws RangeError on a bad override
-      const liveTimeoutMs = resolveLiveRequestTimeoutMs(liveTimeoutMsValue); // throws RangeError on a bad override
+      const liveTimeoutMs = resolveLiveRequestTimeoutMs(liveTimeoutMsValue, I032_DEFAULT_LIVE_TIMEOUT_MS); // throws RangeError on a bad override
       console.log(`Generating LIVE via Anthropic (${config.baseUrl}, model: ${config.model}) — this performs a real API call.`);
       console.log(
         `  maxAttempts: ${maxAttempts}${liveMaxAttemptsValue ? " (explicit --live-max-attempts override)" : " (safe default, independent of LLM_MAX_ATTEMPTS)"}`
       );
       console.log(
-        `  timeoutMs:   ${liveTimeoutMs}${liveTimeoutMsValue ? " (explicit --live-timeout-ms override)" : " (I032.2 live default, independent of LLM_REQUEST_TIMEOUT_MS)"}`
+        `  timeoutMs:   ${liveTimeoutMs}${liveTimeoutMsValue ? " (explicit --live-timeout-ms override)" : " (I032.5 live default, independent of LLM_REQUEST_TIMEOUT_MS and I031's own 60000ms default)"}`
       );
       const transport = createSocialMediaHttpTransport(config);
       provider = createAnthropicSocialMediaProvider({

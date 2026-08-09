@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -150,3 +150,26 @@ test("status prints an aggregate summary, including for an empty store", () =>
     assert.match(populated.stdout, /total_social_media_packages:\s+1/);
     assert.match(populated.stdout, /latest_status:\s+generated/);
   }));
+
+// --- DC-003-I032.5 — live timeout default -------------------------------
+// The CLI's own --live path exits (on a missing LLM_API_KEY) before it
+// ever reaches resolveLiveRequestTimeoutMs(), so the actual numeric
+// default it resolves to can't be observed via spawnSync without a real
+// API key. resolveLiveRequestTimeoutMs()'s own generic defaultMs
+// parameter is already covered at the function level
+// (llm-provider-config.test.mjs); what's genuinely specific to THIS file
+// is which constant it's called with — verified here as a source-text
+// regression guard against a silent reintroduction of the old 60000ms
+// value or a copy-paste of the wrong number.
+
+test("social-media-package.mjs declares its own I032_DEFAULT_LIVE_TIMEOUT_MS = 120000, independent of the shared 60000ms default", () => {
+  const source = readFileSync(SM_CLI_PATH, "utf-8");
+  assert.match(source, /const I032_DEFAULT_LIVE_TIMEOUT_MS = 120000;/);
+  assert.match(source, /resolveLiveRequestTimeoutMs\(liveTimeoutMsValue,\s*I032_DEFAULT_LIVE_TIMEOUT_MS\)/);
+});
+
+test("editorial-package.mjs (I031) still calls resolveLiveRequestTimeoutMs with no injected default — unaffected by I032.5", () => {
+  const epSource = readFileSync(EP_CLI_PATH, "utf-8");
+  assert.match(epSource, /resolveLiveRequestTimeoutMs\(liveTimeoutMsValue\)\s*;/);
+  assert.doesNotMatch(epSource, /I032_DEFAULT_LIVE_TIMEOUT_MS/);
+});
