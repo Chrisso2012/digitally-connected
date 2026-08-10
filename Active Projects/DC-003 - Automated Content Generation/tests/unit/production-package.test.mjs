@@ -302,3 +302,105 @@ test("accepts null statistic/quote on their own slides (honest no-evidence fallb
   const record = createProductionPackage(buildFields({ slideSequence: slides }));
   assert.equal(record.slide_sequence[statisticIndex].structured_content.statistic, null);
 });
+
+// --- DC-003-I033.1 — pre-render Template Capacity Contract gate --------
+// createProductionPackage() is the earliest point in the real pipeline
+// where a Production Package's own content exists at all — strictly
+// before any I034 render/Templated-transport call, satisfying "failure
+// must occur before provider spend" via the natural I033 object-
+// construction boundary, no new pipeline step required. Direct
+// regression coverage for car_3479ca8ac2af40b8's three reported
+// failures (statistic, infographic, CTA), reproduced here with the
+// exact real generated strings that were rejected.
+
+test("throws TemplateCapacityExceededError for the real rejected statistic.value (\"80% vs 20%\") — never silently accepted", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "statistic");
+  slides[index] = { ...slides[index], structuredContent: { statistic: { value: "80% vs 20%", context: "Short." }, quote: null, keyPoints: [] } };
+  try {
+    createProductionPackage(buildFields({ slideSequence: slides }));
+    assert.fail("expected TemplateCapacityExceededError");
+  } catch (error) {
+    assert.equal(error.name, "TemplateCapacityExceededError");
+    assert.ok(error.violations.some((v) => v.field === "structuredContent.statistic.value"));
+  }
+});
+
+test("throws TemplateCapacityExceededError for the four real rejected infographic key_points — item-length overflow", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "takeaway");
+  slides[index] = {
+    ...slides[index],
+    structuredContent: {
+      statistic: null,
+      quote: null,
+      keyPoints: [
+        "Owning a CRM and using its full capability are two different things",
+        "Circumstances like job changes, settlements or price sensitivity shift over time",
+        "Database Reactivation reframes 'interested vs not' to 'ready vs not ready yet'",
+        "Reopening a stalled conversation isn't a cold approach — it's continuing where things paused",
+      ],
+    },
+  };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), (error) => error.name === "TemplateCapacityExceededError");
+});
+
+test("infographic item-COUNT overflow (more than 4 key_points) still fails deterministically — caught by the existing pre-capacity structural check, which already enforced maxItems:4 before this milestone", () => {
+  // Genuine finding, not assumed: checkSlideSequence()'s own pre-existing
+  // structuredContent check already rejects >4 keyPoints structurally,
+  // before validateSlideSequenceCapacity() ever runs — so this specific
+  // case throws InvalidProductionPackageInputError, not
+  // TemplateCapacityExceededError. The NEW contribution of this
+  // milestone's own gate is per-ITEM CHARACTER length (see the dedicated
+  // test above using the four real rejected key_points) and every other
+  // char/word-count field — not item count, which the codebase already
+  // had covered.
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "takeaway");
+  slides[index] = { ...slides[index], structuredContent: { statistic: null, quote: null, keyPoints: ["1.", "2.", "3.", "4.", "5."] } };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test("throws TemplateCapacityExceededError for the real rejected CTA button label (~195 chars, the full call_to_action sentence)", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "cta");
+  slides[index] = {
+    ...slides[index],
+    ctaMapping:
+      "Audit your CRM now for appraisal, buyer and landlord enquiries from the past two years with no follow-up in the last six months, and reopen those conversations before spending more on new leads.",
+  };
+  try {
+    createProductionPackage(buildFields({ slideSequence: slides }));
+    assert.fail("expected TemplateCapacityExceededError");
+  } catch (error) {
+    assert.equal(error.name, "TemplateCapacityExceededError");
+    assert.ok(error.violations.some((v) => v.field === "ctaMapping"));
+  }
+});
+
+test("compliant content within every real limit is accepted normally — the gate never rejects genuinely-fitting content", () => {
+  const record = createProductionPackage(buildFields());
+  assert.equal(record.slide_sequence.length, 6);
+});
+
+test("TemplateCapacityExceededError never leaks the actual over-length string content — only field/length/limit, safe to log", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "cta");
+  const secretLookingCta = "a secret-looking sentence that must never leak into this error's own message";
+  slides[index] = { ...slides[index], ctaMapping: secretLookingCta };
+  try {
+    createProductionPackage(buildFields({ slideSequence: slides }));
+    assert.fail("expected TemplateCapacityExceededError");
+  } catch (error) {
+    assert.doesNotMatch(error.message, /secret-looking/);
+  }
+});
+
+test("the gate never silently truncates, rewrites, shrinks, or drops content — a rejected Production Package is never partially created", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "cta");
+  slides[index] = { ...slides[index], ctaMapping: "This call to action is deliberately written to be far too long for the fixed-size CTA button." };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), (error) => error.name === "TemplateCapacityExceededError");
+  // No partial/truncated record is ever returned — the function either
+  // returns a fully valid record or throws, nothing in between.
+});

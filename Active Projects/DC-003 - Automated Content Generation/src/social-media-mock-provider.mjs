@@ -28,10 +28,24 @@
 // rationale, and DC-003-I032.6 for why position 4 is now "evidence"
 // (never "quote") — this pipeline has no genuine external-attribution
 // data for any quote, in any article, in any industry.
+//
+// DC-003-I033.1 — every field below that is actually rendered onto a
+// real Templated layer is now mechanically truncated (this file's own
+// pre-existing truncate() helper, previously only applied to headings
+// via a hardcoded HEADING_MAX_LENGTH=60) to its real, geometry-derived
+// TEMPLATE_CAPACITY_CONTRACT limit instead — never a fabricated
+// substitute, always a real, verbatim-prefix substring of genuine
+// Editorial Package content. This mirrors, at the deterministic-mock
+// layer, exactly what the real Anthropic provider is now separately
+// instructed to do from the start (see social-media-package-prompt-
+// builder.mjs's own "Template capacity constraints" section) — the
+// content generator knowing its own output's destination capacity,
+// rather than anything downstream silently reshaping oversized content.
+
+import { TEMPLATE_CAPACITY_CONTRACT } from "./template-capacity-contract.mjs";
 
 const MOCK_PROVIDER_NAME = "mock-social-media-provider-v1";
 const X_CHARACTER_LIMIT = 280;
-const HEADING_MAX_LENGTH = 60;
 
 // Matches a genuine numeric/percentage/currency figure — deliberately
 // conservative so a bare year ("2026") or a list marker ("01") is never
@@ -53,10 +67,14 @@ function statisticCandidateSentences(ep) {
  * anywhere in the package — never synthesises a number.
  */
 function detectStatistic(ep) {
+  const { statisticValue, statisticContext } = TEMPLATE_CAPACITY_CONTRACT.statistic;
   for (const sentence of statisticCandidateSentences(ep)) {
     const match = STATISTIC_PATTERN.exec(sentence);
     if (match) {
-      return { value: sanitize(match[1]), context: sanitize(sentence) };
+      // DC-003-I033.1 — value is truncated to the real stat_value single-
+      // line capacity too, defensive even though the regex itself only
+      // ever captures one short figure, never a comparison string.
+      return { value: truncate(match[1], statisticValue.maxChars), context: truncate(sentence, statisticContext.maxChars) };
     }
   }
   return null;
@@ -64,10 +82,14 @@ function detectStatistic(ep) {
 
 /**
  * Up to 4 real key insights for the "takeaway" role — never padded with
- * invented content when fewer than 4 exist.
+ * invented content when fewer than 4 exist. DC-003-I033.1 — each item is
+ * mechanically truncated to the real infographic step_N_description
+ * capacity, matching the same real, verbatim-prefix discipline every
+ * other field here already uses.
  */
 function selectKeyPoints(ep) {
-  return (ep.key_insights ?? []).filter(isNonEmptyString).slice(0, 4);
+  const limit = TEMPLATE_CAPACITY_CONTRACT.takeaway.keyPoints.itemMaxChars;
+  return (ep.key_insights ?? []).filter(isNonEmptyString).slice(0, 4).map((point) => truncate(point, limit));
 }
 
 function sanitize(value) {
@@ -128,8 +150,17 @@ function buildCarouselSlides(ep) {
 
   return slides.map((slide, index) => {
     const slideNumber = index + 1;
-    const body = sanitize(slide.sourceText);
-    const heading = slide.heading ?? truncate(slide.sourceText, HEADING_MAX_LENGTH);
+    // DC-003-I033.1 — heading/body are each truncated to this specific
+    // role's own real capacity when that field is actually rendered
+    // onto a Templated layer (contract entry non-null); statistic/quote
+    // have no real headline_text/body_text layer at all, so their
+    // heading/body — still schema-required for the backward-compat
+    // headings[]/slideCopy[] arrays — are only sanitized, never
+    // truncated, since nothing downstream ever renders them.
+    const headingSource = slide.heading ?? slide.sourceText;
+    const capacity = TEMPLATE_CAPACITY_CONTRACT[slide.slideRole];
+    const heading = capacity.heading ? truncate(headingSource, capacity.heading.maxChars) : sanitize(headingSource);
+    const body = capacity.body ? truncate(slide.sourceText, capacity.body.maxChars) : sanitize(slide.sourceText);
     return {
       slideNumber,
       slideRole: slide.slideRole,
@@ -167,10 +198,18 @@ function buildSocialMediaContent(ep) {
   const xHashtags = hashtags.slice(0, 2).map((h) => `#${h.replace(/\s+/g, "")}`).join(" ");
 
   const slides = buildCarouselSlides(ep);
+  // DC-003-I033.1 — callToAction is not only marketing metadata: it is
+  // also copied verbatim onto the CTA slide's own real button_label
+  // layer, a fixed 272x64px button (templated-renderer-adapter.mjs's
+  // buildSlideSequence(): ctaMapping = callToAction on the final slide).
+  // Truncated to that layer's own real capacity here too — the single
+  // most consequential finding of this milestone's own investigation,
+  // and the dominant cause of the rejected carousel's CTA-slide collision.
+  const callToAction = truncate(ep.call_to_action, TEMPLATE_CAPACITY_CONTRACT.cta.ctaMapping.maxChars);
 
   return {
     hook,
-    callToAction: sanitize(ep.call_to_action),
+    callToAction,
     tone: "informative and professional — illustrative only, not derived from real brand voice data [mock]",
     audience: sanitize(ep.primary_audience),
     industryContext: null,
