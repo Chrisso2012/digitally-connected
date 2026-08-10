@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://digitallyconnected.net/schemas/dc-003/social-media-package.schema.json",
   "title": "Social Media Package",
-  "description": "DC-003-I032 — the canonical marketing package used by every downstream rendering milestone, derived from exactly one immutable Editorial Package (DC-003-I031) via AI-assisted platform-copy generation. Nothing after I032 needs to analyse editorial intent again. Deliberately platform-and-renderer-agnostic — the `carousel` section describes generic slide headings/copy/image guidance, never Templated's own six-slide-type field names (eyebrow_text/stat_value/quote_text/etc. from carousel-slide-spec.mjs), since mapping this content onto a specific rendering system's own payload shape is a later, explicitly out-of-scope milestone's job (I033+ Carousel Builder), not this one's. Also unrelated to social-publishing-manifest.schema.json (DC-003-I027) — that object is a downstream, human-APPROVED, POST-rendering publishing instruction tied to an already-rendered Finished Carousel; this object is an upstream, AI-generated, PRE-rendering draft. Immutable after creation: no update path exists, no record is ever mutated or deleted. Ordinary generation (social-media-package-generator.mjs's generateSocialMediaPackage()) still permits at most one Social Media Package per editorial_package_id (see the Social Media Package Store's own duplicate-rejection rule). DC-003-I032.8 — a SECOND (or later) Social Media Package for the same editorial_package_id may exist only as an explicit, immutable revision: see `revision`/`supersedes` below and reviseSocialMediaPackage() in social-media-package-generator.mjs. Revision lineage is a straight chain (never a fork) per editorial_package_id; 'latest revision' is always derived from the immutable chain (social-media-package-lineage.mjs), never stored as a mutable flag on any record.",
+  "description": "DC-003-I032 — the canonical marketing package used by every downstream rendering milestone, derived from exactly one immutable Editorial Package (DC-003-I031) via AI-assisted platform-copy generation. Nothing after I032 needs to analyse editorial intent again. Deliberately platform-and-renderer-agnostic — the `carousel` section describes generic slide headings/copy/image guidance, never Templated's own six-slide-type field names (eyebrow_text/stat_value/quote_text/etc. from carousel-slide-spec.mjs), since mapping this content onto a specific rendering system's own payload shape is a later, explicitly out-of-scope milestone's job (I033+ Carousel Builder), not this one's. Also unrelated to social-publishing-manifest.schema.json (DC-003-I027) — that object is a downstream, human-APPROVED, POST-rendering publishing instruction tied to an already-rendered Finished Carousel; this object is an upstream, AI-generated, PRE-rendering draft. Immutable after creation: no update path exists; at most one Social Media Package may exist per editorial_package_id (see the Social Media Package Store's own duplicate-rejection rule).",
   "type": "object",
   "required": [
     "social_media_package_id",
@@ -20,8 +20,6 @@
     "llm_model",
     "prompt_version",
     "schema_version",
-    "revision",
-    "supersedes",
     "checksum"
   ],
   "additionalProperties": false,
@@ -89,16 +87,6 @@
     "llm_model": { "type": "string", "minLength": 1 },
     "prompt_version": { "type": "string", "minLength": 1 },
     "schema_version": { "type": "string", "minLength": 1 },
-    "revision": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "DC-003-I032.8 — this record's position in its editorial_package_id's revision lineage, 1-indexed. The first Social Media Package ever generated for a given Editorial Package (via ordinary generateSocialMediaPackage()) is always revision 1, supersedes null. A record produced by the explicit reviseSocialMediaPackage() operation is always exactly one greater than the revision of the record it supersedes. A record persisted before this field existed (schema_version < 1.4) has no revision of its own, but is deterministically revision 1 in the in-memory compatibility view — see social-media-package-schema-history.mjs — since duplicate protection guaranteed at most one pre-lineage record could ever exist per editorial_package_id."
-    },
-    "supersedes": {
-      "type": ["string", "null"],
-      "pattern": "^sm_[A-Za-z0-9]+$",
-      "description": "DC-003-I032.8 — the social_media_package_id of the Social Media Package this record explicitly revises/regenerates, or null when this record is the first (revision 1) for its editorial_package_id. Set only by reviseSocialMediaPackage(), never by ordinary generateSocialMediaPackage() (which always writes null). The superseded record is NEVER mutated, deleted, or marked in any way by this — it remains an independent, immutable, fully readable historical record; only this newer record's own supersedes field expresses the relationship. A record persisted before this field existed is deterministically supersedes: null in the in-memory compatibility view (same rationale as revision above)."
-    },
     "checksum": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$",

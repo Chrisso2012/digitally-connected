@@ -35,9 +35,18 @@
 //   1.2 — DC-003-I031.8         (36a25c0) — added `industry_context`
 //                                 (this is the version boundary that made
 //                                 sm_cb4c4bcf72b14c9f, at 1.1, fail).
-//   1.3 — DC-003-I032.6 (CURRENT, schemas/social-media-package.schema.json
-//                                 itself — not duplicated here) — extended
-//                                 `slide_role` to include "evidence".
+//   1.3 — DC-003-I032.6         (0859f18) — extended `slide_role` to
+//                                 include "evidence". This is the version
+//                                 sm_cb4c4bcf72b14c9f, pp_95be2c6a4b424803,
+//                                 and car_3479ca8ac2af40b8's own lineage was
+//                                 generated under — the real historical
+//                                 record DC-003-I032.8's own compatibility
+//                                 view (revision/supersedes below) exists
+//                                 to serve.
+//   1.4 — DC-003-I032.8 (CURRENT, schemas/social-media-package.schema.json
+//                                 itself — not duplicated here) — added
+//                                 `revision`/`supersedes` revision-lineage
+//                                 fields.
 //
 // Each archived file below is a byte-for-byte copy of the real schema at
 // that commit (`git show <commit>:.../social-media-package.schema.json`)
@@ -49,7 +58,21 @@
 // A field name here means: "absent on a record whose own schema_version
 // predates the version listed is not corruption; the correct in-memory
 // representation is the value shown."
-const COMPATIBILITY_FIELDS = [{ field: "industry_context", introducedAtVersion: "1.2", compatibilityValue: null }];
+//
+// revision/supersedes (DC-003-I032.8): every record persisted before
+// schema_version 1.4 predates revision-lineage entirely — but duplicate
+// protection (findByEditorialPackageId(), enforced since I032 itself)
+// guaranteed at most one Social Media Package could ever exist per
+// editorial_package_id before this milestone, so a pre-1.4 record is
+// deterministically the first (and, until revised, only) record in its
+// own lineage: revision 1, supersedes null. This is not a guess — it
+// follows necessarily from the duplicate-protection invariant that has
+// held since I032's very first commit.
+const COMPATIBILITY_FIELDS = [
+  { field: "industry_context", introducedAtVersion: "1.2", compatibilityValue: null },
+  { field: "revision", introducedAtVersion: "1.4", compatibilityValue: 1 },
+  { field: "supersedes", introducedAtVersion: "1.4", compatibilityValue: null },
+];
 
 // Ajv's own $id-based schema registry means two schemas sharing an $id
 // cannot both be compiled into the SAME Ajv instance (every historical
@@ -63,7 +86,7 @@ import addFormats from "ajv-formats";
 import { readJsonFileSync } from "./read-json-file.mjs";
 import { resolveFromRoot } from "./paths.mjs";
 
-const HISTORICAL_VERSIONS = ["1.0", "1.1", "1.2"];
+const HISTORICAL_VERSIONS = ["1.0", "1.1", "1.2", "1.3"];
 
 function loadHistoricalSchema(version, rootDir) {
   return readJsonFileSync(resolveFromRoot(rootDir, "schemas", "history", "social-media-package", `${version}.json`));

@@ -110,3 +110,44 @@ export class SocialMediaPackageGenerationFailedError extends Error {
     this.maxAttempts = maxAttempts;
   }
 }
+
+// --- DC-003-I032.8 — Revision/Supersession Lineage errors -------------
+// Thrown by reviseSocialMediaPackage() (social-media-package-generator.mjs)
+// and social-media-package-lineage.mjs's own deriveLineage(). Every one
+// of these is a distinct, explicit safety-rule failure — none of them is
+// ever bypassable by a flag; the only recovery path is a fresh, correct
+// revise call naming the actual current latest revision.
+
+export class CrossEditorialPackageSupersessionError extends Error {
+  constructor(editorialPackageId, supersededSocialMediaPackageId, actualEditorialPackageId) {
+    super(
+      `Cannot revise for Editorial Package "${editorialPackageId}": the Social Media Package being superseded ("${supersededSocialMediaPackageId}") belongs to a different Editorial Package ("${actualEditorialPackageId}")`
+    );
+    this.name = "CrossEditorialPackageSupersessionError";
+    this.editorialPackageId = editorialPackageId;
+    this.supersededSocialMediaPackageId = supersededSocialMediaPackageId;
+    this.actualEditorialPackageId = actualEditorialPackageId;
+  }
+}
+
+export class NotLatestRevisionError extends Error {
+  constructor(supersededSocialMediaPackageId, actualLatestSocialMediaPackageId) {
+    super(
+      `Cannot revise "${supersededSocialMediaPackageId}": it is not the latest revision in its lineage (the current latest is ${
+        actualLatestSocialMediaPackageId ? `"${actualLatestSocialMediaPackageId}"` : "unknown — the lineage could not be resolved"
+      }) — only the latest revision may be superseded, so a second revision can never fork from an earlier one`
+    );
+    this.name = "NotLatestRevisionError";
+    this.supersededSocialMediaPackageId = supersededSocialMediaPackageId;
+    this.actualLatestSocialMediaPackageId = actualLatestSocialMediaPackageId;
+  }
+}
+
+export class MalformedSocialMediaPackageLineageError extends Error {
+  constructor(editorialPackageId, reason) {
+    super(`Social Media Package revision lineage for Editorial Package "${editorialPackageId}" is malformed — ${reason}`);
+    this.name = "MalformedSocialMediaPackageLineageError";
+    this.editorialPackageId = editorialPackageId;
+    this.reason = reason;
+  }
+}

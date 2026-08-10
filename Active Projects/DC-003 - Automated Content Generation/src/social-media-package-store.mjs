@@ -16,6 +16,7 @@ import { createValidator } from "./validator.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
 import { assertValidSocialMediaPackageStoreAdapter } from "./social-media-package-store-adapter.mjs";
 import { createSocialMediaPackageSchemaHistory, applyCompatibilityView } from "./social-media-package-schema-history.mjs";
+import { deriveLineage } from "./social-media-package-lineage.mjs";
 import { loadVersions } from "./config-loader.mjs";
 import {
   InvalidSocialMediaPackageIdentifierError,
@@ -98,6 +99,8 @@ function summarize(record) {
     status: record.status,
     hook: record.hook,
     generated_at: record.generated_at,
+    revision: record.revision,
+    supersedes: record.supersedes,
   };
 }
 
@@ -230,5 +233,37 @@ export function createSocialMediaPackageStore({ adapter } = {}, options = {}) {
     return deepFreezeClone(records);
   }
 
-  return { name: adapter.name, save, get, list, exists, findByEditorialPackageId };
+  /**
+   * DC-003-I032.8 — reconstructs and validates the full revision chain
+   * for one Editorial Package, deriving "latest" from the immutable
+   * supersedes chain rather than any stored flag (see
+   * social-media-package-lineage.mjs's own header comment). Returns
+   * { chain, latest } — chain is every revision in true V1..Vn order,
+   * each annotated `is_latest`; latest is chain's last entry, or null
+   * when no Social Media Package exists yet for this Editorial Package.
+   *
+   * Throws MalformedSocialMediaPackageLineageError if the stored records
+   * for this editorial_package_id don't form a single well-formed chain
+   * (a fork, a cycle, a dangling supersedes reference, or a revision
+   * number that disagrees with true chain position) — this can only
+   * happen from a persistence-layer defect or manual file tampering,
+   * never from ordinary generateSocialMediaPackage()/
+   * reviseSocialMediaPackage() use, both of which only ever extend a
+   * chain that was already well-formed.
+   */
+  function getLineage(editorialPackageId) {
+    const records = findByEditorialPackageId(editorialPackageId);
+    return deepFreezeClone(deriveLineage(records));
+  }
+
+  /**
+   * Convenience wrapper over getLineage() — returns just the current
+   * latest-revision record (or null), for callers that don't need the
+   * full chain.
+   */
+  function findLatestRevision(editorialPackageId) {
+    return getLineage(editorialPackageId).latest;
+  }
+
+  return { name: adapter.name, save, get, list, exists, findByEditorialPackageId, getLineage, findLatestRevision };
 }

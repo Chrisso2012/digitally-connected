@@ -90,11 +90,36 @@ function buildV10Record(overrides = {}) {
   };
 }
 
+// A genuine, minimal 1.2-shaped record — has industry_context (added at
+// 1.2) but no revision/supersedes (added at 1.4).
+function buildV12Record(overrides = {}) {
+  return {
+    ...buildV11Record(),
+    social_media_package_id: "sm_historicaltest0003",
+    industry_context: null,
+    schema_version: "1.2",
+    ...overrides,
+  };
+}
+
+// A genuine, minimal 1.3-shaped record (DC-003-I032.6's own shape — the
+// real sm_cb4c4bcf72b14c9f/pp_95be2c6a4b424803/car_3479ca8ac2af40b8
+// lineage was generated under this version) — has industry_context, the
+// "evidence" slide_role, but no revision/supersedes (added at 1.4).
+function buildV13Record(overrides = {}) {
+  return {
+    ...buildV12Record(),
+    social_media_package_id: "sm_historicaltest0004",
+    schema_version: "1.3",
+    ...overrides,
+  };
+}
+
 // --- One canonical, disclosed set of known historical versions --------
 
-test("knows exactly the three retired versions (1.0, 1.1, 1.2) — 1.3 is current, not archived here", () => {
+test("knows exactly the four retired versions (1.0, 1.1, 1.2, 1.3) — 1.4 is current, not archived here", () => {
   const history = createSocialMediaPackageSchemaHistory();
-  assert.deepEqual(history.knownVersions, ["1.0", "1.1", "1.2"]);
+  assert.deepEqual(history.knownVersions, ["1.0", "1.1", "1.2", "1.3"]);
 });
 
 test("isKnownHistoricalVersion() is true only for archived versions", () => {
@@ -102,9 +127,31 @@ test("isKnownHistoricalVersion() is true only for archived versions", () => {
   assert.equal(history.isKnownHistoricalVersion("1.0"), true);
   assert.equal(history.isKnownHistoricalVersion("1.1"), true);
   assert.equal(history.isKnownHistoricalVersion("1.2"), true);
-  assert.equal(history.isKnownHistoricalVersion("1.3"), false, "1.3 is current, not archived — the store's own current-schema path handles it");
+  assert.equal(history.isKnownHistoricalVersion("1.3"), true);
+  assert.equal(history.isKnownHistoricalVersion("1.4"), false, "1.4 is current, not archived — the store's own current-schema path handles it");
   assert.equal(history.isKnownHistoricalVersion("9.9"), false);
   assert.equal(history.isKnownHistoricalVersion(undefined), false);
+});
+
+test("a genuine 1.2-shaped record (has industry_context, no revision/supersedes) validates against archived schema 1.2", () => {
+  const history = createSocialMediaPackageSchemaHistory();
+  const result = history.validate("1.2", buildV12Record());
+  assert.equal(result.valid, true, JSON.stringify(result.errors));
+});
+
+test("a genuine 1.3-shaped record (the real sm_cb4c4bcf72b14c9f lineage's own shape) validates against archived schema 1.3", () => {
+  const history = createSocialMediaPackageSchemaHistory();
+  const result = history.validate("1.3", buildV13Record());
+  assert.equal(result.valid, true, JSON.stringify(result.errors));
+});
+
+test("a 1.3-shaped record is NOT falsely rejected for lacking revision/supersedes — those fields did not exist in schema 1.3", () => {
+  const history = createSocialMediaPackageSchemaHistory();
+  const record = buildV13Record();
+  assert.equal("revision" in record, false);
+  assert.equal("supersedes" in record, false);
+  const result = history.validate("1.3", record);
+  assert.equal(result.valid, true);
 });
 
 // --- A historical record validates under its own schema version -------
@@ -183,13 +230,66 @@ test("applyCompatibilityView() never overwrites a genuinely present value, even 
   assert.equal(view.industry_context, "Should never happen, but if present, must never be clobbered");
 });
 
-test('applyCompatibilityView()\'s own "before" boundary is exact — at version 1.2 itself (not merely "1.2 or later"), the field is never backfilled', () => {
+test('applyCompatibilityView()\'s own "before" boundary is exact — at version 1.2 itself (not merely "1.2 or later"), industry_context is never backfilled', () => {
   // Deliberately calling this pure function in isolation with data that
   // would never reach it through the real store (which validates the
   // schema FIRST, so a genuine 1.2 record always already has
   // industry_context) — this exercises applyCompatibilityView()'s own
   // exact version-comparison boundary, not a realistic end-to-end case.
-  const recordMissingTheFieldAnyway = buildV11Record({ schema_version: "1.2" });
+  // revision/supersedes are supplied explicitly here (DC-003-I032.8) so
+  // THIS test isolates the industry_context boundary specifically — a
+  // genuine 1.2 record predates 1.4 too and would otherwise still get
+  // those two fields backfilled, which is correct behaviour but not what
+  // this particular test is checking (see the dedicated 1.2/1.3
+  // revision-backfill tests below instead).
+  const recordMissingTheFieldAnyway = buildV11Record({ schema_version: "1.2", revision: 1, supersedes: null });
   const view = applyCompatibilityView(recordMissingTheFieldAnyway, "1.2");
   assert.equal(view, recordMissingTheFieldAnyway, 'version "1.2" is not BEFORE "1.2" — the exact same reference is returned, no backfill attempted');
+});
+
+// --- DC-003-I032.8 — revision/supersedes compatibility view -----------
+// Direct regression coverage for the real sm_cb4c4bcf72b14c9f (schema
+// 1.3, no revision/supersedes at all): must appear as revision: 1,
+// supersedes: null in memory, never guessed to be anything else, never
+// written back.
+
+test("applyCompatibilityView() adds revision: 1, supersedes: null for a version before 1.4 (the version that introduced them)", () => {
+  const record = buildV13Record();
+  const view = applyCompatibilityView(record, "1.3");
+  assert.equal(view.revision, 1);
+  assert.equal(view.supersedes, null);
+});
+
+test("applyCompatibilityView() adds revision/supersedes for every earlier version too (1.0, 1.1, 1.2), not only 1.3", () => {
+  assert.equal(applyCompatibilityView(buildV10Record(), "1.0").revision, 1);
+  assert.equal(applyCompatibilityView(buildV11Record(), "1.1").revision, 1);
+  assert.equal(applyCompatibilityView(buildV12Record(), "1.2").revision, 1);
+});
+
+test("applyCompatibilityView() never overwrites a genuinely present revision/supersedes, even on an older version", () => {
+  const record = buildV13Record({ revision: 7, supersedes: "sm_shouldneverbeclobbered" });
+  const view = applyCompatibilityView(record, "1.3");
+  assert.equal(view.revision, 7);
+  assert.equal(view.supersedes, "sm_shouldneverbeclobbered");
+});
+
+test("applyCompatibilityView() does not mutate the original 1.3 record — a new object only", () => {
+  const record = buildV13Record();
+  const view = applyCompatibilityView(record, "1.3");
+  assert.equal("revision" in record, false);
+  assert.equal("supersedes" in record, false);
+  assert.notEqual(view, record);
+});
+
+test('applyCompatibilityView()\'s "before" boundary for revision/supersedes is exact at 1.4 — never backfilled at or after 1.4', () => {
+  const recordMissingFieldsAnyway = buildV13Record({ schema_version: "1.4" });
+  const view = applyCompatibilityView(recordMissingFieldsAnyway, "1.4");
+  assert.equal(view, recordMissingFieldsAnyway, 'version "1.4" is not BEFORE "1.4" — no backfill attempted');
+});
+
+test("applyCompatibilityView() combines industry_context AND revision/supersedes backfill correctly for a pre-1.2 (1.0/1.1) record", () => {
+  const view = applyCompatibilityView(buildV11Record(), "1.1");
+  assert.equal(view.industry_context, null);
+  assert.equal(view.revision, 1);
+  assert.equal(view.supersedes, null);
 });

@@ -273,3 +273,41 @@ test("six-slide structure is preserved regardless of which role position 4 uses 
   assert.equal(record.carousel.slides.length, 6);
   assert.equal(record.carousel.slides[5].slide_role, "cta");
 });
+
+// --- DC-003-I032.8 — revision/supersedes lineage fields, at the domain
+// object layer. Ordinary callers (generateSocialMediaPackage()) never
+// pass either field — only reviseSocialMediaPackage() does — so the
+// default shape (revision: 1, supersedes: null) must be exactly what
+// every pre-existing buildFields()-based test above already produces.
+
+test("revision defaults to 1 and supersedes defaults to null when both are omitted", () => {
+  const record = createSocialMediaPackage(buildFields());
+  assert.equal(record.revision, 1);
+  assert.equal(record.supersedes, null);
+});
+
+test("accepts an explicit revision > 1 paired with a matching supersedes id", () => {
+  const record = createSocialMediaPackage(buildFields({ revision: 2, supersedes: "sm_previousrevision1" }));
+  assert.equal(record.revision, 2);
+  assert.equal(record.supersedes, "sm_previousrevision1");
+});
+
+test("throws InvalidSocialMediaPackageInputError when revision is not a positive integer", () => {
+  for (const badRevision of [0, -1, 1.5, "1", null]) {
+    assert.throws(() => createSocialMediaPackage(buildFields({ revision: badRevision, supersedes: "sm_previousrevision1" })), InvalidSocialMediaPackageInputError);
+  }
+});
+
+test("throws InvalidSocialMediaPackageInputError when supersedes is neither null nor a valid sm_... id", () => {
+  for (const badSupersedes of ["not-an-id", "ep_wrongprefix00001", 123]) {
+    assert.throws(() => createSocialMediaPackage(buildFields({ revision: 2, supersedes: badSupersedes })), InvalidSocialMediaPackageInputError);
+  }
+});
+
+test("throws InvalidSocialMediaPackageInputError when revision is 1 but supersedes is non-null — V1 can never supersede anything", () => {
+  assert.throws(() => createSocialMediaPackage(buildFields({ revision: 1, supersedes: "sm_shouldnotbehere001" })), InvalidSocialMediaPackageInputError);
+});
+
+test("throws InvalidSocialMediaPackageInputError when revision is greater than 1 but supersedes is null — every revision beyond V1 must name what it supersedes", () => {
+  assert.throws(() => createSocialMediaPackage(buildFields({ revision: 2, supersedes: null })), InvalidSocialMediaPackageInputError);
+});

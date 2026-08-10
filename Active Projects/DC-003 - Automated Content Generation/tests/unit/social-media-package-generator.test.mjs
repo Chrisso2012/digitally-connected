@@ -3,14 +3,20 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { generateSocialMediaPackage } from "../../src/social-media-package-generator.mjs";
+import { generateSocialMediaPackage, reviseSocialMediaPackage } from "../../src/social-media-package-generator.mjs";
 import { createEditorialPackageStore } from "../../src/editorial-package-store.mjs";
 import { createLocalJsonEditorialPackageStoreAdapter } from "../../src/local-json-editorial-package-store-adapter.mjs";
 import { createEditorialPackage } from "../../src/editorial-package.mjs";
 import { createSocialMediaPackageStore } from "../../src/social-media-package-store.mjs";
 import { createLocalJsonSocialMediaPackageStoreAdapter } from "../../src/local-json-social-media-package-store-adapter.mjs";
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
-import { DuplicateSocialMediaPackageError, SocialMediaPackageGenerationFailedError } from "../../src/social-media-package-errors.mjs";
+import {
+  DuplicateSocialMediaPackageError,
+  SocialMediaPackageGenerationFailedError,
+  SocialMediaPackageNotFoundError,
+  CrossEditorialPackageSupersessionError,
+  NotLatestRevisionError,
+} from "../../src/social-media-package-errors.mjs";
 import { EditorialPackageNotFoundError } from "../../src/editorial-package-errors.mjs";
 
 async function withTempDir(fn) {
@@ -28,7 +34,7 @@ function buildStores(base) {
   return { editorialPackageStore, socialMediaPackageStore };
 }
 
-function seedEditorialPackage(store, overrides = {}) {
+function seedEditorialPackage(store, overrides = {}, options = {}) {
   return store.save(
     createEditorialPackage(
       {
@@ -54,7 +60,7 @@ function seedEditorialPackage(store, overrides = {}) {
         schemaVersion: "1.0",
         ...overrides,
       },
-      { idGenerator: () => "ep_generatortest0001" }
+      { idGenerator: options.idGenerator ?? (() => "ep_generatortest0001") }
     )
   );
 }
@@ -307,4 +313,200 @@ test("generateSocialMediaPackage() never leaks a sibling field's generated conte
       assert.equal(attempt.fieldDiagnostics.field, "carousel.slides[0].body");
       assert.doesNotMatch(JSON.stringify(attempt.fieldDiagnostics), /secret-looking/);
     }
+  }));
+
+// --- DC-003-I032.8 — Revision/Supersession Lineage ---------------------
+// Direct regression coverage for the required test list in the I032.8
+// brief: first creation is V1, ordinary duplicate still fails, an
+// explicit revision creates V2 pointing to V1, revising V2 creates V3
+// pointing to V2, revising a non-latest revision fails (never forks),
+// and cross-Editorial-Package supersession fails. Historical pre-lineage
+// V1 compatibility and "latest revision" lineage-lookup determinism are
+// covered directly in social-media-package-store.test.mjs and
+// social-media-package-lineage.test.mjs — not duplicated here.
+// Downstream I033 consumption of a revision is covered in
+// production-package-generator.test.mjs, against the real I033 entry
+// point, not re-asserted here.
+
+test("generateSocialMediaPackage() produces revision: 1, supersedes: null for the first-ever Social Media Package", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_lineagev1000001" });
+
+    assert.equal(v1.revision, 1);
+    assert.equal(v1.supersedes, null);
+  }));
+
+test("ordinary generateSocialMediaPackage() still fails with DuplicateSocialMediaPackageError once any revision exists — revision lineage never weakens this", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_dupv1000000001" });
+    await reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      idGenerator: () => "sm_dupv2000000001",
+    });
+
+    await assert.rejects(
+      () => generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore }),
+      DuplicateSocialMediaPackageError
+    );
+  }));
+
+test("reviseSocialMediaPackage() creates V2 — revision 2, supersedes V1's id, V1 itself untouched", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_revv1000000001" });
+
+    const v2 = await reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      idGenerator: () => "sm_revv2000000001",
+    });
+
+    assert.equal(v2.revision, 2);
+    assert.equal(v2.supersedes, v1.social_media_package_id);
+    assert.equal(v2.editorial_package_id, ep.editorial_package_id);
+    assert.equal(socialMediaPackageStore.get(v1.social_media_package_id).revision, 1);
+    assert.equal(socialMediaPackageStore.get(v1.social_media_package_id).supersedes, null);
+  }));
+
+test("reviseSocialMediaPackage() of V2 creates V3 — revision 3, supersedes V2's id", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_v3chainv1000001" });
+    const v2 = await reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      idGenerator: () => "sm_v3chainv2000001",
+    });
+
+    const v3 = await reviseSocialMediaPackage(ep.editorial_package_id, v2.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      idGenerator: () => "sm_v3chainv3000001",
+    });
+
+    assert.equal(v3.revision, 3);
+    assert.equal(v3.supersedes, v2.social_media_package_id);
+  }));
+
+test("reviseSocialMediaPackage() of V1 fails with NotLatestRevisionError once V2 already exists — never forks the chain", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_forkguardv1001" });
+    await reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      idGenerator: () => "sm_forkguardv2001",
+    });
+
+    await assert.rejects(
+      () =>
+        reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+          editorialPackageStore,
+          socialMediaPackageStore,
+          idGenerator: () => "sm_forkguardv2b001",
+        }),
+      NotLatestRevisionError
+    );
+    assert.equal(socialMediaPackageStore.exists("sm_forkguardv2b001"), false, "the rejected fork attempt must persist nothing");
+  }));
+
+test("reviseSocialMediaPackage() fails with CrossEditorialPackageSupersessionError when the superseded record belongs to a different Editorial Package", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const epA = seedEditorialPackage(editorialPackageStore, {}, { idGenerator: () => "ep_crosstesta0000001" });
+    const epB = seedEditorialPackage(editorialPackageStore, { ingestedContentId: "ic_bbbbbbbbbbbbbbbb" }, { idGenerator: () => "ep_crosstestb0000001" });
+    const smA = await generateSocialMediaPackage(epA.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_crosstesta000001" });
+
+    await assert.rejects(
+      () =>
+        reviseSocialMediaPackage(epB.editorial_package_id, smA.social_media_package_id, {
+          editorialPackageStore,
+          socialMediaPackageStore,
+          idGenerator: () => "sm_crosstestb000001",
+        }),
+      CrossEditorialPackageSupersessionError
+    );
+    assert.equal(socialMediaPackageStore.exists("sm_crosstestb000001"), false);
+  }));
+
+test("reviseSocialMediaPackage() throws SocialMediaPackageNotFoundError when the superseded id does not exist", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+
+    await assert.rejects(
+      () => reviseSocialMediaPackage(ep.editorial_package_id, "sm_doesnotexist00001", { editorialPackageStore, socialMediaPackageStore }),
+      SocialMediaPackageNotFoundError
+    );
+  }));
+
+test("reviseSocialMediaPackage() never throws DuplicateSocialMediaPackageError — that check belongs only to ordinary create", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_noduperrv1001" });
+
+    const v2 = await reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      idGenerator: () => "sm_noduperrv2001",
+    });
+    assert.equal(v2.revision, 2);
+  }));
+
+test("reviseSocialMediaPackage() throws PipelineConfigurationError for missing dependencies.editorialPackageStore", () =>
+  withTempDir(async (base) => {
+    const { socialMediaPackageStore } = buildStores(base);
+    await assert.rejects(() => reviseSocialMediaPackage("ep_x", "sm_x", { socialMediaPackageStore }), PipelineConfigurationError);
+  }));
+
+test("reviseSocialMediaPackage() throws PipelineConfigurationError for missing dependencies.socialMediaPackageStore", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore } = buildStores(base);
+    await assert.rejects(() => reviseSocialMediaPackage("ep_x", "sm_x", { editorialPackageStore }), PipelineConfigurationError);
+  }));
+
+test("reviseSocialMediaPackage() throws PipelineConfigurationError when supersededSocialMediaPackageId is missing", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    await assert.rejects(() => reviseSocialMediaPackage("ep_x", undefined, { editorialPackageStore, socialMediaPackageStore }), PipelineConfigurationError);
+  }));
+
+test("reviseSocialMediaPackage() throws EditorialPackageNotFoundError for an unknown editorialPackageId", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_epmissingv1001" });
+
+    await assert.rejects(
+      () => reviseSocialMediaPackage("ep_doesnotexist00001", v1.social_media_package_id, { editorialPackageStore, socialMediaPackageStore }),
+      EditorialPackageNotFoundError
+    );
+  }));
+
+test("reviseSocialMediaPackage() with an injected provider uses its output verbatim, same as generateSocialMediaPackage()", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_injectedv1001" });
+    const provider = fakeProvider("fake-revision-provider", async () => JSON.stringify({ ...VALID_ANALYSIS, hook: "Revised hook" }));
+
+    const v2 = await reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      provider,
+      idGenerator: () => "sm_injectedv2001",
+    });
+
+    assert.equal(v2.hook, "Revised hook");
+    assert.equal(v2.llm_model, "fake-revision-provider");
   }));

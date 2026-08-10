@@ -14,6 +14,7 @@ import {
   SocialMediaPackageNotFoundError,
   CorruptedSocialMediaPackageError,
   UnsupportedSchemaVersionError,
+  MalformedSocialMediaPackageLineageError,
 } from "../../src/social-media-package-errors.mjs";
 
 // DC-003-I032.7 — the store now validates a stored record against the
@@ -284,4 +285,98 @@ test("list() also succeeds against a store mixing one historical and one current
 
     const summaries = store.list();
     assert.equal(summaries.length, 2);
+  }));
+
+// --- DC-003-I032.8 — revision-lineage historical compatibility --------
+// The real sm_cb4c4bcf72b14c9f (and every other pre-1.4 record) has no
+// revision/supersedes fields on disk at all. Direct regression coverage
+// that the store's compatibility view backfills exactly revision: 1,
+// supersedes: null — never guessed, never written back.
+
+test("get() exposes revision: 1, supersedes: null for a pre-lineage (1.1-shaped) historical record — added only in memory", () =>
+  withTempDir((dir) => {
+    const adapter = createLocalJsonSocialMediaPackageStoreAdapter({ storageDir: dir });
+    adapter.write("sm_historicalstore001", JSON.stringify(buildV11StoredRecord()));
+    const store = createSocialMediaPackageStore({ adapter });
+
+    const record = store.get("sm_historicalstore001");
+    assert.equal(record.revision, 1);
+    assert.equal(record.supersedes, null);
+    assert.equal("revision" in JSON.parse(adapter.read("sm_historicalstore001")), false, "revision must never be written back to the historical file");
+  }));
+
+// --- DC-003-I032.8 — getLineage() / findLatestRevision() --------------
+
+test("getLineage() returns an empty chain and null latest when no Social Media Package exists for the Editorial Package", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    const lineage = store.getLineage("ep_doesnotexist00001");
+    assert.deepEqual(lineage.chain, []);
+    assert.equal(lineage.latest, null);
+  }));
+
+test("getLineage() returns a single-entry chain (is_latest: true) for an ordinary first-ever record", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    store.save(buildRecord({}, { idGenerator: () => "sm_lineagev1000001" }));
+
+    const lineage = store.getLineage("ep_a1b2c3d4e5f60708");
+    assert.equal(lineage.chain.length, 1);
+    assert.equal(lineage.chain[0].social_media_package_id, "sm_lineagev1000001");
+    assert.equal(lineage.chain[0].is_latest, true);
+    assert.equal(lineage.latest.social_media_package_id, "sm_lineagev1000001");
+  }));
+
+test("getLineage() reconstructs a true V1->V2->V3 chain and identifies V3 as latest, deterministically", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    const v1 = store.save(buildRecord({}, { idGenerator: () => "sm_chainv1000000001" }));
+    const v2 = store.save(buildRecord({ revision: 2, supersedes: v1.social_media_package_id }, { idGenerator: () => "sm_chainv2000000001" }));
+    store.save(buildRecord({ revision: 3, supersedes: v2.social_media_package_id }, { idGenerator: () => "sm_chainv3000000001" }));
+
+    const lineage = store.getLineage("ep_a1b2c3d4e5f60708");
+    assert.deepEqual(
+      lineage.chain.map((r) => r.social_media_package_id),
+      ["sm_chainv1000000001", "sm_chainv2000000001", "sm_chainv3000000001"]
+    );
+    assert.deepEqual(
+      lineage.chain.map((r) => r.is_latest),
+      [false, false, true]
+    );
+    assert.equal(lineage.latest.social_media_package_id, "sm_chainv3000000001");
+    assert.equal(lineage.latest.revision, 3);
+  }));
+
+test("getLineage() throws MalformedSocialMediaPackageLineageError when the stored records for one Editorial Package form a fork", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    const v1 = store.save(buildRecord({}, { idGenerator: () => "sm_forkv1000000001" }));
+    store.save(buildRecord({ revision: 2, supersedes: v1.social_media_package_id }, { idGenerator: () => "sm_forkv2a00000001" }));
+    store.save(buildRecord({ revision: 2, supersedes: v1.social_media_package_id }, { idGenerator: () => "sm_forkv2b00000001" }));
+
+    assert.throws(() => store.getLineage("ep_a1b2c3d4e5f60708"), MalformedSocialMediaPackageLineageError);
+  }));
+
+test("findLatestRevision() returns the same record getLineage().latest does, and null when none exists", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    assert.equal(store.findLatestRevision("ep_a1b2c3d4e5f60708"), null);
+
+    const v1 = store.save(buildRecord({}, { idGenerator: () => "sm_findlatestv1001" }));
+    store.save(buildRecord({ revision: 2, supersedes: v1.social_media_package_id }, { idGenerator: () => "sm_findlatestv2001" }));
+
+    assert.equal(store.findLatestRevision("ep_a1b2c3d4e5f60708").social_media_package_id, "sm_findlatestv2001");
+  }));
+
+test("getLineage() treats a pre-lineage historical record (revision: 1 via compatibility view) as a valid, latest V1", () =>
+  withTempDir((dir) => {
+    const adapter = createLocalJsonSocialMediaPackageStoreAdapter({ storageDir: dir });
+    adapter.write("sm_historicalstore001", JSON.stringify(buildV11StoredRecord()));
+    const store = createSocialMediaPackageStore({ adapter });
+
+    const lineage = store.getLineage("ep_a1b2c3d4e5f60708");
+    assert.equal(lineage.chain.length, 1);
+    assert.equal(lineage.latest.social_media_package_id, "sm_historicalstore001");
+    assert.equal(lineage.latest.revision, 1);
+    assert.equal(lineage.latest.is_latest, true);
   }));
