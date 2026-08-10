@@ -62,6 +62,25 @@ export class CorruptedSocialMediaPackageError extends Error {
   }
 }
 
+// DC-003-I032.7 — a record's own declared schema_version names a
+// version this store has neither an archived historical schema for nor
+// matches the current live schema. Deliberately distinct from
+// CorruptedSocialMediaPackageError: this is "we don't recognise the
+// contract this record claims to have been written under," not "this
+// record fails the contract it claims" — the same distinction
+// validator.mjs's own UnknownSchemaError already draws for an
+// unregistered schema identifier, applied here to an unrecognised
+// schema VERSION of one already-known schema.
+export class UnsupportedSchemaVersionError extends Error {
+  constructor(identifier, version, knownVersions) {
+    super(`Stored Social Media Package "${identifier}" declares schema_version "${version}", which is not among the known versions (${knownVersions.join(", ")})`);
+    this.name = "UnsupportedSchemaVersionError";
+    this.identifier = identifier;
+    this.version = version;
+    this.knownVersions = knownVersions;
+  }
+}
+
 export class SocialMediaPackagePersistenceError extends Error {
   constructor(identifier, operation, cause) {
     super(`Persistence ${operation} failed for Social Media Package "${identifier}"`, { cause });

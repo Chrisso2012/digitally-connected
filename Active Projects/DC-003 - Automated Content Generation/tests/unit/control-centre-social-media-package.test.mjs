@@ -20,6 +20,13 @@ import { createSocialMediaPackageStore } from "../../src/social-media-package-st
 import { createLocalJsonSocialMediaPackageStoreAdapter } from "../../src/local-json-social-media-package-store-adapter.mjs";
 import { createSocialMediaPackage } from "../../src/social-media-package.mjs";
 import { InvalidControlCentreDependenciesError } from "../../src/control-centre-errors.mjs";
+import { loadVersions } from "../../src/config-loader.mjs";
+
+// DC-003-I032.7 — the Social Media Package Store now validates a stored
+// record against the schema_version it actually declares. This file's
+// own fixture is shaped like a CURRENT-schema record, so it must
+// declare the real current version, not a stale hardcoded string.
+const CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION = loadVersions().schema_versions.social_media_package;
 
 async function withTempDir(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "dc003-cc-social-media-package-"));
@@ -73,7 +80,7 @@ function buildRecord(overrides = {}, options = {}) {
       },
       llmModel: "mock-social-media-provider-v1",
       promptVersion: "social-media-package.v1",
-      schemaVersion: "1.0",
+      schemaVersion: CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION,
       ...overrides,
     },
     options
