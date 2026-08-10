@@ -151,6 +151,103 @@ test("status prints an aggregate summary, including for an empty store", () =>
     assert.match(populated.stdout, /latest_status:\s+generated/);
   }));
 
+// --- DC-003-I032.8 — revise / lineage subcommands -----------------------
+
+test("revise with missing arguments prints usage and exits 1", () => {
+  const result = runSmCli("revise");
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Usage:/);
+});
+
+test("revise (mock mode) creates V2 pointing to V1, printed in the record output", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-revise-1");
+    const v1Result = runSmCli("create", editorialPackageId, epDir, smDir);
+    assert.equal(v1Result.status, 0, v1Result.stderr);
+    const v1Id = v1Result.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+
+    const v2Result = runSmCli("revise", editorialPackageId, v1Id, epDir, smDir);
+    assert.equal(v2Result.status, 0, v2Result.stderr);
+    assert.match(v2Result.stdout, /Social Media Package revised OK — new revision 2, supersedes/);
+    assert.match(v2Result.stdout, new RegExp(`revision:\\s+2`));
+    assert.match(v2Result.stdout, new RegExp(`supersedes:\\s+${v1Id}`));
+  }));
+
+test("revise of an already-superseded (non-latest) revision fails as NotLatestRevisionError — no fork", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-revise-2");
+    const v1Result = runSmCli("create", editorialPackageId, epDir, smDir);
+    const v1Id = v1Result.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+    const v2Result = runSmCli("revise", editorialPackageId, v1Id, epDir, smDir);
+    assert.equal(v2Result.status, 0, v2Result.stderr);
+
+    const forkAttempt = runSmCli("revise", editorialPackageId, v1Id, epDir, smDir);
+    assert.equal(forkAttempt.status, 1);
+    assert.match(forkAttempt.stderr, /FAIL\s+NotLatestRevisionError/);
+  }));
+
+test("revise fails cleanly for an unknown superseded id", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-revise-3");
+    const result = runSmCli("revise", editorialPackageId, "sm_doesnotexist00001", epDir, smDir);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /FAIL\s+SocialMediaPackageNotFoundError/);
+  }));
+
+test("revise across a different Editorial Package fails as CrossEditorialPackageSupersessionError", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageIdA = seedEditorialPackageId(icDir, epDir, "doc-cli-revise-4a");
+    const editorialPackageIdB = seedEditorialPackageId(icDir, epDir, "doc-cli-revise-4b");
+    const v1Result = runSmCli("create", editorialPackageIdA, epDir, smDir);
+    const v1Id = v1Result.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+
+    const result = runSmCli("revise", editorialPackageIdB, v1Id, epDir, smDir);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /FAIL\s+CrossEditorialPackageSupersessionError/);
+  }));
+
+test("--live revise without LLM_API_KEY fails cleanly, never falling back to mock silently", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-revise-5");
+    const v1Result = runSmCli("create", editorialPackageId, epDir, smDir);
+    const v1Id = v1Result.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+
+    const result = spawnSync(process.execPath, [SM_CLI_PATH, "revise", editorialPackageId, v1Id, epDir, smDir, "--live"], {
+      encoding: "utf-8",
+      env: { ...process.env, LLM_API_KEY: "" },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--live requires LLM_API_KEY/);
+  }));
+
+test("lineage prints (none) for an Editorial Package with no Social Media Package yet", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-lineage-1");
+    const result = runSmCli("lineage", editorialPackageId, smDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /revisions:\s+0/);
+    assert.match(result.stdout, /no Social Media Package exists yet/);
+  }));
+
+test("lineage prints the full V1->V2->V3 chain with is_latest correctly on only the last entry", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-lineage-2");
+    const v1Result = runSmCli("create", editorialPackageId, epDir, smDir);
+    const v1Id = v1Result.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+    const v2Result = runSmCli("revise", editorialPackageId, v1Id, epDir, smDir);
+    const v2Id = v2Result.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+    const v3Result = runSmCli("revise", editorialPackageId, v2Id, epDir, smDir);
+    const v3Id = v3Result.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+
+    const lineage = runSmCli("lineage", editorialPackageId, smDir);
+    assert.equal(lineage.status, 0, lineage.stderr);
+    assert.match(lineage.stdout, /revisions:\s+3/);
+    assert.match(lineage.stdout, new RegExp(`V1\\s+\\[${v1Id}\\]\\s+supersedes=null\\s+is_latest=false`));
+    assert.match(lineage.stdout, new RegExp(`V2\\s+\\[${v2Id}\\]\\s+supersedes=${v1Id}\\s+is_latest=false`));
+    assert.match(lineage.stdout, new RegExp(`V3\\s+\\[${v3Id}\\]\\s+supersedes=${v2Id}\\s+is_latest=true`));
+    assert.match(lineage.stdout, new RegExp(`latest:\\s+\\[${v3Id}\\]`));
+  }));
+
 // --- DC-003-I032.5 — live timeout default -------------------------------
 // The CLI's own --live path exits (on a missing LLM_API_KEY) before it
 // ever reaches resolveLiveRequestTimeoutMs(), so the actual numeric

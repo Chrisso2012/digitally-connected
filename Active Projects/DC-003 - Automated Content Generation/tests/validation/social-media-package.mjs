@@ -9,11 +9,23 @@
 //
 // Usage:
 //   node tests/validation/social-media-package.mjs create <editorialPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N] [--live-timeout-ms=N]
+//   node tests/validation/social-media-package.mjs revise <editorialPackageId> <supersededSocialMediaPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N] [--live-timeout-ms=N]
 //   node tests/validation/social-media-package.mjs inspect <socialMediaPackageId> <socialMediaPackageStoreDirectory>
 //   node tests/validation/social-media-package.mjs status <socialMediaPackageStoreDirectory>
 //   node tests/validation/social-media-package.mjs list <socialMediaPackageStoreDirectory>
+//   node tests/validation/social-media-package.mjs lineage <editorialPackageId> <socialMediaPackageStoreDirectory>
 //
 //   or: npm run social-media-package -- <subcommand> ...
+//
+// DC-003-I032.8 — `revise` is the ONLY way to create a second (or later)
+// Social Media Package for an Editorial Package that already has one;
+// `create` continues to reject that outright (DuplicateSocialMediaPackageError),
+// exactly as before. `revise` requires the exact existing Social Media
+// Package being superseded and fails closed on every lineage safety rule
+// (missing/cross-Editorial-Package/not-latest/malformed lineage) — there
+// is no bypass flag. `lineage` is a read-only, zero-cost structural
+// inspection of one Editorial Package's revision chain (V1..Vn, which one
+// is_latest) — makes no provider/network call.
 //
 // DC-003-I006/I019's own Live Verification Gate safety rule applies
 // identically here: --live defaults to exactly one attempt, independent
@@ -37,7 +49,7 @@ import { createLocalJsonEditorialPackageStoreAdapter } from "../../src/local-jso
 import { createEditorialPackageStore } from "../../src/editorial-package-store.mjs";
 import { createLocalJsonSocialMediaPackageStoreAdapter } from "../../src/local-json-social-media-package-store-adapter.mjs";
 import { createSocialMediaPackageStore } from "../../src/social-media-package-store.mjs";
-import { generateSocialMediaPackage } from "../../src/social-media-package-generator.mjs";
+import { generateSocialMediaPackage, reviseSocialMediaPackage } from "../../src/social-media-package-generator.mjs";
 import { createSocialMediaMockProvider } from "../../src/social-media-mock-provider.mjs";
 import { createAnthropicSocialMediaProvider } from "../../src/social-media-anthropic-provider.mjs";
 import { createSocialMediaHttpTransport } from "../../src/social-media-transport-http.mjs";
@@ -50,9 +62,13 @@ import {
   SocialMediaPackageAlreadyExistsError,
   SocialMediaPackageNotFoundError,
   CorruptedSocialMediaPackageError,
+  UnsupportedSchemaVersionError,
   SocialMediaPackagePersistenceError,
   InvalidSocialMediaPackageInputError,
   SocialMediaPackageValidationError,
+  CrossEditorialPackageSupersessionError,
+  NotLatestRevisionError,
+  MalformedSocialMediaPackageLineageError,
 } from "../../src/social-media-package-errors.mjs";
 import {
   InvalidEditorialPackageStoreAdapterError,
@@ -79,9 +95,13 @@ const KNOWN_ERRORS = [
   SocialMediaPackageAlreadyExistsError,
   SocialMediaPackageNotFoundError,
   CorruptedSocialMediaPackageError,
+  UnsupportedSchemaVersionError,
   SocialMediaPackagePersistenceError,
   InvalidSocialMediaPackageInputError,
   SocialMediaPackageValidationError,
+  CrossEditorialPackageSupersessionError,
+  NotLatestRevisionError,
+  MalformedSocialMediaPackageLineageError,
   InvalidEditorialPackageStoreAdapterError,
   InvalidEditorialPackageIdentifierError,
   EditorialPackageNotFoundError,
@@ -98,9 +118,13 @@ function usageAndExit() {
   console.error(
     "  node tests/validation/social-media-package.mjs create <editorialPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N]"
   );
+  console.error(
+    "  node tests/validation/social-media-package.mjs revise <editorialPackageId> <supersededSocialMediaPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N]"
+  );
   console.error("  node tests/validation/social-media-package.mjs inspect <socialMediaPackageId> <socialMediaPackageStoreDirectory>");
   console.error("  node tests/validation/social-media-package.mjs status <socialMediaPackageStoreDirectory>");
   console.error("  node tests/validation/social-media-package.mjs list <socialMediaPackageStoreDirectory>");
+  console.error("  node tests/validation/social-media-package.mjs lineage <editorialPackageId> <socialMediaPackageStoreDirectory>");
   process.exit(1);
 }
 
@@ -132,7 +156,40 @@ function printFullRecord(record) {
   console.log(`  llm_model:               ${record.llm_model}`);
   console.log(`  prompt_version:          ${record.prompt_version}`);
   console.log(`  schema_version:          ${record.schema_version}`);
+  console.log(`  revision:                ${record.revision}`);
+  console.log(`  supersedes:              ${record.supersedes}`);
   console.log(`  checksum:                ${record.checksum}`);
+}
+
+// DC-003-I032.8 — shared by both `create` and `revise`: resolves the
+// provider + maxAttempts from the CLI's --live/--live-max-attempts/
+// --live-timeout-ms flags exactly once, so the two subcommands can never
+// silently drift in how they interpret the same flags.
+function buildProviderFromCliFlags(config, stopReasons) {
+  if (isLive) {
+    if (!config.apiKey) {
+      console.error("FAIL  --live requires LLM_API_KEY to be set in the environment");
+      process.exit(1);
+    }
+    const maxAttempts = resolveLiveMaxAttempts(liveMaxAttemptsValue); // throws RangeError on a bad override
+    const liveTimeoutMs = resolveLiveRequestTimeoutMs(liveTimeoutMsValue, I032_DEFAULT_LIVE_TIMEOUT_MS); // throws RangeError on a bad override
+    console.log(`Generating LIVE via Anthropic (${config.baseUrl}, model: ${config.model}) — this performs a real API call.`);
+    console.log(
+      `  maxAttempts: ${maxAttempts}${liveMaxAttemptsValue ? " (explicit --live-max-attempts override)" : " (safe default, independent of LLM_MAX_ATTEMPTS)"}`
+    );
+    console.log(
+      `  timeoutMs:   ${liveTimeoutMs}${liveTimeoutMsValue ? " (explicit --live-timeout-ms override)" : " (I032.5 live default, independent of LLM_REQUEST_TIMEOUT_MS and I031's own 60000ms default)"}`
+    );
+    const transport = createSocialMediaHttpTransport(config);
+    const provider = createAnthropicSocialMediaProvider({
+      transport,
+      model: config.model,
+      timeoutMs: liveTimeoutMs,
+      onStopReason: (stopReason) => stopReasons.push(stopReason),
+    });
+    return { provider, maxAttempts };
+  }
+  return { provider: createSocialMediaMockProvider(), maxAttempts: config.maxAttempts };
 }
 
 const args = process.argv.slice(2);
@@ -165,38 +222,30 @@ try {
     const socialMediaPackageStore = buildSocialMediaPackageStore(socialMediaPackageStoreDirectory);
 
     const config = loadLlmProviderConfig();
-    let provider;
-    let maxAttempts;
-
-    if (isLive) {
-      if (!config.apiKey) {
-        console.error("FAIL  --live requires LLM_API_KEY to be set in the environment");
-        process.exit(1);
-      }
-      maxAttempts = resolveLiveMaxAttempts(liveMaxAttemptsValue); // throws RangeError on a bad override
-      const liveTimeoutMs = resolveLiveRequestTimeoutMs(liveTimeoutMsValue, I032_DEFAULT_LIVE_TIMEOUT_MS); // throws RangeError on a bad override
-      console.log(`Generating LIVE via Anthropic (${config.baseUrl}, model: ${config.model}) — this performs a real API call.`);
-      console.log(
-        `  maxAttempts: ${maxAttempts}${liveMaxAttemptsValue ? " (explicit --live-max-attempts override)" : " (safe default, independent of LLM_MAX_ATTEMPTS)"}`
-      );
-      console.log(
-        `  timeoutMs:   ${liveTimeoutMs}${liveTimeoutMsValue ? " (explicit --live-timeout-ms override)" : " (I032.5 live default, independent of LLM_REQUEST_TIMEOUT_MS and I031's own 60000ms default)"}`
-      );
-      const transport = createSocialMediaHttpTransport(config);
-      provider = createAnthropicSocialMediaProvider({
-        transport,
-        model: config.model,
-        timeoutMs: liveTimeoutMs,
-        onStopReason: (stopReason) => stopReasons.push(stopReason),
-      });
-    } else {
-      maxAttempts = config.maxAttempts;
-      provider = createSocialMediaMockProvider();
-    }
+    const { provider, maxAttempts } = buildProviderFromCliFlags(config, stopReasons);
 
     const record = await generateSocialMediaPackage(editorialPackageId, { editorialPackageStore, socialMediaPackageStore, provider, maxAttempts });
 
     console.log("Social Media Package generated OK");
+    printFullRecord(record);
+  } else if (subcommand === "revise") {
+    const [editorialPackageId, supersededSocialMediaPackageId, editorialPackageStoreDirectory, socialMediaPackageStoreDirectory] = rest;
+    if (!editorialPackageId || !supersededSocialMediaPackageId || !editorialPackageStoreDirectory || !socialMediaPackageStoreDirectory) usageAndExit();
+
+    const editorialPackageStore = buildEditorialPackageStore(editorialPackageStoreDirectory);
+    const socialMediaPackageStore = buildSocialMediaPackageStore(socialMediaPackageStoreDirectory);
+
+    const config = loadLlmProviderConfig();
+    const { provider, maxAttempts } = buildProviderFromCliFlags(config, stopReasons);
+
+    const record = await reviseSocialMediaPackage(editorialPackageId, supersededSocialMediaPackageId, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      provider,
+      maxAttempts,
+    });
+
+    console.log(`Social Media Package revised OK — new revision ${record.revision}, supersedes ${record.supersedes}`);
     printFullRecord(record);
   } else if (subcommand === "inspect") {
     const [socialMediaPackageId, storeDirectory] = rest;
@@ -228,6 +277,31 @@ try {
 
     console.log(`${summaries.length} social media package(s)`);
     for (const summary of summaries) printSummaryLine(summary);
+  } else if (subcommand === "lineage") {
+    // DC-003-I032.8 — read-only, zero-cost structural inspection: makes
+    // no provider/network call of any kind. Reconstructs and validates
+    // the revision chain for one Editorial Package via the store's own
+    // getLineage() (social-media-package-lineage.mjs), never guessing.
+    const [editorialPackageId, storeDirectory] = rest;
+    if (!editorialPackageId || !storeDirectory) usageAndExit();
+
+    const store = buildSocialMediaPackageStore(storeDirectory);
+    const { chain, latest } = store.getLineage(editorialPackageId);
+
+    console.log(`Social Media Package lineage for ${editorialPackageId}`);
+    console.log(`  revisions: ${chain.length}`);
+    if (chain.length === 0) {
+      console.log("  (no Social Media Package exists yet for this Editorial Package — ordinary `create` would succeed)");
+    } else {
+      for (const record of chain) {
+        console.log(
+          `  V${record.revision}  [${record.social_media_package_id}]  supersedes=${record.supersedes}  is_latest=${record.is_latest}  "${record.hook}"`
+        );
+      }
+      console.log(`  latest: [${latest.social_media_package_id}] (revision ${latest.revision})`);
+      console.log(`  ordinary create for this Editorial Package would now fail (DuplicateSocialMediaPackageError)`);
+      console.log(`  \`revise ${editorialPackageId} ${latest.social_media_package_id} ...\` would succeed`);
+    }
   } else {
     usageAndExit();
   }

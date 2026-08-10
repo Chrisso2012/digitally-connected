@@ -17,6 +17,7 @@ import { deepFreezeClone } from "./immutable.mjs";
 import { InvalidSocialMediaPackageInputError, SocialMediaPackageValidationError } from "./social-media-package-errors.mjs";
 
 const EDITORIAL_PACKAGE_ID_PATTERN = /^ep_[A-Za-z0-9]+$/;
+const SOCIAL_MEDIA_PACKAGE_ID_PATTERN = /^sm_[A-Za-z0-9]+$/;
 const TEXT_PLATFORMS = ["linkedin", "facebook", "x"];
 const CAROUSEL_ARRAY_FIELDS = ["headings", "slideCopy", "imageGuidance"];
 const CAROUSEL_SLIDE_COUNT = 6;
@@ -155,6 +156,24 @@ function buildCarouselSlides(value) {
   });
 }
 
+// DC-003-I032.8 — revision-lineage fields. Both default to the
+// "first-ever record for this Editorial Package" shape (revision 1,
+// supersedes null) so ordinary generateSocialMediaPackage() never has to
+// pass either — only reviseSocialMediaPackage() (social-media-package-
+// generator.mjs) ever supplies non-default values, and it always
+// supplies both together.
+function checkRevision(value) {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new InvalidSocialMediaPackageInputError("fields.revision must be an integer >= 1");
+  }
+}
+
+function checkSupersedes(value) {
+  if (value !== null && (typeof value !== "string" || !SOCIAL_MEDIA_PACKAGE_ID_PATTERN.test(value))) {
+    throw new InvalidSocialMediaPackageInputError("fields.supersedes must be null or match sm_<alphanumeric>");
+  }
+}
+
 function checksumOf(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -179,6 +198,12 @@ function checksumOf(value) {
  * fields.metadata — optional, object or null (default null).
  * fields.llmModel / promptVersion / schemaVersion — required, non-empty
  *   strings (provenance metadata).
+ * fields.revision — optional (DC-003-I032.8), integer >= 1, default 1.
+ *   Only reviseSocialMediaPackage() ever passes a value > 1.
+ * fields.supersedes — optional (DC-003-I032.8), null or an sm_... id,
+ *   default null. Only reviseSocialMediaPackage() ever passes a non-null
+ *   value — the identifier of the Social Media Package this new record
+ *   explicitly revises.
  *
  * options.now — override the clock (used by tests).
  * options.idGenerator — override social_media_package_id generation.
@@ -225,6 +250,17 @@ export function createSocialMediaPackage(fields = {}, options = {}) {
     throw new InvalidSocialMediaPackageInputError("fields.metadata must be an object or null");
   }
 
+  const revision = fields.revision ?? 1;
+  checkRevision(revision);
+  const supersedes = fields.supersedes ?? null;
+  checkSupersedes(supersedes);
+  if (revision === 1 && supersedes !== null) {
+    throw new InvalidSocialMediaPackageInputError("fields.supersedes must be null when fields.revision is 1 (only a revision > 1 supersedes an earlier record)");
+  }
+  if (revision > 1 && supersedes === null) {
+    throw new InvalidSocialMediaPackageInputError("fields.supersedes is required (must name the record being revised) when fields.revision is greater than 1");
+  }
+
   const withoutChecksum = {
     social_media_package_id: idGenerator(),
     editorial_package_id: fields.editorialPackageId,
@@ -246,6 +282,8 @@ export function createSocialMediaPackage(fields = {}, options = {}) {
     llm_model: fields.llmModel,
     prompt_version: fields.promptVersion,
     schema_version: fields.schemaVersion,
+    revision,
+    supersedes,
   };
 
   const socialMediaPackage = { ...withoutChecksum, checksum: checksumOf(withoutChecksum) };

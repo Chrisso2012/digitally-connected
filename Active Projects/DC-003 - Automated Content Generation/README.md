@@ -8651,6 +8651,147 @@ request was made at any point in this milestone.
 milestones' own unit-test suites and the two example fixtures. `src/social-media-anthropic-provider.mjs`
 and `src/editorial-package*.mjs` (all of I031) are unmodified.
 
+## Social Media Package Revision Lineage (DC-003-I032.8)
+
+Between I032.1 and this milestone, I031.1–I031.8, I032.2–I032.7, and
+I033.1 shipped as a fast, iterative live-debugging arc (timeout/token-budget
+fixes, the industry-context/evidence-slide corrections, the Template
+Capacity Contract, the version-aware Social Media Package Store) — see
+this project's own memory/commit history for that detail; this section
+picks up from I032.7's own real finding: `sm_cb4c4bcf72b14c9f` (the first
+genuinely live Social Media Package, schema 1.3, CEO-rejected on content
+grounds for `ep_94f5e7667b834673`) could be read cleanly again, but a
+CEO-authorized regeneration was then blocked outright by I032's own
+duplicate protection (`DuplicateSocialMediaPackageError`) — there was no
+way to produce a legitimate "V2" without either weakening ordinary
+duplicate protection or overwriting/deleting historical evidence, both
+explicitly forbidden.
+
+### Architectural principle
+
+Ordinary generation (`generateSocialMediaPackage()`) still permits **at
+most one Social Media Package per Editorial Package** — completely
+unchanged. A second (or later) Social Media Package for the same
+Editorial Package can now exist **only** through a new, explicit
+operation, `reviseSocialMediaPackage()`, which requires the caller to
+name the exact existing record being superseded and enforces its own
+closed set of safety rules. No record is ever mutated, deleted, or
+marked in any way by a revision — every revision is an independent,
+immutable record; "latest revision" is always **derived** from the
+immutable `supersedes` chain (`src/social-media-package-lineage.mjs`),
+never stored as a mutable flag on any record.
+
+### Canonical lineage fields (schema 1.3 → 1.4)
+
+Two new required fields on `social-media-package.schema.json`:
+
+- `revision` — integer ≥ 1, this record's 1-indexed position in its
+  Editorial Package's revision chain.
+- `supersedes` — `sm_...` id or `null`; the record this one explicitly
+  revises, or `null` for the first-ever (V1) record.
+
+`editorial_package_id` (already existed since I032) answers "which
+Editorial Package this belongs to." "Whether it supersedes something" is
+`supersedes !== null`. "Whether it is the current latest" is never a
+stored field at all — it's the `is_latest` annotation
+`getLineage()`/`deriveLineage()` compute fresh from the chain on every
+lookup.
+
+### Explicit revision operation
+
+`reviseSocialMediaPackage(editorialPackageId, supersededSocialMediaPackageId, dependencies)`
+(`src/social-media-package-generator.mjs`) — a distinct export, never an
+overload of `generateSocialMediaPackage()`. CLI:
+
+```
+npm run social-media-package -- revise <editorialPackageId> <supersededSocialMediaPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live]
+npm run social-media-package -- lineage <editorialPackageId> <socialMediaPackageStoreDirectory>
+```
+
+`lineage` is a read-only, zero-network structural inspection of one
+Editorial Package's revision chain — used for the zero-spend
+verification below. Neither subcommand accepts a `--force`/bypass flag
+of any kind.
+
+### Safety rules (no bypass flag)
+
+`reviseSocialMediaPackage()` fails closed, before ever calling a
+provider, when:
+
+- the superseded record doesn't exist — `SocialMediaPackageNotFoundError`
+  (the store's own existing `get()`);
+- it belongs to a different Editorial Package —
+  `CrossEditorialPackageSupersessionError`;
+- it isn't the CURRENT latest revision in its lineage —
+  `NotLatestRevisionError` (this is also what prevents a fork: reviving
+  an already-superseded record would create a second child of the same
+  parent);
+- the stored lineage itself isn't a single well-formed chain (a fork, a
+  cycle, a dangling `supersedes` reference, or a revision number that
+  disagrees with true chain position) — `MalformedSocialMediaPackageLineageError`
+  (`social-media-package-lineage.mjs`'s own `deriveLineage()`).
+
+Ordinary `generateSocialMediaPackage()` is completely unchanged: it still
+throws `DuplicateSocialMediaPackageError` the instant any Social Media
+Package already exists for the given Editorial Package, revision lineage
+or not.
+
+### Historical V1 compatibility
+
+Every record persisted before schema 1.4 has no `revision`/`supersedes`
+on disk. Because duplicate protection has held since I032's very first
+commit, a pre-1.4 record is necessarily the only (and therefore latest)
+record in its own lineage — `social-media-package-schema-history.mjs`'s
+`COMPATIBILITY_FIELDS` backfills `revision: 1, supersedes: null` in
+memory only, exactly like `industry_context`'s own I032.7 precedent.
+Historical bytes on disk are never touched. `sm_cb4c4bcf72b14c9f` now
+reads as V1 in memory, and its raw file is unchanged.
+
+### Downstream I033 compatibility
+
+I033 (`generateProductionPackage()`) has always consumed a Social Media
+Package purely by `social_media_package_id` — its own duplicate check
+(`findBySocialMediaPackageId()`) is keyed on that id, never on
+`editorial_package_id` or revision. A V2 record is therefore a fully
+ordinary input to I033 with zero code changes — verified directly in
+`production-package-generator.test.mjs`, not just inferred from reading
+the code.
+
+### Out of scope (per this milestone's own brief)
+
+Industry-context behaviour, evidence-slide behaviour, the Template
+Capacity Contract, Templated templates, rendering, and publishing are
+all untouched. DC-004 was not touched.
+
+### Verification performed
+
+- Docker `npm test` and `npm run validate` — see this section's own
+  commit for the exact pass counts.
+- Regression coverage: first ordinary creation is V1; ordinary duplicate
+  creation still fails; an explicit revision creates V2 pointing to V1;
+  revising V2 creates V3 pointing to V2; revising V1 after V2 exists
+  fails (`NotLatestRevisionError`, never a fork); cross-Editorial-Package
+  supersession fails; a historical pre-lineage record appears as V1 in
+  memory with its persisted bytes unchanged; a V2 record is consumed
+  normally by I033; lineage lookup deterministically identifies the
+  latest revision regardless of input order.
+- Zero-spend structural check against the real `ep_94f5e7667b834673` /
+  `sm_cb4c4bcf72b14c9f` lineage via the `lineage` CLI subcommand — no
+  Anthropic/Templated request made.
+
+### Files changed
+
+`schemas/social-media-package.schema.json`,
+`schemas/history/social-media-package/1.3.json` (new archive),
+`config/versions.json`, `src/social-media-package.mjs`,
+`src/social-media-package-schema-history.mjs`,
+`src/social-media-package-lineage.mjs` (new),
+`src/social-media-package-store.mjs`, `src/social-media-package-generator.mjs`,
+`src/social-media-package-errors.mjs`, `tests/validation/social-media-package.mjs`,
+`tests/fixtures/social-media-package.example.json`, plus new/updated unit
+tests across the same module set. I033/I034/I014/I015/I025/I027/I028/DC-004
+are unmodified.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
@@ -9041,7 +9182,7 @@ needed).
 | End-to-End Operations Bridge (orchestrates I029.2 + I029.3 into one call: Work Order -> Delivery Office Runner -> Delivery Report -> Strategy Review -> decision) | Done (DC-003-I029.4) — `src/automated-operations-bridge-service.mjs`, `src/operations-bridge-errors.mjs`, CLI `npm run operations-bridge`; see "End-to-End Operations Bridge (DC-003-I029.4)"; no new schema, no new lock, no new eligibility/git/review logic — pure composition of two already-constructed I029.2/I029.3 services; `getOperationsBridgeStatus()` is a separate plain read over existing stores/locks, mirroring both standalone CLIs' own `status` precedent; Control Centre needed zero code changes (confirmed live, a genuine finding, not an oversight); **live end-to-end smoke test against a real throwaway git repository surfaced a genuine, pre-existing I029.3 authority-gate gap** (a "failed" Delivery Report's own status is not itself a mandatory escalation condition) — documented, not fixed, per this milestone's own "no new review logic" scope; no live Claude Code or OpenAI request occurred; **machine-readable `--json` mode and a single-call enriched result added (DC-003-I029.4.1)** — closes the two integration gaps the DC-005 OC-001 architecture investigation found (console-text-only output; a thin result requiring a second CLI call for a CEO notification), both fixed via already-public `getExecutionStatus()`/`getReviewStatus()` reads with zero I029.2/I029.3 changes; see "Machine-Readable Output Mode (DC-003-I029.4.1)" |
 | Content Ingestion Engine (canonical entry point into the Content Factory: retrieves one approved long-form article from a supported source, validates it, produces one immutable Ingested Content record) | Done (DC-003-I030) — `src/ingested-content.mjs`, `src/ingested-content-store.mjs` + adapter files, `src/content-source-adapter.mjs`, `src/content-source-mock-adapter.mjs`, `src/google-docs-source-adapter.mjs`, `src/google-docs-config.mjs`, `src/google-service-account-auth.mjs`, `src/content-ingestion-service.mjs`, CLI `npm run content-ingestion`; see "Content Ingestion Engine (DC-003-I030)"; new `schemas/ingested-content.schema.json`; named "Ingested Content", not "Content Request" as the brief originally proposed — that name is already taken by I016's unrelated command object, confirmed with the Strategy Office before implementation, zero I016/I017/I018 files touched; supports exactly one source (Google Docs) — the generic Content Source Adapter interface anticipates Claude Cowork/Markdown/Git/WordPress/Notion without requiring service changes, none implemented yet; Control Centre's `ingestedContentStore` dependency is additive/optional, mirroring `bridgeTransportStore`'s own standalone precedent, and deliberately surfaces only a lean summary (never the full article text); mock remains the default without `--live`; **no live Google Docs request has been made** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019's own precedent |
 | Editorial Package Generator (canonical strategic representation of one approved article: AI-assisted editorial analysis of an Ingested Content record into structured editorial intelligence) | Done (DC-003-I031) — `src/editorial-package.mjs`, `src/editorial-package-store.mjs` + adapter files, `src/editorial-analysis-provider.mjs`, `src/editorial-analysis-mock-provider.mjs`, `src/editorial-analysis-anthropic-provider.mjs`, `src/editorial-analysis-transport-http.mjs`, `src/editorial-package-prompt-builder.mjs`, `src/editorial-package-generator.mjs`, CLI `npm run editorial-package`; see "Editorial Package Generator (DC-003-I031)"; new `schemas/editorial-package.schema.json`; consumes ONLY an I030 Ingested Content record by ID — confirmed by inspection that no Content Source Adapter of any kind is imported; reuses `retry.mjs`/`llm-provider-errors.mjs`/`llm-provider-config.mjs`/`llm-error-diagnostics.mjs`/`llm-response-validator.mjs` from I004/I019 completely unmodified (all five already provider-agnostic), writing only genuinely editorial-package-shaped new files rather than touching those already-shipped ones; at most one Editorial Package per Ingested Content record (`DuplicateEditorialPackageError`); Control Centre's `editorialPackageStore` dependency is additive/optional, mirroring `ingestedContentStore`'s own precedent; mock remains the default without `--live`; **no live Anthropic request has been made for editorial analysis** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019/I030's own precedent |
-| Social Media Package Generator (canonical marketing package used by every downstream rendering milestone: AI-assisted platform-copy generation from an Editorial Package into LinkedIn/Facebook/X/Instagram variations plus renderer-agnostic carousel content) | Done (DC-003-I032) — `src/social-media-package.mjs`, `src/social-media-package-store.mjs` + adapter files, `src/social-media-provider.mjs`, `src/social-media-mock-provider.mjs`, `src/social-media-anthropic-provider.mjs`, `src/social-media-transport-http.mjs`, `src/social-media-package-prompt-builder.mjs`, `src/social-media-package-generator.mjs`, CLI `npm run social-media-package`; see "Social Media Package Generator (DC-003-I032)"; new `schemas/social-media-package.schema.json`; consumes ONLY an I031 Editorial Package record by ID — confirmed by inspection that no Ingested Content/Content Source/Google Docs import exists anywhere in this milestone; reuses `retry.mjs`/`llm-provider-errors.mjs`/`llm-provider-config.mjs`/`llm-error-diagnostics.mjs`/`llm-response-validator.mjs` from I004/I019/I031 completely unmodified, writing only genuinely social-media-package-shaped new files; at most one Social Media Package per Editorial Package record (`DuplicateSocialMediaPackageError`); Control Centre's `socialMediaPackageStore` dependency is additive/optional, mirroring `editorialPackageStore`'s own precedent; mock remains the default without `--live`; **no live Anthropic request has been made for social media package generation** — pending a future, separately-authorised Live Verification Gate, mirroring I029.2/I019/I030/I031's own precedent |
+| Social Media Package Generator (canonical marketing package used by every downstream rendering milestone: AI-assisted platform-copy generation from an Editorial Package into LinkedIn/Facebook/X/Instagram variations plus renderer-agnostic carousel content) | Done (DC-003-I032) — `src/social-media-package.mjs`, `src/social-media-package-store.mjs` + adapter files, `src/social-media-provider.mjs`, `src/social-media-mock-provider.mjs`, `src/social-media-anthropic-provider.mjs`, `src/social-media-transport-http.mjs`, `src/social-media-package-prompt-builder.mjs`, `src/social-media-package-generator.mjs`, CLI `npm run social-media-package`; see "Social Media Package Generator (DC-003-I032)"; new `schemas/social-media-package.schema.json`; consumes ONLY an I031 Editorial Package record by ID — confirmed by inspection that no Ingested Content/Content Source/Google Docs import exists anywhere in this milestone; reuses `retry.mjs`/`llm-provider-errors.mjs`/`llm-provider-config.mjs`/`llm-error-diagnostics.mjs`/`llm-response-validator.mjs` from I004/I019/I031 completely unmodified, writing only genuinely social-media-package-shaped new files; at most one Social Media Package per Editorial Package record (`DuplicateSocialMediaPackageError`); Control Centre's `socialMediaPackageStore` dependency is additive/optional, mirroring `editorialPackageStore`'s own precedent; mock remains the default without `--live`; live Anthropic/Templated generation has since been performed for this pipeline (see the Editorial/Social Media/Production Package + Carousel Rendering sections above); DC-003-I032.8 added an explicit `reviseSocialMediaPackage()` revision-lineage operation (`revision`/`supersedes` fields, schema 1.4, CLI `revise`/`lineage` subcommands) so a CEO-authorized regeneration can supersede a prior Social Media Package for the same Editorial Package without weakening ordinary duplicate protection — see "Social Media Package Revision Lineage (DC-003-I032.8)" |
 | Production Package Generator (canonical renderer-ready package used by every downstream rendering engine: pure deterministic transformation of a Social Media Package into renderer-agnostic per-slide headline/body/CTA/image-guidance mappings, with renderer-specific mapping isolated behind a pluggable Renderer Adapter) | Done (DC-003-I033) — `src/production-package.mjs`, `src/production-package-store.mjs` + adapter files, `src/production-package-renderer-adapter.mjs` (generic adapter interface), `src/templated-renderer-adapter.mjs` (the only concrete adapter implemented), `src/production-package-generator.mjs`, CLI `npm run production-package`; see "Production Package Generator (DC-003-I033)"; new `schemas/production-package.schema.json`; consumes ONLY an I032 Social Media Package record by ID — confirmed by inspection that no Editorial Package/Ingested Content/Content Source/Google Docs import exists anywhere in this milestone; **no AI/LLM step at all**, unlike I030-I032 — a pure, synchronous, deterministic mapping, no `--live` flag exists; key investigation finding: the OLDER six-heterogeneous-Templated-template pipeline (I003-I007) is not a natural fit for I032's deliberately uniform carousel content (would leave `statistic`/`quote` slides with zero real content mapped) — resolved by mapping every slide onto the `cover` template's shape and the final slide additionally onto `cta`'s `button_label`, a documented scope decision, not an oversight; at most one Production Package per Social Media Package record (`DuplicateProductionPackageError`); Control Centre's `productionPackageStore` dependency is additive/optional, mirroring `socialMediaPackageStore`'s own precedent |
 | Carousel Rendering Engine (first real visual-output milestone: renders a Production Package into a persisted Finished Carousel by reusing existing I006 rendering/I007 composition/I015 storage infrastructure unmodified) | Done (DC-003-I034) — `src/carousel-rendering-engine.mjs`, `src/carousel-rendering-engine-errors.mjs`, CLI `npm run render-production-package`; see "Carousel Rendering Engine (DC-003-I034)"; genuine incompatibility found and reported before coding — `finished-carousel.schema.json` required `topic_id`/`carousel_content_id`, which don't exist in the I030-I034 pipeline's lineage — resolved, per explicit Strategy Office approval, with an additive dual-lineage `oneOf` (`$defs.legacyLineage`/`$defs.productionPackageLineage`) rather than a second competing object; `finished-carousel-builder.mjs` extended additively (`fields.productionPackageId` as an alternative to `fields.carouselContent`, legacy path completely unchanged); `finished-carousel-store.mjs` gained `findByProductionPackageId()`; `control-centre.schema.json`'s `topic_id` widened to nullable in three places (small, necessary, reported before being made) so existing dashboard/job/activity sections don't crash on I034 output — no new Control Centre section needed; real behavior finding — a Templated-rejected render throws `RenderRejected` rather than returning a non-throwing "failed" status, so this milestone catches only that specific error and converts it via I006's own `createRenderResult()`, everything else still aborts the whole run; duplicate protection mirrors I029's own `DuplicateDeliveryError` precedent (only a genuinely completed prior render blocks a retry); asset export (I021/I026) deliberately not composed into the CLI since a freshly-rendered carousel is never yet approved; mock transport remains the default without `--live`; **no live Templated request has been made** — pending a future, separately-authorised Live Verification Gate, first candidate GS01 once I030-I034 are merged |
 | Unit test suite | Done — 1834 tests, `npm test` (20 from I002, 29 from I003, 51 from I004, 27 from I005, 61 from I006, 34 from I007, 44 from I008, 40 from I009, 43 from I010, 7 from I010.1, 33 from I011, 18 from I012, 36 from I014, 53 from I015, 67 from I016, 7 from I017's `--json` flag addition, 32 from I018, 74 from I019, 23 from I019.1, 1 from I019.2, 7 from I019.3, 22 from I020.1 (replacing I020's original 21 — rewritten to assert on the real Execution Ledger/Pipeline Orchestrator instead of direct-call outcomes, plus one new I016 CLI compatibility check), 28 from I021, 38 from I022, 96 from I023 (including 9 new usage-capture tests added to I019's own test files), 32 from I024 (21 service + 10 CLI + 1 new fixture-validation subtest), 74 from I025 — 9 new (`local-json-publisher-result-store-adapter.test.mjs`) + 19 new (`publisher-result.test.mjs`) + 19 new (`publisher-result-store.test.mjs`) + 10 new (`publisher-results-cli.test.mjs`) + 5 added to `production-asset-publisher-service.test.mjs` + 3 added to `publish-production-assets-cli.test.mjs` + 7 added to `control-centre-service.test.mjs` (rewritten throughout for the new required `publisherResultStore` dependency) + 1 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 27 from I026 — 3 new (`windows-production-export-config.test.mjs`) + 16 new (`windows-production-export-service.test.mjs`) + 8 new (`export-production-assets-windows-cli.test.mjs`), 83 from I027 — 16 new (`social-publishing-manifest.test.mjs`) + 3 new (`social-publisher-adapter.test.mjs`) + 6 new (`instagram-publisher-config.test.mjs`) + 7 new (`linkedin-publisher-config.test.mjs`) + 4 new (`instagram-mock-publisher-adapter.test.mjs`) + 4 new (`linkedin-mock-publisher-adapter.test.mjs`) + 8 new (`instagram-carousel-publisher-adapter.test.mjs`) + 7 new (`linkedin-multi-image-publisher-adapter.test.mjs`) + 16 new (`social-publisher-service.test.mjs`) + 9 new (`publish-social-assets-cli.test.mjs`) + 3 added to `control-centre-service.test.mjs` (`by_provider` coverage) + 1 new fixture-validation subtest, 94 from I028 — 14 new (`social-analytics-snapshot.test.mjs`) + 6 new (`local-json-social-analytics-store-adapter.test.mjs`) + 10 new (`social-analytics-store.test.mjs`) + 9 new (`instagram-insights-adapter.test.mjs`) + 6 new (`instagram-mock-insights-adapter.test.mjs`) + 13 new (`linkedin-post-analytics-adapter.test.mjs`) + 5 new (`linkedin-mock-post-analytics-adapter.test.mjs`) + 8 new (`social-analytics-service.test.mjs`) + 13 new (`social-analytics-cli.test.mjs`) + 7 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 81 from I029 — 13 new (`engineering-work-order.test.mjs`) + 10 new (`engineering-delivery-report.test.mjs`) + 5 new (`local-json-engineering-work-order-store-adapter.test.mjs`) + 5 new (`local-json-engineering-delivery-report-store-adapter.test.mjs`) + 8 new (`engineering-work-order-store.test.mjs`) + 8 new (`engineering-delivery-report-store.test.mjs`) + 9 new (`engineering-work-management-service.test.mjs`) + 14 new (`engineering-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 2 new fixture-validation subtests, 47 from I029.1 — 8 new (`bridge-transport-record.test.mjs`) + 12 new (`bridge-transport-store.test.mjs`, covering the local-json adapter too, no separate adapter test file) + 10 new (`bridge-transport-service.test.mjs`) + 9 new (`bridge-transport-cli.test.mjs`) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 111 from I029.2 — 10 new (`execution-policy.test.mjs`) + 10 new (`delivery-execution-lock.test.mjs`) + 9 new (`delivery-office-runner-adapter.test.mjs`) + 12 new (`delivery-office-mock-runner-adapter.test.mjs`) + 18 new (`claude-code-delivery-runner-adapter.test.mjs`, every one against an injected fake `spawnFn`/`runGit`, never a real subprocess) + 9 new (`repository-git-evidence.test.mjs`) + 25 new (`automated-delivery-office-service.test.mjs`, one `test()` call site parameterised over 5 runner-failure modes) + 11 new (`delivery-office-runner-cli.test.mjs`, git-free by design — see its own header comment) + 5 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 170 from I029.3 — 16 new (`engineering-strategy-review.test.mjs`) + 11 new (`engineering-strategy-review-store.test.mjs`) + 6 new (`strategy-review-policy.test.mjs`) + 21 new (`strategy-review-authority-gates.test.mjs`) + 14 new (`strategy-review-agent-adapter.test.mjs`) + 12 new (`strategy-review-mock-adapter.test.mjs`) + 9 new (`strategy-review-lock.test.mjs`) + 11 new (`strategy-review-evidence-collector.test.mjs`) + 13 new (`openai-strategy-review-adapter.test.mjs`, every one against an injected fake `fetchFn`, never a real network call) + 5 new (`strategy-review-error-diagnostics.test.mjs`) + 16 new (`automated-strategy-review-service.test.mjs`) + 13 new (`strategy-review-agent-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s own precedent) + 6 added to `repository-git-evidence.test.mjs` (`isAncestorCommit()`, untracked/conflicted-file parsing) + 3 added to `bridge-transport-record.test.mjs` (the `engineering_strategy_review` regression check) + 5 added to `engineering-work-management-service.test.mjs` + 6 added to `control-centre-service.test.mjs` + 2 added to `control-centre-cli.test.mjs` + 1 new fixture-validation subtest, 25 from I029.4 — 12 new (`automated-operations-bridge-service.test.mjs`, pure composition against injected fake delivery/review services) + 13 new (`operations-bridge-cli.test.mjs`, git-free by design, mirroring `delivery-office-runner-cli.test.mjs`'s and `strategy-review-agent-cli.test.mjs`'s own precedent) — no existing test file needed changes, 21 from I029.3.1 — 13 added to `strategy-review-authority-gates.test.mjs` (the Delivery Status Authority Gate's own pure-function coverage) + 6 added to `automated-strategy-review-service.test.mjs` (the same rule exercised through the real service, mock adapter, and real store persistence) + 2 new (`operations-bridge-delivery-status-regression.test.mjs`, the exact I029.4 smoke-test scenario reproduced and fixed end-to-end with real I029.2+I029.3+I029.4 services and a fake `runGit`) — one existing test fixture helper (`cleanEvidence()` in `strategy-review-authority-gates.test.mjs`) updated to default `deliveryReportStatus: "completed"` so every pre-existing test keeps exercising exactly what it exercised before), 10 from I029.4.1 — 3 added to `automated-operations-bridge-service.test.mjs` (the single-call enrichment, sourced from fake `getExecutionStatus()`/`getReviewStatus()`) + 4 added to `operations-bridge-cli.test.mjs` (`--json` mode: banner suppression, the unified failure shape, backward-compatible plain-text mode) + 3 added to `operations-bridge-delivery-status-regression.test.mjs` (`rejected` and a model-proposed `correction_required`, both through real I029.2+I029.3+I029.4 services, extending its existing failed/completed coverage) — no existing test file's own assertions were weakened or removed, only extended), 72 from I030 — 11 new (`ingested-content.test.mjs`) + 7 new (`ingested-content-store.test.mjs`) + 4 new (`content-source-adapter.test.mjs`) + 6 new (`content-source-mock-adapter.test.mjs`) + 10 new (`content-ingestion-service.test.mjs`) + 10 new (`content-ingestion-cli.test.mjs`) + 6 new (`google-service-account-auth.test.mjs`, a real RSA-keypair-signed JWT verified against its own matching public key) + 9 new (`google-docs-source-adapter.test.mjs`) + 5 new (`google-docs-config.test.mjs`) + 4 new (`control-centre-content-ingestion.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `content_ingestion: null` key, 95 from I031 — 29 new (`editorial-package.test.mjs`, parameterised loops over every required string/array field) + 7 new (`editorial-package-store.test.mjs`) + 15 new (`editorial-analysis-provider.test.mjs`, parameterised loops over every required Editorial Analysis Result field) + 7 new (`editorial-analysis-mock-provider.test.mjs`) + 6 new (`editorial-package-prompt-builder.test.mjs`) + 10 new (`editorial-package-generator.test.mjs`) + 8 new (`editorial-analysis-anthropic-provider.test.mjs`, covering the HTTP transport and real provider together via a mocked `fetch`) + 9 new (`editorial-package-cli.test.mjs`) + 4 new (`control-centre-editorial-package.test.mjs`) — no existing test file's own assertions were weakened, removed, or even touched, only `control-centre.example.json` gained the new required `editorial_package: null` key; DC-003-I013 and DC-003-I017 added no new repository unit tests of their own (both are n8n-side workflows, not `src/` modules) |

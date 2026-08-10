@@ -7,6 +7,10 @@ import { generateProductionPackage } from "../../src/production-package-generato
 import { createSocialMediaPackageStore } from "../../src/social-media-package-store.mjs";
 import { createLocalJsonSocialMediaPackageStoreAdapter } from "../../src/local-json-social-media-package-store-adapter.mjs";
 import { createSocialMediaPackage } from "../../src/social-media-package.mjs";
+import { generateSocialMediaPackage, reviseSocialMediaPackage } from "../../src/social-media-package-generator.mjs";
+import { createEditorialPackageStore } from "../../src/editorial-package-store.mjs";
+import { createLocalJsonEditorialPackageStoreAdapter } from "../../src/local-json-editorial-package-store-adapter.mjs";
+import { createEditorialPackage } from "../../src/editorial-package.mjs";
 import { createProductionPackageStore } from "../../src/production-package-store.mjs";
 import { createLocalJsonProductionPackageStoreAdapter } from "../../src/local-json-production-package-store-adapter.mjs";
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
@@ -222,4 +226,69 @@ test("generateProductionPackage() throws PipelineConfigurationError for missing 
   withTempDir(async (base) => {
     const { socialMediaPackageStore } = buildStores(base);
     await assert.rejects(() => generateProductionPackage("sm_x", { socialMediaPackageStore }), PipelineConfigurationError);
+  }));
+
+// --- DC-003-I032.8 — downstream I033 compatibility with a revised
+// (V2+) Social Media Package. I033 has always consumed a Social Media
+// Package purely by social_media_package_id (see
+// production-package-generator.mjs's own findBySocialMediaPackageId()
+// duplicate check, keyed on that id, never on editorial_package_id or
+// revision) — this test proves that holds for a genuine V2 produced by
+// reviseSocialMediaPackage(), not just asserts it from reading the code.
+
+test("generateProductionPackage() consumes a V2 Social Media Package (produced by reviseSocialMediaPackage()) exactly like any ordinary record", () =>
+  withTempDir(async (base) => {
+    const editorialPackageStore = createEditorialPackageStore({ adapter: createLocalJsonEditorialPackageStoreAdapter({ storageDir: path.join(base, "ep") }) });
+    const { socialMediaPackageStore, productionPackageStore } = buildStores(base);
+
+    const ep = editorialPackageStore.save(
+      createEditorialPackage(
+        {
+          ingestedContentId: "ic_a1b2c3d4e5f60708",
+          primaryHeadline: "Headline",
+          supportingHeadline: "Supporting",
+          executiveSummary: "Summary.",
+          coreMessage: "Message.",
+          primaryAudience: "Audience.",
+          primaryProblem: "Problem.",
+          desiredOutcome: "Outcome.",
+          keyInsights: ["Insight."],
+          pullQuotes: ["Quote."],
+          callToAction: "Act.",
+          keywords: ["kw"],
+          seoTitle: "SEO",
+          seoDescription: "SEO desc.",
+          suggestedHashtags: ["tag"],
+          editorialThemes: ["theme"],
+          contentCategories: ["category"],
+          llmModel: "mock-editorial-analysis-provider-v1",
+          promptVersion: "editorial-package.v1",
+          schemaVersion: "1.0",
+        },
+        { idGenerator: () => "ep_i033compattest001" }
+      )
+    );
+
+    const v1 = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, idGenerator: () => "sm_i033compatv1001" });
+    const v2 = await reviseSocialMediaPackage(ep.editorial_package_id, v1.social_media_package_id, {
+      editorialPackageStore,
+      socialMediaPackageStore,
+      idGenerator: () => "sm_i033compatv2001",
+    });
+    assert.equal(v2.revision, 2);
+
+    const productionPackage = await generateProductionPackage(v2.social_media_package_id, {
+      socialMediaPackageStore,
+      productionPackageStore,
+      idGenerator: () => "pp_i033compattest01",
+    });
+
+    assert.equal(productionPackage.social_media_package_id, v2.social_media_package_id);
+    assert.equal(productionPackage.slide_sequence.length, 6);
+    assert.equal(productionPackageStore.get("pp_i033compattest01").social_media_package_id, v2.social_media_package_id);
+
+    // V1 remains independently addressable and untouched — I033 was
+    // never pointed at it, and generating against V2 didn't disturb it.
+    assert.equal(socialMediaPackageStore.get(v1.social_media_package_id).revision, 1);
+    assert.equal(productionPackageStore.findBySocialMediaPackageId(v1.social_media_package_id).length, 0);
   }));
