@@ -36,10 +36,27 @@
 //   - every field but the one named is carried over byte-identical;
 //   - the correction is appended to `corrections` (never overwrites or
 //     removes a prior entry), and the record's checksum is recomputed.
+//
+// schema_version is re-stamped to the CURRENT schema version on every
+// correction — the one field beyond the target one this function DOES
+// touch, and deliberately so: the corrected record is re-validated
+// against, and now structurally conforms to, the current schema (its
+// `corrections` entry couldn't exist under whatever older version the
+// record originally declared). Leaving the original, now-inaccurate
+// schema_version in place would make the record unreadable on its next
+// load — social-media-package-store.mjs's own version-aware validation
+// (DC-003-I032.7) would validate it against the ARCHIVED schema for the
+// version it falsely still claims, which has no `corrections` property
+// at all (additionalProperties:false) and would reject the record as
+// corrupted. This is not "altering V2 content" in the sense the I032.9
+// brief means (hook/platforms/other slides) — it is accurate
+// self-declaration of the record's own real structural shape, required
+// for the record to remain readable at all.
 
 import { createHash } from "node:crypto";
 import { createValidator } from "./validator.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
+import { loadVersions } from "./config-loader.mjs";
 import { TEMPLATE_CAPACITY_CONTRACT, checkFieldCapacity } from "./template-capacity-contract.mjs";
 import {
   InvalidSocialMediaPackageCorrectionError,
@@ -102,7 +119,12 @@ function checkSocialMediaPackage(socialMediaPackage) {
  *
  * options.now — override the clock (used by tests).
  * options.validator — inject a pre-built validator (used by tests).
- * options.rootDir — passed through when no validator is injected.
+ * options.schemaVersion — override the social_media_package schema
+ *   version the corrected record is re-stamped with (used by tests);
+ *   normally read from config/versions.json, the same source every
+ *   generator/revision already stamps onto its own records.
+ * options.rootDir — passed through when no validator/schemaVersion is
+ *   injected.
  *
  * Throws InvalidSocialMediaPackageCorrectionError for a malformed
  * socialMediaPackage, an out-of-range slideNumber, an unsupported field,
@@ -123,6 +145,7 @@ export function correctSocialMediaPackageSlideField(fields = {}, options = {}) {
   const { socialMediaPackage, slideNumber, field, replacementText, reason } = fields;
   const now = options.now ?? (() => new Date().toISOString());
   const validator = options.validator ?? createValidator(options);
+  const schemaVersion = options.schemaVersion ?? loadVersions(options).schema_versions?.social_media_package;
 
   checkSocialMediaPackage(socialMediaPackage);
 
@@ -188,6 +211,9 @@ export function correctSocialMediaPackageSlideField(fields = {}, options = {}) {
       slides: correctedSlides,
     },
     corrections: [...socialMediaPackage.corrections, correctionEntry],
+    // Re-stamped to the current schema version — see this file's own
+    // header comment for why this is required, not optional.
+    schema_version: schemaVersion,
   };
   delete withoutChecksum.checksum;
 

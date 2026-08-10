@@ -7,10 +7,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSocialMediaPackage } from "../../src/social-media-package.mjs";
 import { correctSocialMediaPackageSlideField } from "../../src/social-media-package-correction.mjs";
+import { loadVersions } from "../../src/config-loader.mjs";
 import {
   InvalidSocialMediaPackageCorrectionError,
   SocialMediaPackageCorrectionCapacityExceededError,
 } from "../../src/social-media-package-errors.mjs";
+
+const CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION = loadVersions().schema_versions.social_media_package;
 
 function buildRecord(overrides = {}) {
   return createSocialMediaPackage(
@@ -172,6 +175,35 @@ test("recomputes checksum — differs from the input's own checksum", () => {
   const corrected = correctSocialMediaPackageSlideField({ socialMediaPackage: record, slideNumber: 6, field: "body", replacementText: "Different.", reason: "test" });
   assert.notEqual(corrected.checksum, record.checksum);
   assert.match(corrected.checksum, /^[a-f0-9]{64}$/);
+});
+
+// --- Regression: a real incident this session, fixed here -------------
+// The first live application of this mechanism (against the real
+// sm_3b859b1d314c4c41, generated under schema 1.4 before I032.9 existed)
+// persisted a corrected record that still declared schema_version "1.4"
+// while structurally containing a populated `corrections` array — a
+// field that does not exist on the archived 1.4 schema
+// (additionalProperties:false there). The very next read
+// (social-media-package-store.mjs's own version-aware validation,
+// DC-003-I032.7) correctly and strictly rejected it as
+// CorruptedSocialMediaPackageError, since it no longer matched the
+// schema version it falsely still claimed. Fixed by always re-stamping
+// schema_version to the CURRENT version on every correction — direct
+// regression coverage below, at both the pure-function level and (in
+// social-media-package-store.test.mjs) the full persist-then-reread
+// level where the real failure actually manifested.
+
+test("re-stamps schema_version to the CURRENT version, even when correcting a record that declares an older one", () => {
+  const record = buildRecord({ schemaVersion: "1.4" });
+  assert.equal(record.schema_version, "1.4");
+  const corrected = correctSocialMediaPackageSlideField({ socialMediaPackage: record, slideNumber: 6, field: "body", replacementText: "Different.", reason: "test" });
+  assert.equal(corrected.schema_version, CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION);
+});
+
+test("re-stamps schema_version to the CURRENT version even when the input already declares the current version (idempotent, no-op in that case)", () => {
+  const record = buildRecord({ schemaVersion: CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION });
+  const corrected = correctSocialMediaPackageSlideField({ socialMediaPackage: record, slideNumber: 6, field: "body", replacementText: "Different.", reason: "test" });
+  assert.equal(corrected.schema_version, CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION);
 });
 
 test("returns an immutable (deep-frozen) record", () => {
