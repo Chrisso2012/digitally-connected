@@ -311,3 +311,17 @@ test("throws InvalidSocialMediaPackageInputError when revision is 1 but supersed
 test("throws InvalidSocialMediaPackageInputError when revision is greater than 1 but supersedes is null — every revision beyond V1 must name what it supersedes", () => {
   assert.throws(() => createSocialMediaPackage(buildFields({ revision: 2, supersedes: null })), InvalidSocialMediaPackageInputError);
 });
+
+// --- DC-003-I032.9 — corrections always starts empty at creation time,
+// regardless of caller input; the factory does not accept it as a field
+// at all — only correctSocialMediaPackageSlideField() ever populates it.
+
+test("corrections is always [] on a freshly created record", () => {
+  const record = createSocialMediaPackage(buildFields());
+  assert.deepEqual(record.corrections, []);
+});
+
+test("corrections cannot be seeded via fields — a caller-supplied value is silently ignored, never trusted", () => {
+  const record = createSocialMediaPackage(buildFields({ corrections: [{ slide_number: 1, field: "heading", previous_value: "x", corrected_value: "y", corrected_at: "2026-01-01T00:00:00.000Z", reason: "should be ignored" }] }));
+  assert.deepEqual(record.corrections, []);
+});

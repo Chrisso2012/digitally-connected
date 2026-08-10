@@ -8792,6 +8792,110 @@ all untouched. DC-004 was not touched.
 tests across the same module set. I033/I034/I014/I015/I025/I027/I028/DC-004
 are unmodified.
 
+## Social Media Package Slide-Field Correction (DC-003-I032.9)
+
+Direct follow-on from the first real I032.8 V2 production run: I033's
+Template Capacity Contract correctly rejected the live-generated V2
+CTA slide body (80 characters against a 67-character canonical limit).
+Regenerating V2 again would mean a new Anthropic request purely to fix
+one over-length sentence — Strategy Office instead authorised a
+deterministic, non-AI, human-directed correction of just that one field.
+
+### Investigation performed before writing any code
+
+Confirmed no existing amendment mechanism covers this: Social Media
+Package Store has no `update()`/`replace()`, and I032.8's own
+`reviseSocialMediaPackage()` is the only "produce a new version"
+operation that exists — but it always calls a Social Media Provider
+(mock or live Anthropic) and always mints a new revision/id, so it
+cannot be used for a text-only, no-Anthropic, same-id correction. The
+two real precedents in this codebase that DO fit: I014's
+`carousel-approval.mjs` (a pure, in-memory "assemble a new validated
+copy, never mutate the input" transition function) and I015's Finished
+Carousel Store `replace()` (persists a corrected object back under its
+own existing identifier). This milestone composes both patterns rather
+than inventing a new one.
+
+### Correction architecture
+
+- `src/social-media-package-correction.mjs` (new) —
+  `correctSocialMediaPackageSlideField({ socialMediaPackage, slideNumber, field, replacementText, reason })`.
+  Pure, in-memory, no filesystem/network access. `field` is one of
+  `heading | body | imageGuidance` — the only three fields the schema
+  requires to stay identical between the flat parallel arrays
+  (`headings`/`slide_copy`/`image_guidance`) and the structured `slides`
+  array; deliberately excludes platform copy, `hook`/`tone`/`audience`,
+  and `statistic`/`quote`/`keyPoints` (not this milestone's scope, and
+  not "a large general editing framework").
+- Before any mutation, the replacement text is checked against
+  `template-capacity-contract.mjs`'s own canonical limit for the target
+  slide's real role + field (reused completely unmodified — the limit
+  itself is never touched). A violation throws
+  `SocialMediaPackageCorrectionCapacityExceededError` naming the exact
+  slide/field/length/limit; nothing is truncated or rewritten.
+- On success: both the parallel-array entry and the `slides[]` entry are
+  updated identically; every other field is carried over byte-for-byte;
+  one entry is appended to a new, additive, schema-required
+  `corrections` array (`slide_number`, `field`, `previous_value`,
+  `corrected_value`, `corrected_at`, `reason` — `reason` is required and
+  non-blank); `checksum` is recomputed; the result is re-validated
+  against the full schema and returned deep-frozen.
+- `social-media-package-store.mjs` gained `replace({identifier, socialMediaPackage})`
+  — mirrors `finished-carousel-store.mjs`'s own `replace()` exactly, and
+  implements no correction logic itself (same division of responsibility
+  I015 already established: the store persists, the domain layer
+  decides). The record keeps its own `social_media_package_id`,
+  `revision`, and `supersedes` unchanged — a correction is never a new
+  revision.
+- Schema `social_media_package` 1.4 → 1.5 (new required `corrections`,
+  default `[]`; 1.4 archived to `schemas/history/social-media-package/1.4.json`).
+  Pre-1.5 historical records (including the real `sm_cb4c4bcf72b14c9f`
+  and `sm_3b859b1d314c4c41`) get `corrections: []` via the same
+  compatibility-view mechanism I032.7/I032.8 already established —
+  in-memory only, never written back.
+- CLI: `npm run social-media-package -- correct <socialMediaPackageId> <slideNumber> <field> <replacementText> <reason> <socialMediaPackageStoreDirectory>`.
+  Never accepts a `--live` flag and never imports any AI provider — no
+  code path in this subcommand can reach Anthropic.
+
+### No bypass flag anywhere
+
+Every safety rule (target slide/field must exist, replacement text and
+reason both required non-empty, capacity check) throws before any
+mutation is attempted; none is skippable by any flag.
+
+### Verification performed
+
+- Docker `npm test`/`npm run validate` — see this section's own commit
+  for exact pass counts.
+- Regression coverage: a compliant correction updates both the parallel
+  array and the `slides[]` entry identically; every other field and
+  every other slide is byte-identical afterward; the input is never
+  mutated; `corrections` grows by exactly one entry per correction, never
+  overwriting a prior one; checksum is recomputed; a replacement at
+  exactly the canonical limit is accepted (inclusive boundary); a
+  replacement over the canonical limit is rejected with the exact
+  slide/field/length/limit named, using the REAL over-length string this
+  milestone exists to handle; `imageGuidance` (no canonical capacity
+  entry) is never rejected on capacity grounds; every input-validation
+  failure (bad slide number, unsupported field, blank replacement text,
+  blank reason) is rejected before any mutation; `replace()` rejects a
+  missing identifier and an identifier/object mismatch; a corrected
+  record remains fully findable via `findByEditorialPackageId()`/`getLineage()`
+  unchanged.
+
+### Files changed
+
+`schemas/social-media-package.schema.json`,
+`schemas/history/social-media-package/1.4.json` (new archive),
+`config/versions.json`, `src/social-media-package.mjs`,
+`src/social-media-package-schema-history.mjs`,
+`src/social-media-package-correction.mjs` (new),
+`src/social-media-package-store.mjs`, `src/social-media-package-errors.mjs`,
+`tests/validation/social-media-package.mjs`,
+`tests/fixtures/social-media-package.example.json`, plus new/updated unit
+tests across the same module set. I033/I034/I014/I015/I025/I027/I028/DC-004
+are unmodified.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —

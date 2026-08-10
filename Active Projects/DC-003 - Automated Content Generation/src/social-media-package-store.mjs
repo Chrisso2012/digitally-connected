@@ -4,13 +4,22 @@
 // checks, schema validation on both write and read, identifier safety,
 // immutability, chronological ordering) lives here.
 //
-// No replace()/update(): a Social Media Package is immutable. save()
-// rejects a duplicate social_media_package_id outright (defense-in-depth;
-// IDs are randomly generated). The real duplicate concern — at most one
-// Social Media Package per editorial_package_id — is enforced by
-// social-media-package-generator.mjs using findByEditorialPackageId()
-// below, mirroring editorial-package-store.mjs's own
-// findByIngestedContentId() precedent.
+// save() has no update path: it rejects a duplicate social_media_package_id
+// outright (defense-in-depth; IDs are randomly generated). The real
+// duplicate concern — at most one Social Media Package per
+// editorial_package_id — is enforced by social-media-package-generator.mjs
+// using findByEditorialPackageId() below, mirroring editorial-package-store.mjs's
+// own findByIngestedContentId() precedent.
+//
+// DC-003-I032.9 — replace() is the one deliberate, narrowly-scoped
+// exception: mirrors finished-carousel-store.mjs's own replace()
+// precedent exactly (I015). It persists whatever ALREADY-VALIDATED
+// object it is given back under its own existing identifier — this store
+// implements no correction logic itself, exactly like I015's own
+// replace() implements no approval logic itself. The actual correction
+// (which field changed, the capacity check, the audit-trail append) is
+// entirely social-media-package-correction.mjs's responsibility, one
+// layer up.
 
 import { createValidator } from "./validator.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
@@ -25,6 +34,7 @@ import {
   CorruptedSocialMediaPackageError,
   UnsupportedSchemaVersionError,
   SocialMediaPackagePersistenceError,
+  SocialMediaPackageIdentifierMismatchError,
 } from "./social-media-package-errors.mjs";
 
 const IDENTIFIER_PATTERN = /^sm_[A-Za-z0-9]+$/;
@@ -106,7 +116,8 @@ function summarize(record) {
 
 /**
  * Builds a Social Media Package Store over the given Storage Adapter.
- * Returns { name, save, get, list, exists, findByEditorialPackageId }.
+ * Returns { name, save, get, list, replace, exists,
+ * findByEditorialPackageId, getLineage, findLatestRevision }.
  *
  * options.schemaHistory — inject a pre-built historical-schema archive
  *   (createSocialMediaPackageSchemaHistory()) instead of loading the
@@ -160,6 +171,67 @@ export function createSocialMediaPackageStore({ adapter } = {}, options = {}) {
     }
     if (alreadyExists) {
       throw new SocialMediaPackageAlreadyExistsError(identifier);
+    }
+
+    const content = JSON.stringify(socialMediaPackage);
+    try {
+      adapter.write(identifier, content);
+    } catch (cause) {
+      throw new SocialMediaPackagePersistenceError(identifier, "write", cause);
+    }
+
+    return deepFreezeClone(socialMediaPackage);
+  }
+
+  /**
+   * DC-003-I032.9 — replaces an existing stored Social Media Package —
+   * the persistence half of an explicit, human-directed correction (see
+   * social-media-package-correction.mjs's own correctSocialMediaPackageSlideField()).
+   * This store implements no correction logic itself; it only persists
+   * whatever already-validated object it is given, under its own
+   * existing identifier. Mirrors finished-carousel-store.mjs's own
+   * replace() (DC-003-I015) exactly.
+   *
+   * fields.identifier — the social_media_package_id of the record being
+   *   replaced.
+   * fields.socialMediaPackage — the new, validated Social Media Package
+   *   to store in its place. Never mutated.
+   *
+   * Legal only when: a record already exists for `identifier`; the
+   * supplied object's own social_media_package_id equals `identifier`;
+   * the supplied object validates against social-media-package.schema.json.
+   *
+   * Throws InvalidSocialMediaPackageIdentifierError for a malformed
+   * identifier. Throws CorruptedSocialMediaPackageError if the supplied
+   * object fails schema validation. Throws
+   * SocialMediaPackageIdentifierMismatchError if the supplied object's
+   * social_media_package_id does not equal `identifier`. Throws
+   * SocialMediaPackageNotFoundError if no existing record is found for
+   * `identifier`.
+   */
+  function replace({ identifier, socialMediaPackage } = {}) {
+    checkIdentifier(identifier);
+
+    const validation = validator.validate("socialMediaPackage", socialMediaPackage);
+    if (!validation.valid) {
+      throw new CorruptedSocialMediaPackageError(
+        socialMediaPackage?.social_media_package_id ?? "(unknown)",
+        `supplied record does not match social-media-package.schema.json (${validation.errors.length} error(s))`
+      );
+    }
+
+    if (socialMediaPackage.social_media_package_id !== identifier) {
+      throw new SocialMediaPackageIdentifierMismatchError(identifier, socialMediaPackage.social_media_package_id);
+    }
+
+    let found;
+    try {
+      found = adapter.exists(identifier);
+    } catch (cause) {
+      throw new SocialMediaPackagePersistenceError(identifier, "exists-check", cause);
+    }
+    if (!found) {
+      throw new SocialMediaPackageNotFoundError(identifier);
     }
 
     const content = JSON.stringify(socialMediaPackage);
@@ -265,5 +337,5 @@ export function createSocialMediaPackageStore({ adapter } = {}, options = {}) {
     return getLineage(editorialPackageId).latest;
   }
 
-  return { name: adapter.name, save, get, list, exists, findByEditorialPackageId, getLineage, findLatestRevision };
+  return { name: adapter.name, save, get, list, replace, exists, findByEditorialPackageId, getLineage, findLatestRevision };
 }

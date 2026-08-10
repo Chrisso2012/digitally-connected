@@ -284,6 +284,11 @@ export function createSocialMediaPackage(fields = {}, options = {}) {
     schema_version: fields.schemaVersion,
     revision,
     supersedes,
+    // DC-003-I032.9 — always empty at creation time; a fresh
+    // generateSocialMediaPackage()/reviseSocialMediaPackage() record has
+    // never had a correction applied. Not accepted as a fields input —
+    // corrections are only ever added by correctSocialMediaPackageSlideField().
+    corrections: [],
   };
 
   const socialMediaPackage = { ...withoutChecksum, checksum: checksumOf(withoutChecksum) };
