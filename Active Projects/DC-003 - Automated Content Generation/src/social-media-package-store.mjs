@@ -15,11 +15,14 @@
 import { createValidator } from "./validator.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
 import { assertValidSocialMediaPackageStoreAdapter } from "./social-media-package-store-adapter.mjs";
+import { createSocialMediaPackageSchemaHistory, applyCompatibilityView } from "./social-media-package-schema-history.mjs";
+import { loadVersions } from "./config-loader.mjs";
 import {
   InvalidSocialMediaPackageIdentifierError,
   SocialMediaPackageAlreadyExistsError,
   SocialMediaPackageNotFoundError,
   CorruptedSocialMediaPackageError,
+  UnsupportedSchemaVersionError,
   SocialMediaPackagePersistenceError,
 } from "./social-media-package-errors.mjs";
 
@@ -39,14 +42,53 @@ function parseStoredContent(identifier, raw) {
   }
 }
 
-function validateStoredRecord(identifier, record, validator) {
-  const validation = validator.validate("socialMediaPackage", record);
-  if (!validation.valid) {
-    throw new CorruptedSocialMediaPackageError(
-      identifier,
-      `stored content does not match social-media-package.schema.json (${validation.errors.length} error(s))`
-    );
+// DC-003-I032.7 — validates a STORED (previously persisted) record
+// against the schema/version contract it actually declares, never
+// against whatever the schema has since evolved into. See
+// social-media-package-schema-history.mjs's own header comment for the
+// full architectural rationale and the real defect this replaces.
+//
+// A record whose own schema_version matches the current live schema
+// validates exactly as before (the fast, common case — every record
+// this store has ever written under the current schema). A record
+// declaring an older, archived version validates against that
+// version's own real historical schema instead, then — only once
+// confirmed genuinely valid under ITS OWN contract — receives an
+// in-memory-only compatibility view for any additive field a newer
+// consumer might expect (never written back to disk; see
+// applyCompatibilityView()'s own header comment). A record declaring
+// neither the current version nor any archived historical version
+// fails explicitly and distinctly (UnsupportedSchemaVersionError), never
+// silently treated as either valid or as ordinary corruption. A record
+// that is genuinely malformed FOR ITS OWN declared version still fails
+// as CorruptedSocialMediaPackageError — this is strictly more precise
+// than the old current-schema-only check, never more permissive.
+function validateStoredRecordForItsOwnVersion(identifier, record, { validator, schemaHistory, currentVersion }) {
+  const version = record?.schema_version;
+
+  if (version === currentVersion) {
+    const validation = validator.validate("socialMediaPackage", record);
+    if (!validation.valid) {
+      throw new CorruptedSocialMediaPackageError(
+        identifier,
+        `stored content does not match social-media-package.schema.json version "${currentVersion}" (its own declared version) (${validation.errors.length} error(s))`
+      );
+    }
+    return record;
   }
+
+  if (schemaHistory.isKnownHistoricalVersion(version)) {
+    const validation = schemaHistory.validate(version, record);
+    if (!validation.valid) {
+      throw new CorruptedSocialMediaPackageError(
+        identifier,
+        `stored content does not match its own declared schema_version "${version}" (${validation.errors.length} error(s))`
+      );
+    }
+    return applyCompatibilityView(record, version);
+  }
+
+  throw new UnsupportedSchemaVersionError(identifier, version, [...schemaHistory.knownVersions, currentVersion]);
 }
 
 function summarize(record) {
@@ -62,10 +104,19 @@ function summarize(record) {
 /**
  * Builds a Social Media Package Store over the given Storage Adapter.
  * Returns { name, save, get, list, exists, findByEditorialPackageId }.
+ *
+ * options.schemaHistory — inject a pre-built historical-schema archive
+ *   (createSocialMediaPackageSchemaHistory()) instead of loading the
+ *   real one — used by tests pointing at a temporary archive directory.
+ * options.currentVersion — override the "current" schema_version value
+ *   (normally read from config/versions.json, the same source every
+ *   generator already stamps onto brand-new records) — used by tests.
  */
 export function createSocialMediaPackageStore({ adapter } = {}, options = {}) {
   assertValidSocialMediaPackageStoreAdapter(adapter);
   const validator = options.validator ?? createValidator(options);
+  const schemaHistory = options.schemaHistory ?? createSocialMediaPackageSchemaHistory(options);
+  const currentVersion = options.currentVersion ?? loadVersions(options).schema_versions?.social_media_package;
 
   function readAllRecords() {
     let identifiers;
@@ -82,8 +133,7 @@ export function createSocialMediaPackageStore({ adapter } = {}, options = {}) {
         throw new SocialMediaPackagePersistenceError(identifier, "read", cause);
       }
       const record = parseStoredContent(identifier, raw);
-      validateStoredRecord(identifier, record, validator);
-      return record;
+      return validateStoredRecordForItsOwnVersion(identifier, record, { validator, schemaHistory, currentVersion });
     });
   }
 
@@ -140,9 +190,9 @@ export function createSocialMediaPackageStore({ adapter } = {}, options = {}) {
     }
 
     const record = parseStoredContent(identifier, raw);
-    validateStoredRecord(identifier, record, validator);
+    const compatibleRecord = validateStoredRecordForItsOwnVersion(identifier, record, { validator, schemaHistory, currentVersion });
 
-    return deepFreezeClone(record);
+    return deepFreezeClone(compatibleRecord);
   }
 
   function exists(identifier) {

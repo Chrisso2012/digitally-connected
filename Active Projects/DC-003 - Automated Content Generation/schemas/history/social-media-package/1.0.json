@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/social-media-package.schema.json",
+  "title": "Social Media Package",
+  "description": "DC-003-I032 — the canonical marketing package used by every downstream rendering milestone, derived from exactly one immutable Editorial Package (DC-003-I031) via AI-assisted platform-copy generation. Nothing after I032 needs to analyse editorial intent again. Deliberately platform-and-renderer-agnostic — the `carousel` section describes generic slide headings/copy/image guidance, never Templated's own six-slide-type field names (eyebrow_text/stat_value/quote_text/etc. from carousel-slide-spec.mjs), since mapping this content onto a specific rendering system's own payload shape is a later, explicitly out-of-scope milestone's job (I033+ Carousel Builder), not this one's. Also unrelated to social-publishing-manifest.schema.json (DC-003-I027) — that object is a downstream, human-APPROVED, POST-rendering publishing instruction tied to an already-rendered Finished Carousel; this object is an upstream, AI-generated, PRE-rendering draft. Immutable after creation: no update path exists; at most one Social Media Package may exist per editorial_package_id (see the Social Media Package Store's own duplicate-rejection rule).",
+  "type": "object",
+  "required": [
+    "social_media_package_id",
+    "editorial_package_id",
+    "status",
+    "hook",
+    "call_to_action",
+    "tone",
+    "audience",
+    "platforms",
+    "carousel",
+    "metadata",
+    "generated_at",
+    "llm_model",
+    "prompt_version",
+    "schema_version",
+    "checksum"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "social_media_package_id": {
+      "type": "string",
+      "pattern": "^sm_[A-Za-z0-9]+$",
+      "description": "Machine-generated, independent of editorial_package_id — mirrors every other DC-003 identifier convention (ic_/ep_/wo_/...). Deliberately NOT 'spm_' — that prefix is already used by social-publishing-manifest.schema.json's own manifest_id; a visually-similar-but-distinct prefix on an unrelated object would be a real source of human confusion, so a clearly different one was chosen instead."
+    },
+    "editorial_package_id": {
+      "type": "string",
+      "pattern": "^ep_[A-Za-z0-9]+$",
+      "description": "The single, required input this package was derived from (DC-003-I031's Editorial Package Store). At most one Social Media Package may exist per editorial_package_id."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["generated"],
+      "description": "\"generated\" is the only value DC-003-I032 itself ever produces — mirrors editorial-package.schema.json's own identical status-field rationale, left open for a later milestone's own downstream lifecycle stages."
+    },
+    "hook": { "type": "string", "minLength": 1, "description": "The single attention-grabbing opening concept used to seed every platform variation below." },
+    "call_to_action": { "type": "string", "minLength": 1 },
+    "tone": { "type": "string", "minLength": 1 },
+    "audience": { "type": "string", "minLength": 1 },
+    "platforms": {
+      "type": "object",
+      "description": "One tailored variation per platform — the brief's own \"platform variations\" requirement is expressed structurally here (four distinct, independently-generated objects), not as a separate field.",
+      "required": ["linkedin", "facebook", "x", "instagram"],
+      "additionalProperties": false,
+      "properties": {
+        "linkedin": { "$ref": "#/$defs/textPlatformVariation" },
+        "facebook": { "$ref": "#/$defs/textPlatformVariation" },
+        "x": { "$ref": "#/$defs/textPlatformVariation" },
+        "instagram": { "$ref": "#/$defs/captionPlatformVariation" }
+      }
+    },
+    "carousel": {
+      "type": "object",
+      "description": "Generic, renderer-agnostic slide content — headings/slide_copy/image_guidance are parallel arrays (same length, same order). Six entries each, matching this codebase's own established six-slide convention (config/templates.json, carousel-slide-spec.mjs's SLIDE_ORDER) — the entry SHAPE stays generic; only the COUNT matches, so a future I033 Carousel Builder can map this content onto the specific six template slot types without this milestone needing to know their field names.",
+      "required": ["headings", "slide_copy", "image_guidance"],
+      "additionalProperties": false,
+      "properties": {
+        "headings": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 },
+        "slide_copy": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 },
+        "image_guidance": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 }
+      }
+    },
+    "metadata": {
+      "type": ["object", "null"],
+      "description": "Free-form hints for downstream rendering (e.g. suggested visual style), deliberately unconstrained — mirrors ingested-content.schema.json's/content-asset.schema.json's own metadata field convention."
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "llm_model": { "type": "string", "minLength": 1 },
+    "prompt_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hex digest of every other field on this record, computed by createSocialMediaPackage() immediately before the record is frozen — mirrors editorial-package.schema.json's own checksum field exactly."
+    }
+  },
+  "$defs": {
+    "textPlatformVariation": {
+      "type": "object",
+      "required": ["post_text", "hashtags", "character_count"],
+      "additionalProperties": false,
+      "properties": {
+        "post_text": { "type": "string", "minLength": 1 },
+        "hashtags": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "character_count": { "type": "integer", "minimum": 1, "description": "Computed from post_text — never separately supplied." }
+      }
+    },
+    "captionPlatformVariation": {
+      "type": "object",
+      "required": ["caption", "hashtags", "character_count"],
+      "additionalProperties": false,
+      "properties": {
+        "caption": { "type": "string", "minLength": 1 },
+        "hashtags": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "character_count": { "type": "integer", "minimum": 1, "description": "Computed from caption — never separately supplied." }
+      }
+    }
+  }
+}

@@ -12,6 +12,13 @@ import { createLocalJsonProductionPackageStoreAdapter } from "../../src/local-js
 import { PipelineConfigurationError } from "../../src/pipeline-errors.mjs";
 import { DuplicateProductionPackageError, RequiredRendererMappingMissingError, InvalidTemplateMappingError } from "../../src/production-package-errors.mjs";
 import { SocialMediaPackageNotFoundError } from "../../src/social-media-package-errors.mjs";
+import { loadVersions } from "../../src/config-loader.mjs";
+
+// DC-003-I032.7 — the Social Media Package Store now validates a stored
+// record against the schema_version it actually declares. This file's
+// own fixture is shaped like a CURRENT-schema record, so it must
+// declare the real current version, not a stale hardcoded string.
+const CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION = loadVersions().schema_versions.social_media_package;
 
 async function withTempDir(fn) {
   const base = mkdtempSync(path.join(tmpdir(), "dc003-production-package-generator-"));
@@ -60,7 +67,7 @@ function seedSocialMediaPackage(store, overrides = {}) {
         },
         llmModel: "mock-social-media-provider-v1",
         promptVersion: "social-media-package.v1",
-        schemaVersion: "1.0",
+        schemaVersion: CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION,
         ...overrides,
       },
       { idGenerator: () => "sm_generatortest0001" }
