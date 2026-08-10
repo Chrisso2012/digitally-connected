@@ -22,6 +22,19 @@ const CAROUSEL_ARRAY_FIELDS = ["headings", "slideCopy", "imageGuidance"];
 const CAROUSEL_SLIDE_COUNT = 6;
 const CAROUSEL_SLIDE_ROLE_ORDER = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
 
+// DC-003-I032.6 — position 4 (0-indexed 3) is evidence-aware — see
+// social-media-provider.mjs's own identical constant for the full
+// rationale (no canonical contract in this pipeline carries genuine
+// external-attribution data, so "quote" is schema-supported for a
+// future version but never legitimately reachable today; "evidence" is
+// the honest fallback).
+const EVIDENCE_POSITION_INDEX = 3;
+const EVIDENCE_POSITION_ALLOWED_ROLES = ["quote", "evidence"];
+
+function allowedRolesAtPosition(index) {
+  return index === EVIDENCE_POSITION_INDEX ? EVIDENCE_POSITION_ALLOWED_ROLES : [CAROUSEL_SLIDE_ROLE_ORDER[index]];
+}
+
 function generateSocialMediaPackageId() {
   return "sm_" + randomUUID().replace(/-/g, "").slice(0, 16);
 }
@@ -86,15 +99,16 @@ function buildCarouselSlides(value) {
   return value.map((slide, index) => {
     const label = `carousel.slides[${index}]`;
     const expectedNumber = index + 1;
-    const expectedRole = CAROUSEL_SLIDE_ROLE_ORDER[index];
+    const allowedRoles = allowedRolesAtPosition(index);
     if (!slide || typeof slide !== "object") {
       throw new InvalidSocialMediaPackageInputError(`fields.${label} is required`);
     }
     if (slide.slideNumber !== expectedNumber) {
       throw new InvalidSocialMediaPackageInputError(`fields.${label}.slideNumber must be ${expectedNumber}`);
     }
-    if (slide.slideRole !== expectedRole) {
-      throw new InvalidSocialMediaPackageInputError(`fields.${label}.slideRole must be "${expectedRole}" (fixed positional order)`);
+    if (!allowedRoles.includes(slide.slideRole)) {
+      const expected = allowedRoles.length === 1 ? `"${allowedRoles[0]}" (fixed positional order)` : `one of ${JSON.stringify(allowedRoles)} (DC-003-I032.6 evidence-aware position)`;
+      throw new InvalidSocialMediaPackageInputError(`fields.${label}.slideRole must be ${expected}`);
     }
     checkNonEmptyString(slide.heading, `${label}.heading`);
     checkNonEmptyString(slide.body, `${label}.body`);
@@ -116,6 +130,13 @@ function buildCarouselSlides(value) {
       quote = { quote_text: slide.quote.quoteText };
     }
 
+    // DC-003-I032.6 — the same anti-fabrication cross-check as
+    // social-media-provider.mjs's own validator: a quote object may
+    // only accompany the "quote" role, never "evidence" or any other.
+    if (slide.slideRole !== "quote" && quote !== null) {
+      throw new InvalidSocialMediaPackageInputError(`fields.${label}.quote must be null when slideRole is not "quote"`);
+    }
+
     const keyPoints = slide.keyPoints ?? [];
     if (!Array.isArray(keyPoints) || keyPoints.length > 4 || !keyPoints.every(isNonEmptyString)) {
       throw new InvalidSocialMediaPackageInputError(`fields.${label}.keyPoints must be an array of 0-4 non-empty strings`);
@@ -123,7 +144,7 @@ function buildCarouselSlides(value) {
 
     return {
       slide_number: expectedNumber,
-      slide_role: expectedRole,
+      slide_role: slide.slideRole,
       heading: slide.heading,
       body: slide.body,
       image_guidance: slide.imageGuidance,

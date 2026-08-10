@@ -218,3 +218,58 @@ test("persists a genuine, non-real-estate industryContext string verbatim as ind
 test("throws InvalidSocialMediaPackageInputError for a blank-string industryContext", () => {
   assert.throws(() => createSocialMediaPackage(buildFields({ industryContext: "" })), InvalidSocialMediaPackageInputError);
 });
+
+// --- DC-003-I032.6 — position 4 evidence-aware role, at the domain
+// object layer. Direct regression coverage for car_3479ca8ac2af40b8's
+// fabricated attribution: a quote object may never accompany any role
+// but "quote", enforced here too (not only in the provider-facing
+// validator), and the six-slide structure is preserved either way.
+
+test('accepts slideRole:"evidence" at position 4 with quote: null — the honest fallback', () => {
+  const fields = buildFields();
+  const index = fields.carousel.slides.findIndex((s) => s.slideRole === "quote");
+  fields.carousel.slides[index] = { ...fields.carousel.slides[index], slideRole: "evidence", quote: null };
+  const record = createSocialMediaPackage(fields);
+  assert.equal(record.carousel.slides[index].slide_role, "evidence");
+  assert.equal(record.carousel.slides[index].quote, null);
+});
+
+test('still accepts slideRole:"quote" at position 4 with a real quote object — genuinely attributable evidence remains supported', () => {
+  const record = createSocialMediaPackage(buildFields());
+  const index = record.carousel.slides.findIndex((s) => s.slide_role === "quote");
+  assert.notEqual(index, -1);
+  assert.notEqual(record.carousel.slides[index].quote, null);
+});
+
+test('throws when position 4\'s slideRole is anything other than "quote" or "evidence"', () => {
+  const fields = buildFields();
+  const index = fields.carousel.slides.findIndex((s) => s.slideRole === "quote");
+  fields.carousel.slides[index] = { ...fields.carousel.slides[index], slideRole: "insight", quote: null };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test('throws when a quote object accompanies slideRole:"evidence" — a fabricated-looking quote may never be smuggled in under a different label', () => {
+  const fields = buildFields();
+  const index = fields.carousel.slides.findIndex((s) => s.slideRole === "quote");
+  fields.carousel.slides[index] = {
+    ...fields.carousel.slides[index],
+    slideRole: "evidence",
+    quote: { quoteText: "A real-sounding line presented as if it were external testimony." },
+  };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test('throws when a quote object accompanies any non-"quote" role, not only "evidence"', () => {
+  const fields = buildFields();
+  fields.carousel.slides[0] = { ...fields.carousel.slides[0], quote: { quoteText: "Smuggled onto the cover slide." } };
+  assert.throws(() => createSocialMediaPackage(fields), InvalidSocialMediaPackageInputError);
+});
+
+test("six-slide structure is preserved regardless of which role position 4 uses — the sixth slide is never removed", () => {
+  const fields = buildFields();
+  const index = fields.carousel.slides.findIndex((s) => s.slideRole === "quote");
+  fields.carousel.slides[index] = { ...fields.carousel.slides[index], slideRole: "evidence", quote: null };
+  const record = createSocialMediaPackage(fields);
+  assert.equal(record.carousel.slides.length, 6);
+  assert.equal(record.carousel.slides[5].slide_role, "cta");
+});

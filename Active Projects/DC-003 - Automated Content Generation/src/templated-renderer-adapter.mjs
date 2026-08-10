@@ -27,27 +27,68 @@ import { RequiredRendererMappingMissingError, InvalidTemplateMappingError } from
 // Role -> template key is a fixed lookup, not content-driven — matches
 // the Social Media Package schema's own fixed positional slide_role
 // order (social-media-provider.mjs's CAROUSEL_SLIDE_ROLE_ORDER).
+//
+// DC-003-I032.6 — "evidence" maps onto the same "content" template
+// "insight" already uses (confirmed via a real Templated get_template_
+// layers call: headline_text/body_text/list_item_N_* only, no
+// attribution-style layers at all — safe to reuse as-is). Keyed by the
+// slide's own slide_role now (see templateKeyForSlide() below), not by
+// position, since position 4 can now legitimately be either "quote" or
+// "evidence".
+//
+// The "quote" mapping itself is NOT safe to exercise today — flagged,
+// not fixed, in this milestone: a real Templated get_template_layers
+// call on the Quote template (5daf71d6-8aeb-4c8b-b542-27557057ed5a)
+// found its own Studio-configured DEFAULTS for the attribution_name/
+// attribution_role layers are "Operations Lead" / "Mid-market services
+// business" — a fake but real-person-shaped placeholder. Every quote
+// slide this pipeline has ever rendered has left those two layers
+// completely unset (see buildLayersForTemplate()'s own "quote" case
+// below, and its long-standing comment: "eyebrow_text and quote
+// attribution are deliberately NEVER populated by this adapter"), so
+// Templated's own Studio default has silently rendered on every single
+// one. This is a genuine template-asset issue, not a code defect this
+// adapter can safely patch within this milestone's own "do not redesign
+// Templated templates" boundary — see this file's own README/report for
+// the explicit Strategy Office stop-and-review flag. Practically moot
+// today regardless, since no canonical contract in this pipeline
+// (Ingested Content, Editorial Package) carries genuine external-
+// attribution data for "quote" to ever legitimately fire.
 const ROLE_TO_TEMPLATE_KEY = {
   cover: "cover",
   insight: "content",
   statistic: "statistic",
   quote: "quote",
+  evidence: "content",
   takeaway: "infographic",
   cta: "cta",
 };
 
 const RENDERER_NAME = "templated";
 const TEMPLATE_FAMILY_ID = "dc-carousel-v1";
-const MAPPING_STRATEGY = "semantic-six-template-v1";
+const MAPPING_STRATEGY = "semantic-six-template-v2";
 const SLIDE_COUNT = 6;
-const SLIDE_ROLES = Object.keys(ROLE_TO_TEMPLATE_KEY);
+// DC-003-I032.6 — position 4 (0-indexed 3) is evidence-aware; every
+// other position keeps its single fixed role. Mirrors
+// social-media-provider.mjs's own identical constants exactly.
+const CAROUSEL_SLIDE_ROLE_ORDER = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+const EVIDENCE_POSITION_INDEX = 3;
+const EVIDENCE_POSITION_ALLOWED_ROLES = ["quote", "evidence"];
+
+function allowedRolesAtPosition(index) {
+  return index === EVIDENCE_POSITION_INDEX ? EVIDENCE_POSITION_ALLOWED_ROLES : [CAROUSEL_SLIDE_ROLE_ORDER[index]];
+}
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-function templateKeyForSlide(slideNumber) {
-  return ROLE_TO_TEMPLATE_KEY[SLIDE_ROLES[slideNumber - 1]];
+// DC-003-I032.6 — resolves the real template by the slide's own actual
+// slide_role, not by position. Position 4 can legitimately be either
+// "quote" or "evidence" now, so a purely positional lookup (the
+// pre-I032.6 design) can no longer determine the right template.
+function templateKeyForSlide(slideRole) {
+  return ROLE_TO_TEMPLATE_KEY[slideRole];
 }
 
 /**
@@ -72,13 +113,14 @@ function buildSlideSequence(socialMediaPackage) {
   const slideSequence = slides.map((slide, index) => {
     const slideNumber = index + 1;
     const isFinalSlide = slideNumber === SLIDE_COUNT;
-    const expectedRole = SLIDE_ROLES[index];
+    const allowedRoles = allowedRolesAtPosition(index);
     const heading = slide?.heading;
     const bodyCopy = slide?.body;
     const guidance = slide?.image_guidance;
 
-    if (slide?.slide_role !== expectedRole) {
-      throw new RequiredRendererMappingMissingError(RENDERER_NAME, slideNumber, `slide_role (expected "${expectedRole}")`);
+    if (!allowedRoles.includes(slide?.slide_role)) {
+      const expected = allowedRoles.length === 1 ? `"${allowedRoles[0]}"` : `one of ${JSON.stringify(allowedRoles)} (DC-003-I032.6 evidence-aware position)`;
+      throw new RequiredRendererMappingMissingError(RENDERER_NAME, slideNumber, `slide_role (expected ${expected}, got ${JSON.stringify(slide?.slide_role)})`);
     }
     if (!isNonEmptyString(heading)) throw new RequiredRendererMappingMissingError(RENDERER_NAME, slideNumber, "headline_mapping");
     if (!isNonEmptyString(bodyCopy)) throw new RequiredRendererMappingMissingError(RENDERER_NAME, slideNumber, "body_copy_mapping");
@@ -89,7 +131,7 @@ function buildSlideSequence(socialMediaPackage) {
 
     return {
       slideNumber,
-      slideRole: expectedRole,
+      slideRole: slide.slide_role,
       headlineMapping: heading,
       bodyCopyMapping: bodyCopy,
       ctaMapping,
@@ -165,6 +207,26 @@ function buildLayersForTemplate(templateKey, slide) {
         // headline_text/body_text layer to fall back onto either).
         return {};
       }
+      // FLAGGED, NOT FIXED (DC-003-I032.6) — do not remove this comment
+      // without Strategy Office review. This template's real Studio
+      // defaults for the attribution_name/attribution_role layers are
+      // "Operations Lead" / "Mid-market services business" (confirmed
+      // via a real Templated get_template_layers call on
+      // 5daf71d6-8aeb-4c8b-b542-27557057ed5a) — a fake but real-person-
+      // shaped placeholder. Because this function has never populated
+      // those two layers (by design — no source anywhere in this
+      // pipeline honestly supplies them), every quote slide ever
+      // rendered has shown that Studio default, which is exactly the
+      // fabricated attribution that got car_3479ca8ac2af40b8 rejected.
+      // Overriding these two layers blank here would suppress it, but
+      // that is a template-payload decision this milestone's own brief
+      // explicitly asks to stop and flag rather than force through —
+      // see this milestone's own report for the open Strategy Office
+      // item. In practice this code path is not currently reachable via
+      // honest generation anyway: no canonical contract in this
+      // pipeline carries genuine external-attribution data, so I032's
+      // own prompt/schema (DC-003-I032.6) never lets a provider
+      // legitimately choose "quote" today.
       return { quote_text: { text: structured.quote.quote_text } };
     }
 
@@ -211,7 +273,9 @@ function buildLayersForTemplate(templateKey, slide) {
  * Returns an array of 6 { template_id, template_version, format,
  * slide_number, slide_type, layers } objects, in slide order — one of
  * the six real DC Carousel templates per slide (cover/content/statistic/
- * quote/infographic/cta), selected by fixed position (templateKeyForSlide()).
+ * quote/infographic/cta), selected by the slide's own slide_role
+ * (templateKeyForSlide(), DC-003-I032.6 — no longer purely positional,
+ * since position 4 can legitimately be either "quote" or "evidence").
  * Throws InvalidTemplateMappingError if a required template key is
  * missing from the template registry, or RequiredRendererMappingMissingError
  * if a slide's own mapping content is somehow blank (defense-in-depth,
@@ -221,7 +285,7 @@ function mapToRendererPayload(productionPackage, options = {}) {
   const templatesConfig = options.templatesConfig ?? loadTemplatesConfig(options);
 
   return (productionPackage?.slide_sequence ?? []).map((slide) => {
-    const templateKey = templateKeyForSlide(slide.slide_number);
+    const templateKey = templateKeyForSlide(slide.slide_role);
     const templateEntry = templatesConfig.templates?.[templateKey];
     if (!templateEntry) {
       throw new InvalidTemplateMappingError(RENDERER_NAME, templateKey);

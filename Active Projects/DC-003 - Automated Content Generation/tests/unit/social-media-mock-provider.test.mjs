@@ -88,8 +88,10 @@ test("throws a plain Error when context.editorialPackage is missing", async () =
 });
 
 // --- DC-003-I032.1 — semantic six-role carousel ------------------------
+// DC-003-I032.6 — position 4 is "evidence", never "quote" — see
+// social-media-mock-provider.mjs's own header comment for why.
 
-const EXPECTED_ROLE_ORDER = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+const EXPECTED_ROLE_ORDER = ["cover", "insight", "statistic", "evidence", "takeaway", "cta"];
 
 test("carousel.slides has exactly 6 entries in the fixed positional role order", async () => {
   const provider = createSocialMediaMockProvider();
@@ -113,14 +115,14 @@ test("carousel.slides[].heading/body/imageGuidance are byte-identical to the leg
   });
 });
 
-test("only the statistic slide ever carries a non-null statistic, and only the quote slide ever carries a non-null quote", async () => {
+test("only the statistic slide ever carries a non-null statistic, and no slide ever carries a non-null quote (DC-003-I032.6 — the mock never produces the \"quote\" role)", async () => {
   const provider = createSocialMediaMockProvider();
   const ep = buildEditorialPackage({ key_insights: ["Nearly 73% of local searches lead to a same-day visit.", "Social proof compounds trust over time."] });
   const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
   const parsed = JSON.parse(raw);
   parsed.carousel.slides.forEach((slide) => {
     if (slide.slideRole !== "statistic") assert.equal(slide.statistic, null, `${slide.slideRole} slide must never carry a statistic`);
-    if (slide.slideRole !== "quote") assert.equal(slide.quote, null, `${slide.slideRole} slide must never carry a quote`);
+    assert.equal(slide.quote, null, `${slide.slideRole} slide must never carry a quote — no slide is ever the "quote" role`);
     if (slide.slideRole !== "takeaway") assert.deepEqual(slide.keyPoints, [], `${slide.slideRole} slide must never carry keyPoints`);
   });
 });
@@ -161,34 +163,64 @@ test("a bare year or list-style number is never misread as a statistic", async (
   assert.equal(statisticSlide.statistic, null, "a bare year must not be treated as a real statistic");
 });
 
-test("quote-with-evidence: the quote slide's quote.quoteText is a real, verbatim pull_quotes entry", async () => {
+// --- DC-003-I032.6 — position 4 is "evidence", never "quote" ----------
+// This pipeline's own canonical contracts never carry genuine external-
+// attribution data for any pull quote (pullQuotes are article/author
+// excerpts, never third-party testimony), so a deterministic mock never
+// claims "quote" at all. "evidence" reuses a second real, distinct key
+// insight — never the same string position 2's "insight" slide already
+// used — falling back to a real pull quote's own plain text (still
+// never quotation-styled) and finally to core_message.
+
+test('evidence slide (position 4) uses the SECOND real key insight, distinct from position 2\'s "insight" slide, when one exists', async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ key_insights: ["First real insight.", "Second real insight, distinct from the first."] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const insightSlide = parsed.carousel.slides.find((s) => s.slideRole === "insight");
+  const evidenceSlide = parsed.carousel.slides.find((s) => s.slideRole === "evidence");
+  assert.equal(insightSlide.body, "First real insight.");
+  assert.equal(evidenceSlide.body, "Second real insight, distinct from the first.");
+  assert.notEqual(evidenceSlide.body, insightSlide.body);
+});
+
+test("evidence slide falls back to a real pull quote's own plain text when fewer than 2 key insights exist — reused as ordinary body copy, never quotation-styled", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ key_insights: ["Only one real insight exists here."], pull_quotes: ["A coherent digital marketing strategy is no longer optional."] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const evidenceSlide = parsed.carousel.slides.find((s) => s.slideRole === "evidence");
+  assert.equal(evidenceSlide.body, "A coherent digital marketing strategy is no longer optional.");
+  assert.equal(evidenceSlide.quote, null, "the pull quote is reused as ordinary body copy, never wrapped in a quote object");
+});
+
+test("evidence slide falls back to core_message when neither a second key insight nor any pull quote exists", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ key_insights: ["Only one real insight exists here."], pull_quotes: [] });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  const evidenceSlide = parsed.carousel.slides.find((s) => s.slideRole === "evidence");
+  assert.equal(evidenceSlide.body, ep.core_message);
+  assert.equal(evidenceSlide.quote, null);
+});
+
+test("evidence slide's quote field is always null, and no attribution field of any kind ever appears on it — never a fabricated speaker/attribution", async () => {
+  const provider = createSocialMediaMockProvider();
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: buildEditorialPackage() });
+  const parsed = JSON.parse(raw);
+  const evidenceSlide = parsed.carousel.slides.find((s) => s.slideRole === "evidence");
+  assert.equal(evidenceSlide.quote, null);
+  assert.ok(!("attribution" in evidenceSlide), "evidence slide must never carry an attribution field");
+  assert.ok(!("attributionName" in evidenceSlide));
+  assert.ok(!("attributionRole" in evidenceSlide));
+});
+
+test('no slide anywhere in the carousel is ever the "quote" role — confirms the mock never fabricates external-attribution capability it does not have', async () => {
   const provider = createSocialMediaMockProvider();
   const ep = buildEditorialPackage({ pull_quotes: ["A coherent digital marketing strategy is no longer optional."] });
   const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
   const parsed = JSON.parse(raw);
-  const quoteSlide = parsed.carousel.slides.find((s) => s.slideRole === "quote");
-  assert.deepEqual(quoteSlide.quote, { quoteText: "A coherent digital marketing strategy is no longer optional." });
-  assert.equal(quoteSlide.body, "A coherent digital marketing strategy is no longer optional.");
-});
-
-test("quote-without-evidence fallback: an empty pull_quotes array yields quote: null and a real, non-blank fallback body — defensive, since the schema normally guarantees at least one entry", async () => {
-  const provider = createSocialMediaMockProvider();
-  const ep = buildEditorialPackage({ pull_quotes: [] });
-  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
-  const parsed = JSON.parse(raw);
-  const quoteSlide = parsed.carousel.slides.find((s) => s.slideRole === "quote");
-  assert.equal(quoteSlide.quote, null);
-  assert.equal(quoteSlide.body, ep.core_message);
-});
-
-test("no attribution field of any kind ever appears on a quote slide — the Editorial Package has no attribution source and none is invented", async () => {
-  const provider = createSocialMediaMockProvider();
-  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: buildEditorialPackage() });
-  const parsed = JSON.parse(raw);
-  const quoteSlide = parsed.carousel.slides.find((s) => s.slideRole === "quote");
-  assert.ok(quoteSlide.quote === null || !("attribution" in quoteSlide.quote), "quote object must never carry an attribution field");
-  assert.ok(quoteSlide.quote === null || !("attributionName" in quoteSlide.quote));
-  assert.ok(quoteSlide.quote === null || !("attributionRole" in quoteSlide.quote));
+  assert.equal(parsed.carousel.slides.some((s) => s.slideRole === "quote"), false);
 });
 
 test("takeaway slide's keyPoints holds only real key_insights entries, never padded to 4 with invented content", async () => {

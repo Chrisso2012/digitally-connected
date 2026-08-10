@@ -34,8 +34,32 @@ const CAROUSEL_SLIDE_COUNT = 6;
 // Not caller-configurable: the six real Templated templates are selected
 // by POSITION (see templated-renderer-adapter.mjs's templateKeyForSlide()),
 // so slide_role is a self-documenting/verifiable label, not something a
-// provider gets to reorder.
+// provider gets to reorder. "quote" here names position 4's PREFERRED
+// role for display/documentation purposes only — see
+// EVIDENCE_POSITION_ALLOWED_ROLES below for what's actually enforced
+// there (DC-003-I032.6).
 export const CAROUSEL_SLIDE_ROLE_ORDER = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
+
+// DC-003-I032.6 — position 4 (0-indexed 3) is evidence-aware, not fixed
+// to "quote": the rejected carousel exposed that this pipeline's own
+// canonical contracts (Ingested Content, Editorial Package) never carry
+// genuine external-attribution metadata (speaker name/role/organisation)
+// for any pull quote — pullQuotes are article/author excerpts, never
+// third-party testimony (confirmed against editorial-package-prompt-
+// builder.mjs's own "quotable sentences drawn from the article body").
+// "quote" therefore remains schema-supported for a FUTURE version of
+// this pipeline that does carry real attribution data, but a provider
+// must never legitimately choose it today — see the prompt builder's
+// own "Evidence slide (position 4)" section for the explicit instruction.
+// "evidence" is the honest fallback: source-grounded material presented
+// as ordinary carousel copy, never inside quotation marks as if it were
+// external testimony, never with an invented speaker/attribution.
+const EVIDENCE_POSITION_INDEX = 3;
+const EVIDENCE_POSITION_ALLOWED_ROLES = ["quote", "evidence"];
+
+function allowedRolesAtPosition(index) {
+  return index === EVIDENCE_POSITION_INDEX ? EVIDENCE_POSITION_ALLOWED_ROLES : [CAROUSEL_SLIDE_ROLE_ORDER[index]];
+}
 
 export function assertValidSocialMediaProvider(provider) {
   if (!provider || typeof provider.name !== "string" || typeof provider.generateSocialMedia !== "function") {
@@ -174,14 +198,15 @@ export function assertValidSocialMediaResult(result) {
   }
   slides.forEach((slide, index) => {
     const expectedNumber = index + 1;
-    const expectedRole = CAROUSEL_SLIDE_ROLE_ORDER[index];
+    const allowedRoles = allowedRolesAtPosition(index);
     const slidePath = `carousel.slides[${index}]`;
     if (!slide || typeof slide !== "object") fail(`${slidePath} is required`, slidePath);
     if (slide.slideNumber !== expectedNumber) {
       fail(`${slidePath}.slideNumber must be ${expectedNumber}, got ${JSON.stringify(slide.slideNumber)}`, `${slidePath}.slideNumber`);
     }
-    if (slide.slideRole !== expectedRole) {
-      fail(`${slidePath}.slideRole must be "${expectedRole}" (fixed positional order), got ${JSON.stringify(slide.slideRole)}`, `${slidePath}.slideRole`);
+    if (!allowedRoles.includes(slide.slideRole)) {
+      const expected = allowedRoles.length === 1 ? `"${allowedRoles[0]}" (fixed positional order)` : `one of ${JSON.stringify(allowedRoles)} (DC-003-I032.6 evidence-aware position)`;
+      fail(`${slidePath}.slideRole must be ${expected}, got ${JSON.stringify(slide.slideRole)}`, `${slidePath}.slideRole`);
     }
     if (!isNonEmptyString(slide.heading)) fail(`${slidePath}.heading is required and must be a non-empty string`, `${slidePath}.heading`);
     if (!isNonEmptyString(slide.body)) fail(`${slidePath}.body is required and must be a non-empty string`, `${slidePath}.body`);
@@ -196,6 +221,15 @@ export function assertValidSocialMediaResult(result) {
       if (!slide.quote || typeof slide.quote !== "object" || !isNonEmptyString(slide.quote.quoteText)) {
         fail(`${slidePath}.quote must be null or { quoteText } with a non-empty string`, `${slidePath}.quote`);
       }
+    }
+    // DC-003-I032.6 — the core anti-fabrication cross-check: a quote
+    // object may only accompany the "quote" role. This blocks the exact
+    // failure mode this milestone exists to prevent — real quote text
+    // sitting under an "evidence" (or any other) role label, which would
+    // let downstream rendering treat honestly-sourced prose as if it
+    // were attributed external testimony.
+    if (slide.slideRole !== "quote" && slide.quote !== null) {
+      fail(`${slidePath}.quote must be null when slideRole is not "quote" — a quote object may never accompany any other role`, `${slidePath}.quote`);
     }
     if (!Array.isArray(slide.keyPoints) || slide.keyPoints.length > 4 || !slide.keyPoints.every(isNonEmptyString)) {
       fail(`${slidePath}.keyPoints must be an array of 0-4 non-empty strings`, `${slidePath}.keyPoints`);

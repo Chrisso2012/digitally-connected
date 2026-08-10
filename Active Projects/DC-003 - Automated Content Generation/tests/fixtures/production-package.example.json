@@ -69,22 +69,20 @@
     },
     {
       "slide_number": 4,
-      "slide_role": "quote",
+      "slide_role": "evidence",
       "headline_mapping": "Social Proof Compounds Trust",
       "body_copy_mapping": "Social proof compounds trust in a way advertising alone cannot buy.",
       "cta_mapping": null,
-      "image_guidance_mapping": "Slide 4: a customer leaving a five-star review on a phone — illustrative guidance only [mock].",
+      "image_guidance_mapping": "Slide 4: an icon representing accumulated trust/reputation — illustrative guidance only [mock].",
       "placeholder_tag_mapping": {
         "headline": "Social Proof Compounds Trust",
         "body": "Social proof compounds trust in a way advertising alone cannot buy.",
         "cta": null,
-        "image_guidance": "Slide 4: a customer leaving a five-star review on a phone — illustrative guidance only [mock]."
+        "image_guidance": "Slide 4: an icon representing accumulated trust/reputation — illustrative guidance only [mock]."
       },
       "structured_content": {
         "statistic": null,
-        "quote": {
-          "quote_text": "Social proof compounds trust in a way advertising alone cannot buy."
-        },
+        "quote": null,
         "key_points": []
       }
     },
@@ -132,7 +130,7 @@
     }
   ],
   "rendering_metadata": {
-    "mapping_strategy": "semantic-six-template-v1",
+    "mapping_strategy": "semantic-six-template-v2",
     "slide_count": 6,
     "generator": "templated-renderer-adapter"
   },
@@ -142,6 +140,6 @@
     "renderer_mapping_validated": true
   },
   "generated_at": "2026-08-07T12:00:00.000Z",
-  "schema_version": "1.1",
-  "production_checksum": "74ca8bb10c601884e7fffe44fce5fe3dde47bc77f6faaddf7b1a66fc7f48b46a"
+  "schema_version": "1.2",
+  "production_checksum": "095a70216508f24f251d34c30d469c733000fdef52e9b02c2eb5f2477029719e"
 }

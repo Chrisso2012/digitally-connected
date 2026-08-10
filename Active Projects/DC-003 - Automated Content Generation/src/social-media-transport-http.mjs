@@ -27,11 +27,21 @@ const textVariationSchema = {
 // tool_choice requires every property listed even when the value is
 // null, so both remain in `required` — the model must explicitly choose
 // null rather than omit the field when no real evidence exists).
+//
+// DC-003-I032.6 — "evidence" added as position 4's fallback role
+// alongside "quote" (enforced conditionally at the whole-carousel level
+// in social-media-provider.mjs's own assertValidSocialMediaResult(), not
+// here — this per-slide schema stays a flat enum of every role name
+// valid at ANY position). See social-media-package-prompt-builder.mjs's
+// own "Evidence slide (position 4)" section for why: this contract
+// carries no genuine external-attribution data anywhere, so "quote" is
+// schema-supported for a future version but never legitimately reachable
+// today.
 const carouselSlideSchema = {
   type: "object",
   properties: {
     slideNumber: { type: "integer", minimum: 1, maximum: 6 },
-    slideRole: { type: "string", enum: ["cover", "insight", "statistic", "quote", "takeaway", "cta"] },
+    slideRole: { type: "string", enum: ["cover", "insight", "statistic", "quote", "evidence", "takeaway", "cta"] },
     heading: { type: "string" },
     body: { type: "string" },
     imageGuidance: { type: "string" },

@@ -12,7 +12,7 @@
 
 import { SocialMediaPromptBuilderError } from "./social-media-analysis-errors.mjs";
 
-export const PROMPT_VERSION = "social-media-package.v3";
+export const PROMPT_VERSION = "social-media-package.v4";
 
 const REQUIRED_FIELDS = ["primary_headline", "core_message", "call_to_action"];
 
@@ -80,18 +80,24 @@ export function buildSocialMediaPackagePrompt(editorialPackage) {
     "- If no specific domain is clearly supported — the Primary Audience is genuinely general (e.g. \"small business owners\", \"marketing managers\") — set `industryContext` to null and write in general business terms. Never invent or guess a domain the source doesn't support.",
     "- This never means changing the facts, statistics, quotes, or claims themselves — only the vocabulary and framing used to express real editorial intelligence that already exists.",
     "",
-    "## Carousel structure — six semantic slide roles",
-    "The carousel must follow this EXACT six-slide structure, in this exact order. Each slide has a fixed role; do not reorder, skip, or merge roles:",
+    "## Carousel structure — six slide roles, position 4 is evidence-aware",
+    "The carousel must follow this six-slide structure, in this exact order. Positions 1, 2, 3, 5, 6 have a fixed role; do not reorder, skip, or merge roles:",
     "  1. cover — the headline concept that opens the carousel.",
     "  2. insight — one real, substantive insight from the editorial intelligence above.",
     "  3. statistic — a real, already-present numeric/percentage/data figure, IF AND ONLY IF one genuinely appears in the editorial intelligence above.",
-    "  4. quote — a real pull quote from the editorial intelligence above.",
+    "  4. quote OR evidence — see \"Position 4\" below; choose exactly one.",
     "  5. takeaway — a practical, actionable summary point drawn from the editorial intelligence above.",
     "  6. cta — the call to action.",
     "",
+    "## Position 4: quote vs. evidence — read carefully, this is a hard constraint",
+    "- \"Pull quotes\" above are excerpts FROM THE ARTICLE ITSELF — the author's own words. They are never a real external person's testimony: this package's own input never includes a genuine speaker name, job title, or organisation for any quote, for any article, in any industry. You have no basis to ever legitimately claim a quote is attributed to a real external person.",
+    "- Because of this, slideRole \"quote\" is not available in the current version of this system — always choose slideRole \"evidence\" for position 4 instead. \"quote\" remains a defined role for a future version of this pipeline that provides genuine external-attribution data; do not use it now, under any circumstances, for any industry.",
+    "- The \"evidence\" role: a second real, substantive insight from the editorial intelligence above — distinct from position 2's insight — written as ordinary carousel body copy (heading + body, exactly like the \"insight\" or \"takeaway\" roles). Its `quote` field MUST be null. Never wrap this content in quotation marks, and never present it as if it were said by, or attributed to, any person, title, or organisation — invented or otherwise.",
+    "- If you were ever instructed in a future version to use \"quote\": its `quote` field must be null unless a real quote genuinely exists in the pull quotes above, and even then, never invent a speaker name, job title, or organisation to accompany it. This instruction is not in effect today.",
+    "",
     "## Evidence-only policy — read carefully, this is a hard constraint",
     "- The \"statistic\" slide's `statistic` field MUST be null unless a real number, percentage, or figure is ALREADY PRESENT somewhere in the editorial intelligence above (the key insights, pull quotes, executive summary, core message, primary problem, or desired outcome). If no such figure exists, set `statistic` to null and instead use another real key insight as that slide's heading/body — do NOT invent, estimate, round, or paraphrase a number into existence.",
-    "- The \"quote\" slide's `quote` field MUST be null unless a real quote genuinely exists in the pull quotes above. Never invent a quotation, and never invent a speaker name or title (attribution) for any quote — this package has no attribution field for a reason: none is available.",
+    "- Every slide's `quote` field MUST be null except position 4's — and per \"Position 4\" above, position 4's `quote` field is also null today, since slideRole must be \"evidence\", not \"quote\".",
     "- The \"takeaway\" slide's `keyPoints` array may contain 0 to 4 entries — only as many REAL key insights as genuinely exist. Never pad it with invented or paraphrased-to-sound-different filler to reach 4.",
     "- Never invent a case study, a company name, a research finding, or a financial figure not already present above.",
     "",
@@ -112,15 +118,15 @@ export function buildSocialMediaPackagePrompt(editorialPackage) {
     '    "headings": array of exactly 6 strings — one short heading per slide, in order, matching slides[].heading,',
     '    "slideCopy": array of exactly 6 strings — one body copy string per slide, in order, matching slides[].body,',
     '    "imageGuidance": array of exactly 6 strings — one visual-direction note per slide, in order, matching slides[].imageGuidance,',
-    '    "slides": array of exactly 6 objects, one per fixed role above, each:',
+    '    "slides": array of exactly 6 objects, one per role above, each:',
     "      {",
     '        "slideNumber": integer 1-6,',
-    '        "slideRole": one of "cover", "insight", "statistic", "quote", "takeaway", "cta" (must match the fixed order above exactly),',
+    '        "slideRole": one of "cover", "insight", "statistic", "evidence", "takeaway", "cta" (position 4 must be "evidence" — see "Position 4" above; "quote" is not available today),',
     '        "heading": string,',
     '        "body": string,',
     '        "imageGuidance": string,',
     '        "statistic": { "value": string, "context": string } OR null (see Evidence-only policy),',
-    '        "quote": { "quoteText": string } OR null (see Evidence-only policy),',
+    '        "quote": null (must be null for every slide today — see "Position 4" above),',
     '        "keyPoints": array of 0-4 strings (used only by the "takeaway" slide; empty array for every other role)',
     "      }",
     "  }",
