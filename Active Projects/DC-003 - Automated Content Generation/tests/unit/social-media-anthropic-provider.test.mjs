@@ -14,6 +14,7 @@ const VALID_TOOL_INPUT = {
   callToAction: "CTA",
   tone: "T",
   audience: "A",
+  industryContext: null,
   platforms: {
     linkedin: { postText: "L", hashtags: ["a"] },
     facebook: { postText: "F", hashtags: ["b"] },
@@ -166,4 +167,30 @@ test("an explicit maxTokens override still takes priority over the 8192 default"
   const provider = createAnthropicSocialMediaProvider({ transport: spyTransport, model: "claude-sonnet-5", maxTokens: 2048 });
   await provider.generateSocialMedia("prompt");
   assert.equal(observedRequest.maxTokens, 2048);
+});
+
+// --- DC-003-I031.8 — the forced tool's own input_schema must require
+// industryContext explicitly (null-or-string, mirrors statistic/quote's
+// own honest-evidence pattern), so a real live call cannot silently omit
+// it. Mirrors editorial-analysis-anthropic-provider.test.mjs's own
+// I031.2 captureSentSchema() pattern exactly.
+
+function captureSentSchema() {
+  let capturedBody;
+  global.fetch = async (url, init) => {
+    capturedBody = JSON.parse(init.body);
+    return jsonResponse(200, { content: [{ type: "tool_use", name: TOOL_NAME, input: VALID_TOOL_INPUT }] });
+  };
+  return () => capturedBody.tools[0].input_schema;
+}
+
+test("the tool input_schema sent to Anthropic requires industryContext and allows null-or-string, never fabricating a value", async () => {
+  const getSchema = captureSentSchema();
+  const transport = createSocialMediaHttpTransport({ apiKey: "key" });
+  await transport.send({ model: "m", prompt: "p", maxTokens: 100, toolName: TOOL_NAME });
+
+  const schema = getSchema();
+  assert.ok(schema.required.includes("industryContext"), "industryContext must be a required field — the model must explicitly choose null, never silently omit it");
+  const industryContextSchema = schema.properties.industryContext;
+  assert.deepEqual(industryContextSchema.anyOf, [{ type: "null" }, { type: "string", minLength: 1 }]);
 });

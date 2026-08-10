@@ -144,6 +144,19 @@ function buildXPostText(hook, hashtagsSuffix) {
   return `${truncate(hook, Math.max(budget, 10))} ${hashtagsSuffix}`.trim();
 }
 
+// DC-003-I031.8 — unlike detectStatistic()/selectQuote() above, there is
+// no purely mechanical (regex/keyword) way to honestly judge whether a
+// specific industry/sector is "clearly supported" by the source — that
+// is real semantic judgment, not literal parsing, and only a real LLM
+// provider can make that call without guessing. A keyword-matching
+// heuristic here would itself be exactly the kind of hardcoded
+// industry-detection logic this milestone's own brief prohibits. This
+// mock therefore always returns null for industryContext — an honest,
+// valid value (see social-media-provider.mjs's own null-or-real
+// evidence contract), never a guess. The real Anthropic provider is
+// where this field's actual value comes from; see
+// social-media-package-prompt-builder.mjs's own "Industry/audience
+// specificity" section.
 function buildSocialMediaContent(ep) {
   const hook = sanitize(ep.primary_headline);
   const hashtags = (ep.suggested_hashtags ?? []).map(sanitize);
@@ -156,6 +169,7 @@ function buildSocialMediaContent(ep) {
     callToAction: sanitize(ep.call_to_action),
     tone: "informative and professional — illustrative only, not derived from real brand voice data [mock]",
     audience: sanitize(ep.primary_audience),
+    industryContext: null,
     platforms: {
       linkedin: {
         postText: `${sanitize(ep.core_message)} ${sanitize(ep.executive_summary)} ${sanitize(ep.call_to_action)}`,

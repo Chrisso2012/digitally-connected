@@ -64,6 +64,7 @@ const VALID_ANALYSIS = {
   callToAction: "CTA",
   tone: "T",
   audience: "A",
+  industryContext: null,
   platforms: {
     linkedin: { postText: "L", hashtags: ["a"] },
     facebook: { postText: "F", hashtags: ["b"] },
@@ -206,6 +207,34 @@ test("generateSocialMediaPackage() throws PipelineConfigurationError for missing
     await assert.rejects(() => generateSocialMediaPackage("ep_x", { editorialPackageStore }), PipelineConfigurationError);
   }));
 
+// --- DC-003-I031.8 — industryContext survives the generator's own
+// analysis.industryContext -> fields.industryContext pass-through,
+// exactly like every other provider-supplied field (hook/tone/audience).
+
+test("generateSocialMediaPackage() persists a genuine, non-real-estate industryContext returned by the provider", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const provider = fakeProvider("industry-aware-provider", async () =>
+      JSON.stringify({ ...VALID_ANALYSIS, industryContext: "Independent veterinary clinics managing appointment no-shows" })
+    );
+
+    const record = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, provider, idGenerator: () => "sm_industrytest0001" });
+
+    assert.equal(record.industry_context, "Independent veterinary clinics managing appointment no-shows");
+  }));
+
+test("generateSocialMediaPackage() persists industryContext: null when the provider genuinely found no supported industry", () =>
+  withTempDir(async (base) => {
+    const { editorialPackageStore, socialMediaPackageStore } = buildStores(base);
+    const ep = seedEditorialPackage(editorialPackageStore);
+    const provider = fakeProvider("generic-provider", async () => JSON.stringify({ ...VALID_ANALYSIS, industryContext: null }));
+
+    const record = await generateSocialMediaPackage(ep.editorial_package_id, { editorialPackageStore, socialMediaPackageStore, provider, idGenerator: () => "sm_industrytest0002" });
+
+    assert.equal(record.industry_context, null);
+  }));
+
 // --- DC-003-I032.3 — fieldDiagnostics wiring ---------------------------
 // Reproduces the exact structural shape of the real live failure this
 // milestone exists to diagnose — a result-shape failure where the whole
@@ -233,7 +262,7 @@ test('generateSocialMediaPackage() attaches fieldDiagnostics naming "carousel" w
       assert.equal(attempt.fieldDiagnostics.field, "carousel");
       assert.equal(attempt.fieldDiagnostics.shape.exists, false);
       assert.ok(!attempt.fieldDiagnostics.topLevelKeys.includes("carousel"));
-      assert.deepEqual(attempt.fieldDiagnostics.topLevelKeys, ["hook", "callToAction", "tone", "audience", "platforms"]);
+      assert.deepEqual(attempt.fieldDiagnostics.topLevelKeys, ["hook", "callToAction", "tone", "audience", "industryContext", "platforms"]);
     }
   }));
 

@@ -133,6 +133,15 @@ export function assertValidSocialMediaResult(result) {
     if (!isNonEmptyString(result[field])) fail(`${field} is required and must be a non-empty string`, field);
   }
 
+  // DC-003-I031.8 — honest evidence container, mirroring the
+  // statistic/quote null-or-real pattern: null is a valid, expected
+  // value here (a genuinely general-audience source), never coerced
+  // into a fabricated industry. Anything other than null or a
+  // non-empty string is rejected.
+  if (result.industryContext !== null && !isNonEmptyString(result.industryContext)) {
+    fail("industryContext must be null or a non-empty string", "industryContext");
+  }
+
   const platforms = result.platforms;
   if (!platforms || typeof platforms !== "object") fail("platforms is required and must be an object", "platforms");
   for (const platform of TEXT_PLATFORMS) {

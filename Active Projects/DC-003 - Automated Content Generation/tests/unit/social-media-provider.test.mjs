@@ -23,6 +23,7 @@ const VALID_RESULT = {
   callToAction: "CTA",
   tone: "T",
   audience: "A",
+  industryContext: null,
   platforms: {
     linkedin: { postText: "L", hashtags: ["a"] },
     facebook: { postText: "F", hashtags: ["b"] },
@@ -325,4 +326,35 @@ test("getResultFieldByPath() returns undefined for an unresolvable intermediate,
   const { carousel, ...rest } = VALID_RESULT;
   assert.equal(getResultFieldByPath(rest, "carousel.slides[2].slideRole"), undefined);
   assert.doesNotThrow(() => getResultFieldByPath(rest, "carousel.slides[2].slideRole"));
+});
+
+// --- DC-003-I031.8 — industryContext: an honest evidence container,
+// mirroring statistic/quote's own null-or-real pattern. Proves: (1) null
+// is accepted — a genuinely general-audience article is never falsely
+// assigned an industry; (2) any genuine, non-real-estate industry string
+// is accepted just as validly — the contract is generic, not hardcoded
+// to any one sector; (3) a blank/wrong-typed value is still rejected.
+
+test("assertValidSocialMediaResult() accepts industryContext: null (no specific industry clearly supported)", () => {
+  assert.doesNotThrow(() => assertValidSocialMediaResult({ ...VALID_RESULT, industryContext: null }));
+});
+
+test("assertValidSocialMediaResult() accepts a genuine, non-real-estate industryContext string — the contract is generic", () => {
+  const boutiqueFitness = { ...VALID_RESULT, industryContext: "Boutique fitness studios and independent personal trainers" };
+  assert.doesNotThrow(() => assertValidSocialMediaResult(boutiqueFitness));
+  const healthcare = { ...VALID_RESULT, industryContext: "Allied health clinics managing patient rebooking" };
+  assert.doesNotThrow(() => assertValidSocialMediaResult(healthcare));
+});
+
+test('assertValidSocialMediaResult() reports field:"industryContext" and rejects a blank string', () => {
+  try {
+    assertValidSocialMediaResult({ ...VALID_RESULT, industryContext: "" });
+    assert.fail("expected MalformedSocialMediaResultError");
+  } catch (error) {
+    assert.equal(error.field, "industryContext");
+  }
+});
+
+test("assertValidSocialMediaResult() rejects a non-string, non-null industryContext (e.g. a number)", () => {
+  assert.throws(() => assertValidSocialMediaResult({ ...VALID_RESULT, industryContext: 42 }), MalformedSocialMediaResultError);
 });

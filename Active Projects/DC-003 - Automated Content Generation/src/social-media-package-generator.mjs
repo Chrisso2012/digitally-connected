@@ -156,6 +156,7 @@ export async function generateSocialMediaPackage(editorialPackageId, dependencie
       callToAction: analysis.callToAction,
       tone: analysis.tone,
       audience: analysis.audience,
+      industryContext: analysis.industryContext,
       platforms: analysis.platforms,
       carousel: analysis.carousel,
       llmModel: provider.name,

@@ -124,6 +124,7 @@ function printFullRecord(record) {
   console.log(`  call_to_action:          ${record.call_to_action}`);
   console.log(`  tone:                    ${record.tone}`);
   console.log(`  audience:                ${record.audience}`);
+  console.log(`  industry_context:        ${record.industry_context}`);
   console.log(`  platforms:               ${JSON.stringify(record.platforms, null, 2)}`);
   console.log(`  carousel:                ${JSON.stringify(record.carousel, null, 2)}`);
   console.log(`  metadata:                ${JSON.stringify(record.metadata)}`);

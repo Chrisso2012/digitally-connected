@@ -12,6 +12,7 @@
     "call_to_action",
     "tone",
     "audience",
+    "industry_context",
     "platforms",
     "carousel",
     "metadata",
@@ -42,6 +43,12 @@
     "call_to_action": { "type": "string", "minLength": 1 },
     "tone": { "type": "string", "minLength": 1 },
     "audience": { "type": "string", "minLength": 1 },
+    "industry_context": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "DC-003-I031.8 — an honest evidence container, mirroring statistic/quote's own null-or-real pattern exactly: non-null ONLY when the source Editorial Package's own audience/editorial content clearly supports a specific industry, sector, or professional domain (e.g. real estate, healthcare, hospitality) — a short free-text description of that domain, in the model's own words, never a fixed enum and never hardcoded to any one industry. Null whenever no such domain is clearly supported by the source, so a genuinely general-audience article is never falsely assigned one. When non-null, every generated field (platforms and carousel alike) should preferentially draw its vocabulary, examples and scenarios from that domain wherever the editorial intelligence supports it, rather than defaulting to generic business language.",
+      "examples": ["Residential and property-management real estate agencies", null]
+    },
     "platforms": {
       "type": "object",
       "description": "One tailored variation per platform — the brief's own \"platform variations\" requirement is expressed structurally here (four distinct, independently-generated objects), not as a separate field.",

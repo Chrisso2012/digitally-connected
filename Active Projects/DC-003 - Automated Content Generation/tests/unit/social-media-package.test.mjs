@@ -195,3 +195,26 @@ test("accepts statistic: null and quote: null (honest no-evidence fallback) on t
   assert.equal(record.carousel.slides[statisticIndex].statistic, null);
   assert.equal(record.carousel.slides[quoteIndex].quote, null);
 });
+
+// --- DC-003-I031.8 — industryContext: an honest evidence container,
+// mirroring statistic/quote's own null-or-real pattern at the domain
+// object layer too. --------------------------------------------------
+
+test("industryContext defaults to null when omitted entirely — every existing buildFields()-based test above is unaffected", () => {
+  const record = createSocialMediaPackage(buildFields());
+  assert.equal(record.industry_context, null);
+});
+
+test("accepts an explicit industryContext: null", () => {
+  const record = createSocialMediaPackage(buildFields({ industryContext: null }));
+  assert.equal(record.industry_context, null);
+});
+
+test("persists a genuine, non-real-estate industryContext string verbatim as industry_context — the contract is generic", () => {
+  const record = createSocialMediaPackage(buildFields({ industryContext: "Independent veterinary clinics managing appointment no-shows" }));
+  assert.equal(record.industry_context, "Independent veterinary clinics managing appointment no-shows");
+});
+
+test("throws InvalidSocialMediaPackageInputError for a blank-string industryContext", () => {
+  assert.throws(() => createSocialMediaPackage(buildFields({ industryContext: "" })), InvalidSocialMediaPackageInputError);
+});
