@@ -53,6 +53,13 @@ const TOOL_INPUT_SCHEMA = {
     callToAction: { type: "string" },
     tone: { type: "string" },
     audience: { type: "string" },
+    // DC-003-I031.8 — an honest evidence container, mirroring statistic/
+    // quote's own null-or-real pattern: non-null ONLY when the audience
+    // above clearly supports a specific industry/sector/professional
+    // domain, described in the model's own words; null when the source
+    // is genuinely general-audience. Required (like statistic/quote) so
+    // the model must explicitly choose null rather than silently omit it.
+    industryContext: { anyOf: [{ type: "null" }, { type: "string", minLength: 1 }] },
     platforms: {
       type: "object",
       properties: {
@@ -78,7 +85,7 @@ const TOOL_INPUT_SCHEMA = {
       required: ["headings", "slideCopy", "imageGuidance", "slides"],
     },
   },
-  required: ["hook", "callToAction", "tone", "audience", "platforms", "carousel"],
+  required: ["hook", "callToAction", "tone", "audience", "industryContext", "platforms", "carousel"],
 };
 
 /**

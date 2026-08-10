@@ -36,6 +36,14 @@ function checkNonEmptyString(value, label) {
   }
 }
 
+// DC-003-I031.8 — honest evidence container, mirroring statistic/quote's
+// own null-or-real pattern: null is a valid, expected value here.
+function checkNullableNonEmptyString(value, label) {
+  if (value !== null && !isNonEmptyString(value)) {
+    throw new InvalidSocialMediaPackageInputError(`fields.${label} must be null or a non-empty string`);
+  }
+}
+
 function checkHashtags(value, label) {
   if (!Array.isArray(value) || !value.every(isNonEmptyString)) {
     throw new InvalidSocialMediaPackageInputError(`fields.platforms.${label}.hashtags must be an array of non-empty strings (may be empty)`);
@@ -139,6 +147,9 @@ function checksumOf(value) {
  * fields.editorialPackageId — required, the ep_... identifier this
  *   package was derived from.
  * fields.hook / callToAction / tone / audience — required, non-empty strings.
+ * fields.industryContext — required (DC-003-I031.8), null or a non-empty
+ *   string; null when the source has no clearly-supported specific
+ *   industry/sector — never coerced into a fabricated value.
  * fields.platforms.linkedin / facebook / x — required, each
  *   `{ postText: string, hashtags?: string[] }`.
  * fields.platforms.instagram — required, `{ caption: string, hashtags?: string[] }`.
@@ -169,6 +180,8 @@ export function createSocialMediaPackage(fields = {}, options = {}) {
   checkNonEmptyString(fields.callToAction, "callToAction");
   checkNonEmptyString(fields.tone, "tone");
   checkNonEmptyString(fields.audience, "audience");
+  const industryContext = fields.industryContext ?? null;
+  checkNullableNonEmptyString(industryContext, "industryContext");
 
   const platformsInput = fields.platforms ?? {};
   const platforms = {};
@@ -199,6 +212,7 @@ export function createSocialMediaPackage(fields = {}, options = {}) {
     call_to_action: fields.callToAction,
     tone: fields.tone,
     audience: fields.audience,
+    industry_context: industryContext,
     platforms,
     carousel: {
       headings: carouselInput.headings,

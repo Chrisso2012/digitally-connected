@@ -54,7 +54,7 @@ test("never reads ingested content or raw article fields — only Editorial Pack
 });
 
 test("PROMPT_VERSION is exported and stable", () => {
-  assert.equal(PROMPT_VERSION, "social-media-package.v2");
+  assert.equal(PROMPT_VERSION, "social-media-package.v3");
 });
 
 // --- DC-003-I032.1 — six semantic roles / evidence-only policy in the prompt
@@ -82,4 +82,60 @@ test("prompt describes the carousel.slides output shape with slideRole/statistic
   assert.match(prompt, /"statistic"/);
   assert.match(prompt, /"quote"/);
   assert.match(prompt, /"keyPoints"/);
+});
+
+// --- DC-003-I031.8 — industry/audience context is received explicitly
+// and the generation contract instructs the model to preserve it,
+// generically (not hardcoded to any one industry), across every field —
+// not only the audience/hook fields. -----------------------------------
+
+test("prompt includes the Primary audience section verbatim — the boundary that already carries industry context intact", () => {
+  const prompt = buildSocialMediaPackagePrompt(
+    buildEditorialPackage({ primary_audience: "Real estate agency principals, agents and property management leaders" })
+  );
+  assert.match(prompt, /## Primary audience/);
+  assert.match(prompt, /Real estate agency principals, agents and property management leaders/);
+});
+
+test("prompt instructs the model to read Primary audience for a specific industry/sector, not only a job title", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /Industry\/audience specificity/i);
+  assert.match(prompt, /specific industry, sector, or professional domain/i);
+});
+
+test("prompt instructs applying industry specificity across EVERY generated field, not only cover/CTA", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /hook, platform posts, and EVERY carousel slide \(not only the cover\/CTA\)/);
+});
+
+test("prompt explicitly instructs setting industryContext to null when no specific domain is clearly supported — never inventing one", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /set `industryContext` to null and write in general business terms/);
+  assert.match(prompt, /Never invent or guess a domain the source doesn't support/);
+});
+
+test("prompt's illustrative real-estate example is clearly an example, not a hardcoded assumption — the instruction itself stays conditional on the source", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /if the domain is real estate, prefer the source's own terms such as vendors, buyers, landlords, agencies, property enquiries/);
+  // The example is scoped by "e.g." / "if the domain is X" phrasing, and the
+  // very next sentence explicitly requires nulling out when unsupported —
+  // never an unconditional real-estate assumption.
+  assert.match(prompt, /If no specific domain is clearly supported/);
+});
+
+test("output format documents industryContext as string-or-null", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /"industryContext": string or null/);
+});
+
+test("never hardcodes a specific industry into the REQUIRED instructions — real estate appears only as one of several illustrative examples", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage({ primary_audience: "Marketing managers at mid-sized companies" }));
+  const realEstateMentions = prompt.match(/real estate/gi) ?? [];
+  // Exactly two mentions, both inside fixed instructional text (one in a
+  // multi-industry example list alongside healthcare/hospitality/B2B
+  // SaaS, one inside a conditional "if the domain is X" illustration) —
+  // never derived from or multiplied by the actual Editorial Package
+  // content, which here has nothing to do with real estate at all.
+  assert.equal(realEstateMentions.length, 2);
+  assert.match(prompt, /e\.g\. real estate, healthcare, hospitality, B2B SaaS/);
 });

@@ -209,3 +209,19 @@ test("takeaway slide's keyPoints caps at 4 even when more than 4 real key insigh
   assert.equal(takeawaySlide.keyPoints.length, 4);
   assert.deepEqual(takeawaySlide.keyPoints, ["Insight one.", "Insight two.", "Insight three.", "Insight four."]);
 });
+
+// --- DC-003-I031.8 — industryContext: the mock always returns null,
+// even for an Editorial Package whose primary_audience clearly names a
+// specific industry (e.g. real estate) — a deterministic mock has no
+// non-guessing way to judge that, so it never invents one. See
+// social-media-mock-provider.mjs's own header comment for the full
+// rationale. The real Anthropic provider is where a genuine value comes
+// from — see social-media-anthropic-provider.test.mjs.
+
+test("industryContext is always null from the mock provider, even for a strongly industry-specific primary_audience", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({ primary_audience: "Real estate agency principals, agents and property management leaders" });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+  assert.equal(parsed.industryContext, null);
+});

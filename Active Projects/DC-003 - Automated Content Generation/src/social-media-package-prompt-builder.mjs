@@ -12,7 +12,7 @@
 
 import { SocialMediaPromptBuilderError } from "./social-media-analysis-errors.mjs";
 
-export const PROMPT_VERSION = "social-media-package.v2";
+export const PROMPT_VERSION = "social-media-package.v3";
 
 const REQUIRED_FIELDS = ["primary_headline", "core_message", "call_to_action"];
 
@@ -74,6 +74,12 @@ export function buildSocialMediaPackagePrompt(editorialPackage) {
     "- Tailor each platform's own tone and length to that platform's own real conventions (LinkedIn: professional, longer form; X: concise, under 280 characters; Facebook: conversational; Instagram: visual-first, caption supports the image).",
     "- Never invent a statistic, quote, or client name presented as real.",
     "",
+    "## Industry/audience specificity — read carefully, this applies to every field you generate",
+    "- The Primary Audience above may name a specific industry, sector, or professional domain (e.g. real estate, healthcare, hospitality, B2B SaaS) — not just a generic job title. Read it for that domain, not only for who the reader is.",
+    "- If a specific domain is clearly supported by the Primary Audience and the editorial intelligence above, set `industryContext` to a short description of it in your own words, and preferentially express every field you generate — hook, platform posts, and EVERY carousel slide (not only the cover/CTA) — using that domain's own concrete vocabulary, examples and scenarios wherever the editorial intelligence supports it, rather than defaulting to generic business language (e.g. \"database\", \"leads\", \"CRM strategy\" read as generic; if the domain is real estate, prefer the source's own terms such as vendors, buyers, landlords, agencies, property enquiries, listing decisions, and timing around buying/selling/property management, when those concepts genuinely appear in or are directly implied by the editorial intelligence above).",
+    "- If no specific domain is clearly supported — the Primary Audience is genuinely general (e.g. \"small business owners\", \"marketing managers\") — set `industryContext` to null and write in general business terms. Never invent or guess a domain the source doesn't support.",
+    "- This never means changing the facts, statistics, quotes, or claims themselves — only the vocabulary and framing used to express real editorial intelligence that already exists.",
+    "",
     "## Carousel structure — six semantic slide roles",
     "The carousel must follow this EXACT six-slide structure, in this exact order. Each slide has a fixed role; do not reorder, skip, or merge roles:",
     "  1. cover — the headline concept that opens the carousel.",
@@ -95,6 +101,7 @@ export function buildSocialMediaPackagePrompt(editorialPackage) {
     '  "callToAction": string — the strongest, most concrete call to action.',
     '  "tone": string — the tone used across the package (e.g. "professional and confident").',
     '  "audience": string — who this package is written for.',
+    '  "industryContext": string or null — see "Industry/audience specificity" above; null when no specific domain is clearly supported.',
     '  "platforms": {',
     '    "linkedin": { "postText": string, "hashtags": array of strings },',
     '    "facebook": { "postText": string, "hashtags": array of strings },',

@@ -6,6 +6,7 @@
   "call_to_action": "Learn more about building a digital marketing strategy",
   "tone": "professional and confident",
   "audience": "Owners and marketing leads at small and mid-sized local businesses",
+  "industry_context": null,
   "platforms": {
     "linkedin": {
       "post_text": "A coherent digital marketing strategy is no longer optional for local businesses. Local businesses across every sector are discovering that a coherent digital marketing strategy is no longer optional. Learn more about building a digital marketing strategy.",
@@ -144,7 +145,7 @@
   "metadata": null,
   "generated_at": "2026-08-07T11:30:00.000Z",
   "llm_model": "mock-social-media-provider-v1",
-  "prompt_version": "social-media-package.v2",
-  "schema_version": "1.1",
-  "checksum": "d734fd7f65fce3498ee98ef948f538caa02346dfd80498b68b81776e522727c7"
+  "prompt_version": "social-media-package.v3",
+  "schema_version": "1.2",
+  "checksum": "e60c46ef976eee2d76c8b493a08b24fa3091438a2e5c0acd3b3a31df7d98acf9"
 }
