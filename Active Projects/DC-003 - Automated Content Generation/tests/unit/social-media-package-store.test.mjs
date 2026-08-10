@@ -398,6 +398,48 @@ test("get() exposes corrections: [] for a pre-correction (1.1-shaped) historical
     assert.equal("corrections" in JSON.parse(adapter.read("sm_historicalstore001")), false, "corrections must never be written back to the historical file");
   }));
 
+// --- Regression: the real DC-003-I032.9 incident ----------------------
+// The first live correction (against the real sm_3b859b1d314c4c41,
+// generated under schema 1.4) persisted a corrected record that still
+// declared schema_version "1.4" while now structurally containing a
+// populated `corrections` array — a field 1.4's own archived schema
+// doesn't have (additionalProperties:false). The very next read
+// correctly, strictly rejected it as CorruptedSocialMediaPackageError.
+// Fixed by re-stamping schema_version to the CURRENT version on every
+// correction. This test reproduces the exact failure shape end-to-end —
+// a genuinely OLD-schema raw record (1.1, predating revision/supersedes
+// AND corrections), read through the compatibility view, corrected, and
+// round-tripped through real persistence — proving the fix, not just
+// asserting it.
+
+test("correcting a genuinely old-schema (1.1) historical record produces a record that remains readable after replace() — the real incident, reproduced", () =>
+  withTempDir((dir) => {
+    const adapter = createLocalJsonSocialMediaPackageStoreAdapter({ storageDir: dir });
+    adapter.write("sm_historicalstore001", JSON.stringify(buildV11StoredRecord()));
+    const store = createSocialMediaPackageStore({ adapter });
+
+    const original = store.get("sm_historicalstore001");
+    assert.equal(original.schema_version, "1.1");
+
+    const corrected = correctSocialMediaPackageSlideField({
+      socialMediaPackage: original,
+      slideNumber: 6,
+      field: "body",
+      replacementText: "Corrected CTA body.",
+      reason: "test",
+    });
+    assert.equal(corrected.schema_version, CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION);
+
+    store.replace({ identifier: "sm_historicalstore001", socialMediaPackage: corrected });
+
+    // The real failure mode: this second read previously threw
+    // CorruptedSocialMediaPackageError.
+    const rereadRecord = store.get("sm_historicalstore001");
+    assert.equal(rereadRecord.carousel.slides[5].body, "Corrected CTA body.");
+    assert.equal(rereadRecord.corrections.length, 1);
+    assert.equal(rereadRecord.schema_version, CURRENT_SOCIAL_MEDIA_PACKAGE_SCHEMA_VERSION);
+  }));
+
 test("replace() persists a corrected record under its own existing identifier", () =>
   withTempDir((dir) => {
     const store = buildStore(dir);
