@@ -248,6 +248,83 @@ test("lineage prints the full V1->V2->V3 chain with is_latest correctly on only 
     assert.match(lineage.stdout, new RegExp(`latest:\\s+\\[${v3Id}\\]`));
   }));
 
+// --- DC-003-I032.9 — correct subcommand ---------------------------------
+
+test("correct with missing arguments prints usage and exits 1", () => {
+  const result = runSmCli("correct");
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Usage:/);
+});
+
+test("correct (a genuinely compliant replacement) applies in place, same social_media_package_id, revision unchanged", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-correct-1");
+    const created = runSmCli("create", editorialPackageId, epDir, smDir);
+    assert.equal(created.status, 0, created.stderr);
+    const id = created.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+
+    const result = runSmCli("correct", id, "6", "body", "Short CTA body.", "test authorisation", smDir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Social Media Package corrected OK — slide 6 \(body\)/);
+    assert.match(result.stdout, new RegExp(`social_media_package_id:\\s+${id}`));
+    assert.match(result.stdout, /revision:\s+1/);
+    assert.match(result.stdout, /corrections:\s+\[\{/);
+
+    const inspected = runSmCli("inspect", id, smDir);
+    const parsed = JSON.parse(inspected.stdout.split("\n").slice(1).join("\n"));
+    assert.equal(parsed.carousel.slides[5].body, "Short CTA body.");
+    assert.equal(parsed.corrections.length, 1);
+  }));
+
+test("correct never invokes any provider — no --live flag exists on this subcommand's usage line and it never appears in the source's live-flag branch", () => {
+  const source = readFileSync(SM_CLI_PATH, "utf-8");
+  const correctBlock = source.slice(source.indexOf('subcommand === "correct"'), source.indexOf('subcommand === "inspect"'));
+  assert.doesNotMatch(correctBlock, /buildProviderFromCliFlags|createAnthropicSocialMediaProvider|isLive/);
+});
+
+test("correct rejects a replacement that exceeds the Template Capacity Contract's canonical limit — the real DC-003-I032.9 CTA-body case", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-correct-2");
+    const created = runSmCli("create", editorialPackageId, epDir, smDir);
+    const id = created.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+
+    const result = runSmCli(
+      "correct",
+      id,
+      "6",
+      "body",
+      "Find old appraisal, buyer & landlord enquiries with no recent follow-up.", // 72 chars, exceeds the 67-char CTA body limit
+      "authorised correction",
+      smDir
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /FAIL\s+SocialMediaPackageCorrectionCapacityExceededError/);
+    assert.match(result.stderr, /72.*67|exceeding the Template Capacity Contract/);
+
+    // Nothing was applied.
+    const inspected = runSmCli("inspect", id, smDir);
+    const parsed = JSON.parse(inspected.stdout.split("\n").slice(1).join("\n"));
+    assert.equal(parsed.corrections.length, 0);
+  }));
+
+test("correct fails cleanly for an unknown socialMediaPackageId", () =>
+  withTempDirs(({ smDir }) => {
+    const result = runSmCli("correct", "sm_doesnotexist00001", "1", "heading", "New heading", "test", smDir);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /FAIL\s+SocialMediaPackageNotFoundError/);
+  }));
+
+test("correct fails cleanly for an unsupported field", () =>
+  withTempDirs(({ icDir, epDir, smDir }) => {
+    const editorialPackageId = seedEditorialPackageId(icDir, epDir, "doc-cli-correct-3");
+    const created = runSmCli("create", editorialPackageId, epDir, smDir);
+    const id = created.stdout.match(/social_media_package_id:\s+(sm_[A-Za-z0-9]+)/)[1];
+
+    const result = runSmCli("correct", id, "1", "hook", "New hook", "test", smDir);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /FAIL\s+InvalidSocialMediaPackageCorrectionError/);
+  }));
+
 // --- DC-003-I032.5 — live timeout default -------------------------------
 // The CLI's own --live path exits (on a missing LLM_API_KEY) before it
 // ever reaches resolveLiveRequestTimeoutMs(), so the actual numeric

@@ -6,6 +6,7 @@ import path from "node:path";
 import { createSocialMediaPackageStore } from "../../src/social-media-package-store.mjs";
 import { createLocalJsonSocialMediaPackageStoreAdapter } from "../../src/local-json-social-media-package-store-adapter.mjs";
 import { createSocialMediaPackage } from "../../src/social-media-package.mjs";
+import { correctSocialMediaPackageSlideField } from "../../src/social-media-package-correction.mjs";
 import { loadVersions } from "../../src/config-loader.mjs";
 import {
   InvalidSocialMediaPackageStoreAdapterError,
@@ -15,6 +16,7 @@ import {
   CorruptedSocialMediaPackageError,
   UnsupportedSchemaVersionError,
   MalformedSocialMediaPackageLineageError,
+  SocialMediaPackageIdentifierMismatchError,
 } from "../../src/social-media-package-errors.mjs";
 
 // DC-003-I032.7 — the store now validates a stored record against the
@@ -379,4 +381,86 @@ test("getLineage() treats a pre-lineage historical record (revision: 1 via compa
     assert.equal(lineage.latest.social_media_package_id, "sm_historicalstore001");
     assert.equal(lineage.latest.revision, 1);
     assert.equal(lineage.latest.is_latest, true);
+  }));
+
+// --- DC-003-I032.9 — revision-lineage historical compatibility for
+// corrections, and store.replace() (the correction mechanism's own
+// persistence half) -----------------------------------------------------
+
+test("get() exposes corrections: [] for a pre-correction (1.1-shaped) historical record — added only in memory", () =>
+  withTempDir((dir) => {
+    const adapter = createLocalJsonSocialMediaPackageStoreAdapter({ storageDir: dir });
+    adapter.write("sm_historicalstore001", JSON.stringify(buildV11StoredRecord()));
+    const store = createSocialMediaPackageStore({ adapter });
+
+    const record = store.get("sm_historicalstore001");
+    assert.deepEqual(record.corrections, []);
+    assert.equal("corrections" in JSON.parse(adapter.read("sm_historicalstore001")), false, "corrections must never be written back to the historical file");
+  }));
+
+test("replace() persists a corrected record under its own existing identifier", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    const original = store.save(buildRecord({}, { idGenerator: () => "sm_replacetest00001" }));
+
+    const corrected = correctSocialMediaPackageSlideField({
+      socialMediaPackage: original,
+      slideNumber: 1,
+      field: "heading",
+      replacementText: "Corrected Heading",
+      reason: "test",
+    });
+    const persisted = store.replace({ identifier: "sm_replacetest00001", socialMediaPackage: corrected });
+
+    assert.equal(persisted.carousel.slides[0].heading, "Corrected Heading");
+    assert.equal(store.get("sm_replacetest00001").carousel.slides[0].heading, "Corrected Heading");
+    assert.equal(store.get("sm_replacetest00001").corrections.length, 1);
+  }));
+
+test("replace() throws SocialMediaPackageNotFoundError when no record exists yet for the identifier", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    const neverSaved = buildRecord({}, { idGenerator: () => "sm_neversaved000001" });
+    assert.throws(() => store.replace({ identifier: "sm_neversaved000001", socialMediaPackage: neverSaved }), SocialMediaPackageNotFoundError);
+  }));
+
+test("replace() throws SocialMediaPackageIdentifierMismatchError when the supplied object's own id differs from the target identifier", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    store.save(buildRecord({}, { idGenerator: () => "sm_mismatcha0000001" }));
+    const differentRecord = buildRecord({ editorialPackageId: "ep_bbbbbbbbbbbbbbbb" }, { idGenerator: () => "sm_mismatchb0000001" });
+
+    assert.throws(
+      () => store.replace({ identifier: "sm_mismatcha0000001", socialMediaPackage: differentRecord }),
+      SocialMediaPackageIdentifierMismatchError
+    );
+    // The mismatch attempt never touched the original record.
+    assert.equal(store.get("sm_mismatcha0000001").editorial_package_id, "ep_a1b2c3d4e5f60708");
+  }));
+
+test("replace() throws CorruptedSocialMediaPackageError when the supplied object fails schema validation", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    store.save(buildRecord({}, { idGenerator: () => "sm_invalidreplace01" }));
+    assert.throws(
+      () => store.replace({ identifier: "sm_invalidreplace01", socialMediaPackage: { social_media_package_id: "sm_invalidreplace01" } }),
+      CorruptedSocialMediaPackageError
+    );
+  }));
+
+test("a corrected-and-replaced record is still findable via findByEditorialPackageId() and getLineage() — the correction doesn't change lineage/duplicate behaviour", () =>
+  withTempDir((dir) => {
+    const store = buildStore(dir);
+    const original = store.save(buildRecord({}, { idGenerator: () => "sm_lineagepreserv01" }));
+    const corrected = correctSocialMediaPackageSlideField({ socialMediaPackage: original, slideNumber: 6, field: "body", replacementText: "Corrected CTA.", reason: "test" });
+    store.replace({ identifier: "sm_lineagepreserv01", socialMediaPackage: corrected });
+
+    const matches = store.findByEditorialPackageId("ep_a1b2c3d4e5f60708");
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].social_media_package_id, "sm_lineagepreserv01");
+    assert.equal(matches[0].carousel.slides[5].body, "Corrected CTA.");
+
+    const lineage = store.getLineage("ep_a1b2c3d4e5f60708");
+    assert.equal(lineage.chain.length, 1);
+    assert.equal(lineage.latest.social_media_package_id, "sm_lineagepreserv01");
   }));

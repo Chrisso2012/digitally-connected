@@ -43,10 +43,12 @@
 //                                 record DC-003-I032.8's own compatibility
 //                                 view (revision/supersedes below) exists
 //                                 to serve.
-//   1.4 — DC-003-I032.8 (CURRENT, schemas/social-media-package.schema.json
+//   1.4 — DC-003-I032.8         (175a2f5) — added `revision`/`supersedes`
+//                                 revision-lineage fields.
+//   1.5 — DC-003-I032.9 (CURRENT, schemas/social-media-package.schema.json
 //                                 itself — not duplicated here) — added
-//                                 `revision`/`supersedes` revision-lineage
-//                                 fields.
+//                                 `corrections`, the append-only audit log
+//                                 for correctSocialMediaPackageSlideField().
 //
 // Each archived file below is a byte-for-byte copy of the real schema at
 // that commit (`git show <commit>:.../social-media-package.schema.json`)
@@ -68,10 +70,15 @@
 // own lineage: revision 1, supersedes null. This is not a guess — it
 // follows necessarily from the duplicate-protection invariant that has
 // held since I032's very first commit.
+//
+// corrections (DC-003-I032.9): every record persisted before schema
+// 1.5 predates the correction mechanism entirely, so it necessarily has
+// never had a correction applied — deterministically corrections: [].
 const COMPATIBILITY_FIELDS = [
   { field: "industry_context", introducedAtVersion: "1.2", compatibilityValue: null },
   { field: "revision", introducedAtVersion: "1.4", compatibilityValue: 1 },
   { field: "supersedes", introducedAtVersion: "1.4", compatibilityValue: null },
+  { field: "corrections", introducedAtVersion: "1.5", compatibilityValue: [] },
 ];
 
 // Ajv's own $id-based schema registry means two schemas sharing an $id
@@ -86,7 +93,7 @@ import addFormats from "ajv-formats";
 import { readJsonFileSync } from "./read-json-file.mjs";
 import { resolveFromRoot } from "./paths.mjs";
 
-const HISTORICAL_VERSIONS = ["1.0", "1.1", "1.2", "1.3"];
+const HISTORICAL_VERSIONS = ["1.0", "1.1", "1.2", "1.3", "1.4"];
 
 function loadHistoricalSchema(version, rootDir) {
   return readJsonFileSync(resolveFromRoot(rootDir, "schemas", "history", "social-media-package", `${version}.json`));

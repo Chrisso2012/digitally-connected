@@ -10,6 +10,7 @@
 // Usage:
 //   node tests/validation/social-media-package.mjs create <editorialPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N] [--live-timeout-ms=N]
 //   node tests/validation/social-media-package.mjs revise <editorialPackageId> <supersededSocialMediaPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N] [--live-timeout-ms=N]
+//   node tests/validation/social-media-package.mjs correct <socialMediaPackageId> <slideNumber> <field> <replacementText> <reason> <socialMediaPackageStoreDirectory>
 //   node tests/validation/social-media-package.mjs inspect <socialMediaPackageId> <socialMediaPackageStoreDirectory>
 //   node tests/validation/social-media-package.mjs status <socialMediaPackageStoreDirectory>
 //   node tests/validation/social-media-package.mjs list <socialMediaPackageStoreDirectory>
@@ -26,6 +27,17 @@
 // is no bypass flag. `lineage` is a read-only, zero-cost structural
 // inspection of one Editorial Package's revision chain (V1..Vn, which one
 // is_latest) — makes no provider/network call.
+//
+// DC-003-I032.9 — `correct` applies one explicit, human-directed,
+// deterministic slide-field correction to an EXISTING Social Media
+// Package, in place under the SAME identifier (never a new revision,
+// never a new id). `<field>` is one of heading|body|imageGuidance.
+// Never calls Anthropic or any AI provider. Checks `<replacementText>`
+// against the Template Capacity Contract's own canonical limit for that
+// slide's real role before applying — a violation is rejected outright,
+// the limit is never modified, the text is never truncated. `<reason>`
+// is a required, non-empty audit justification, recorded verbatim in the
+// record's own append-only `corrections` log. No bypass flag exists.
 //
 // DC-003-I006/I019's own Live Verification Gate safety rule applies
 // identically here: --live defaults to exactly one attempt, independent
@@ -50,6 +62,7 @@ import { createEditorialPackageStore } from "../../src/editorial-package-store.m
 import { createLocalJsonSocialMediaPackageStoreAdapter } from "../../src/local-json-social-media-package-store-adapter.mjs";
 import { createSocialMediaPackageStore } from "../../src/social-media-package-store.mjs";
 import { generateSocialMediaPackage, reviseSocialMediaPackage } from "../../src/social-media-package-generator.mjs";
+import { correctSocialMediaPackageSlideField } from "../../src/social-media-package-correction.mjs";
 import { createSocialMediaMockProvider } from "../../src/social-media-mock-provider.mjs";
 import { createAnthropicSocialMediaProvider } from "../../src/social-media-anthropic-provider.mjs";
 import { createSocialMediaHttpTransport } from "../../src/social-media-transport-http.mjs";
@@ -69,6 +82,9 @@ import {
   CrossEditorialPackageSupersessionError,
   NotLatestRevisionError,
   MalformedSocialMediaPackageLineageError,
+  InvalidSocialMediaPackageCorrectionError,
+  SocialMediaPackageCorrectionCapacityExceededError,
+  SocialMediaPackageIdentifierMismatchError,
 } from "../../src/social-media-package-errors.mjs";
 import {
   InvalidEditorialPackageStoreAdapterError,
@@ -102,6 +118,9 @@ const KNOWN_ERRORS = [
   CrossEditorialPackageSupersessionError,
   NotLatestRevisionError,
   MalformedSocialMediaPackageLineageError,
+  InvalidSocialMediaPackageCorrectionError,
+  SocialMediaPackageCorrectionCapacityExceededError,
+  SocialMediaPackageIdentifierMismatchError,
   InvalidEditorialPackageStoreAdapterError,
   InvalidEditorialPackageIdentifierError,
   EditorialPackageNotFoundError,
@@ -120,6 +139,9 @@ function usageAndExit() {
   );
   console.error(
     "  node tests/validation/social-media-package.mjs revise <editorialPackageId> <supersededSocialMediaPackageId> <editorialPackageStoreDirectory> <socialMediaPackageStoreDirectory> [--live] [--live-max-attempts=N]"
+  );
+  console.error(
+    "  node tests/validation/social-media-package.mjs correct <socialMediaPackageId> <slideNumber> <field:heading|body|imageGuidance> <replacementText> <reason> <socialMediaPackageStoreDirectory>"
   );
   console.error("  node tests/validation/social-media-package.mjs inspect <socialMediaPackageId> <socialMediaPackageStoreDirectory>");
   console.error("  node tests/validation/social-media-package.mjs status <socialMediaPackageStoreDirectory>");
@@ -158,6 +180,7 @@ function printFullRecord(record) {
   console.log(`  schema_version:          ${record.schema_version}`);
   console.log(`  revision:                ${record.revision}`);
   console.log(`  supersedes:              ${record.supersedes}`);
+  console.log(`  corrections:             ${JSON.stringify(record.corrections)}`);
   console.log(`  checksum:                ${record.checksum}`);
 }
 
@@ -246,6 +269,25 @@ try {
     });
 
     console.log(`Social Media Package revised OK — new revision ${record.revision}, supersedes ${record.supersedes}`);
+    printFullRecord(record);
+  } else if (subcommand === "correct") {
+    const [socialMediaPackageId, slideNumberArg, field, replacementText, reason, storeDirectory] = rest;
+    if (!socialMediaPackageId || !slideNumberArg || !field || !replacementText || !reason || !storeDirectory) usageAndExit();
+
+    const store = buildSocialMediaPackageStore(storeDirectory);
+    const existing = store.get(socialMediaPackageId);
+
+    const corrected = correctSocialMediaPackageSlideField({
+      socialMediaPackage: existing,
+      slideNumber: Number(slideNumberArg),
+      field,
+      replacementText,
+      reason,
+    });
+
+    const record = store.replace({ identifier: socialMediaPackageId, socialMediaPackage: corrected });
+
+    console.log(`Social Media Package corrected OK — slide ${slideNumberArg} (${field})`);
     printFullRecord(record);
   } else if (subcommand === "inspect") {
     const [socialMediaPackageId, storeDirectory] = rest;

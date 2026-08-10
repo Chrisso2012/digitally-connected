@@ -151,3 +151,45 @@ export class MalformedSocialMediaPackageLineageError extends Error {
     this.reason = reason;
   }
 }
+
+// --- DC-003-I032.9 — Slide-Field Correction errors ---------------------
+// Thrown by correctSocialMediaPackageSlideField() (social-media-package-correction.mjs)
+// and social-media-package-store.mjs's own replace(). Mirrors carousel-approval-errors.mjs's
+// own two-tier split: "the requested correction is not legal/well-formed"
+// (thrown before any mutation is attempted) vs. "the assembled object
+// still fails schema validation." None of these has a bypass — a
+// capacity violation can only be resolved with genuinely shorter
+// replacement text, never a flag that skips the check.
+
+export class InvalidSocialMediaPackageCorrectionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "InvalidSocialMediaPackageCorrectionError";
+  }
+}
+
+export class SocialMediaPackageCorrectionCapacityExceededError extends Error {
+  constructor({ socialMediaPackageId, slideNumber, slideRole, field, length, maxChars }) {
+    super(
+      `Correction rejected for "${socialMediaPackageId}" slide ${slideNumber} (${slideRole}) field "${field}": replacement text is ${length} character(s), exceeding the Template Capacity Contract's canonical limit of ${maxChars} — the limit itself is never modified, only shorter replacement text is accepted`
+    );
+    this.name = "SocialMediaPackageCorrectionCapacityExceededError";
+    this.socialMediaPackageId = socialMediaPackageId;
+    this.slideNumber = slideNumber;
+    this.slideRole = slideRole;
+    this.field = field;
+    this.length = length;
+    this.maxChars = maxChars;
+  }
+}
+
+export class SocialMediaPackageIdentifierMismatchError extends Error {
+  constructor(targetIdentifier, suppliedIdentifier) {
+    super(
+      `replace() was asked to replace "${targetIdentifier}" but the supplied object's own social_media_package_id is "${suppliedIdentifier}" — refusing to replace a different record than the one named`
+    );
+    this.name = "SocialMediaPackageIdentifierMismatchError";
+    this.targetIdentifier = targetIdentifier;
+    this.suppliedIdentifier = suppliedIdentifier;
+  }
+}
