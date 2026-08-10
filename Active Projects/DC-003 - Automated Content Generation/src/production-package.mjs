@@ -22,6 +22,16 @@ const SOCIAL_MEDIA_PACKAGE_ID_PATTERN = /^sm_[A-Za-z0-9]+$/;
 const SLIDE_COUNT = 6;
 const SLIDE_ROLES = ["cover", "insight", "statistic", "quote", "takeaway", "cta"];
 
+// DC-003-I032.6 — position 4 (0-indexed 3) is evidence-aware. Mirrors
+// social-media-provider.mjs's own identical constants — see that file
+// for the full rationale.
+const EVIDENCE_POSITION_INDEX = 3;
+const EVIDENCE_POSITION_ALLOWED_ROLES = ["quote", "evidence"];
+
+function allowedRolesAtPosition(index) {
+  return index === EVIDENCE_POSITION_INDEX ? EVIDENCE_POSITION_ALLOWED_ROLES : [SLIDE_ROLES[index]];
+}
+
 function generateProductionPackageId() {
   return "pp_" + randomUUID().replace(/-/g, "").slice(0, 16);
 }
@@ -75,15 +85,16 @@ function checkSlideSequence(slideSequence) {
   }
   slideSequence.forEach((slide, index) => {
     const expectedNumber = index + 1;
-    const expectedRole = SLIDE_ROLES[index];
+    const allowedRoles = allowedRolesAtPosition(index);
     if (!slide || typeof slide !== "object") {
       throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}] is required`);
     }
     if (slide.slideNumber !== expectedNumber) {
       throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}].slideNumber must be ${expectedNumber}, got ${JSON.stringify(slide.slideNumber)}`);
     }
-    if (slide.slideRole !== expectedRole) {
-      throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}].slideRole must be "${expectedRole}" (fixed positional order), got ${JSON.stringify(slide.slideRole)}`);
+    if (!allowedRoles.includes(slide.slideRole)) {
+      const expected = allowedRoles.length === 1 ? `"${allowedRoles[0]}" (fixed positional order)` : `one of ${JSON.stringify(allowedRoles)} (DC-003-I032.6 evidence-aware position)`;
+      throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}].slideRole must be ${expected}, got ${JSON.stringify(slide.slideRole)}`);
     }
     checkNonEmptyString(slide.headlineMapping, `slideSequence[${index}].headlineMapping`);
     checkNonEmptyString(slide.bodyCopyMapping, `slideSequence[${index}].bodyCopyMapping`);
@@ -107,6 +118,12 @@ function checkSlideSequence(slideSequence) {
     checkNullableString(tags.cta ?? null, `slideSequence[${index}].placeholderTagMapping.cta`);
 
     checkStructuredContent(slide.structuredContent, `slideSequence[${index}].structuredContent`);
+    // DC-003-I032.6 — same anti-fabrication cross-check as
+    // social-media-package.mjs's own domain object: a quote object may
+    // only accompany the "quote" role.
+    if (slide.slideRole !== "quote" && slide.structuredContent?.quote != null) {
+      throw new InvalidProductionPackageInputError(`fields.slideSequence[${index}].structuredContent.quote must be null when slideRole is not "quote"`);
+    }
   });
 }
 

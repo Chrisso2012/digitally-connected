@@ -54,7 +54,7 @@ test("never reads ingested content or raw article fields — only Editorial Pack
 });
 
 test("PROMPT_VERSION is exported and stable", () => {
-  assert.equal(PROMPT_VERSION, "social-media-package.v3");
+  assert.equal(PROMPT_VERSION, "social-media-package.v4");
 });
 
 // --- DC-003-I032.1 — six semantic roles / evidence-only policy in the prompt
@@ -69,12 +69,13 @@ test("prompt enumerates the six fixed semantic slide roles in order", () => {
   assert.match(prompt, /6\. cta/);
 });
 
-test("prompt states the evidence-only policy for statistics and quotes explicitly", () => {
+test("prompt states the evidence-only policy for statistics explicitly", () => {
   const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
   assert.match(prompt, /statistic.*MUST be null unless a real number/s);
-  assert.match(prompt, /quote.*MUST be null unless a real quote genuinely exists/s);
-  assert.match(prompt, /never invent a speaker name or title/);
 });
+
+// --- DC-003-I032.6 — position 4 is evidence-aware, "quote" is not
+// available today (see the dedicated test block below for full coverage)
 
 test("prompt describes the carousel.slides output shape with slideRole/statistic/quote/keyPoints", () => {
   const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
@@ -138,4 +139,47 @@ test("never hardcodes a specific industry into the REQUIRED instructions — rea
   // content, which here has nothing to do with real estate at all.
   assert.equal(realEstateMentions.length, 2);
   assert.match(prompt, /e\.g\. real estate, healthcare, hospitality, B2B SaaS/);
+});
+
+// --- DC-003-I032.6 — Position 4: quote vs. evidence ---------------------
+// The rejected carousel (car_3479ca8ac2af40b8) showed a fabricated
+// "Operations Lead / Mid-market services business" attribution on its
+// Quote slide — traced to a Templated template Studio default, never to
+// this prompt or to Anthropic, but the underlying reason "quote" is
+// unsafe today is structural: this pipeline carries no genuine external-
+// attribution data anywhere. These tests prove the prompt makes that
+// explicit and generic (never real-estate-specific, never industry-
+// specific) rather than merely implicit.
+
+test('prompt explicitly states pull quotes are article excerpts, never real external testimony, for any industry', () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /excerpts FROM THE ARTICLE ITSELF/);
+  assert.match(prompt, /never a real external person's testimony/);
+  assert.match(prompt, /for any article, in any industry/);
+});
+
+test('prompt explicitly instructs always choosing "evidence" over "quote" for position 4 today, generically', () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /slideRole "quote" is not available in the current version/);
+  assert.match(prompt, /always choose slideRole "evidence" for position 4 instead/);
+  assert.match(prompt, /do not use it now, under any circumstances, for any industry/);
+});
+
+test('prompt explicitly forbids presenting the evidence slide as attributed testimony', () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /Never wrap this content in quotation marks/);
+  assert.match(prompt, /never present it as if it were said by, or attributed to, any person, title, or organisation/);
+});
+
+test('output format documents slideRole as excluding "quote" for position 4 and quote as null for every slide today', () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /"cover", "insight", "statistic", "evidence", "takeaway", "cta"/);
+  assert.match(prompt, /"quote" is not available today/);
+  assert.match(prompt, /"quote": null \(must be null for every slide today/);
+});
+
+test('never mentions a fabricated attribution example like a job title or company name anywhere in the prompt', () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.doesNotMatch(prompt, /Operations Lead/);
+  assert.doesNotMatch(prompt, /Mid-market services business/);
 });

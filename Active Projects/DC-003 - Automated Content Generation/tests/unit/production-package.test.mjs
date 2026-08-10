@@ -221,6 +221,60 @@ test("throws InvalidProductionPackageInputError when a slide's slideRole deviate
   assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
 });
 
+// --- DC-003-I032.6 — position 4 is evidence-aware at the I033 domain
+// object layer too. Direct regression coverage for car_3479ca8ac2af40b8's
+// fabricated attribution: a quote object may never accompany any role
+// but "quote" here either, and the six-slide structure is preserved.
+
+test('accepts slideRole:"evidence" at position 4 with quote: null — the honest fallback', () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "quote");
+  slides[index] = { ...slides[index], slideRole: "evidence", structuredContent: { statistic: null, quote: null, keyPoints: [] } };
+  const record = createProductionPackage(buildFields({ slideSequence: slides }));
+  assert.equal(record.slide_sequence[index].slide_role, "evidence");
+  assert.equal(record.slide_sequence[index].structured_content.quote, null);
+});
+
+test('still accepts slideRole:"quote" at position 4 with a real quote object — genuinely attributable evidence remains supported', () => {
+  const record = createProductionPackage(buildFields());
+  const index = record.slide_sequence.findIndex((s) => s.slide_role === "quote");
+  assert.notEqual(index, -1);
+  assert.notEqual(record.slide_sequence[index].structured_content.quote, null);
+});
+
+test('throws when position 4\'s slideRole is anything other than "quote" or "evidence"', () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "quote");
+  slides[index] = { ...slides[index], slideRole: "insight", structuredContent: { statistic: null, quote: null, keyPoints: [] } };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test('throws when a quote object accompanies slideRole:"evidence" — a fabricated-looking quote may never be smuggled in under a different label', () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "quote");
+  slides[index] = {
+    ...slides[index],
+    slideRole: "evidence",
+    structuredContent: { statistic: null, quote: { quoteText: "A real-sounding line presented as if it were external testimony." }, keyPoints: [] },
+  };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test('throws when a quote object accompanies any non-"quote" role, not only "evidence"', () => {
+  const slides = buildSlideSequence();
+  slides[0] = { ...slides[0], structuredContent: { statistic: null, quote: { quoteText: "Smuggled onto the cover slide." }, keyPoints: [] } };
+  assert.throws(() => createProductionPackage(buildFields({ slideSequence: slides })), InvalidProductionPackageInputError);
+});
+
+test("six-slide structure is preserved regardless of which role position 4 uses", () => {
+  const slides = buildSlideSequence();
+  const index = slides.findIndex((s) => s.slideRole === "quote");
+  slides[index] = { ...slides[index], slideRole: "evidence", structuredContent: { statistic: null, quote: null, keyPoints: [] } };
+  const record = createProductionPackage(buildFields({ slideSequence: slides }));
+  assert.equal(record.slide_sequence.length, 6);
+  assert.equal(record.slide_sequence[5].slide_role, "cta");
+});
+
 test("throws InvalidProductionPackageInputError when structuredContent is missing", () => {
   const slides = buildSlideSequence();
   delete slides[0].structuredContent;

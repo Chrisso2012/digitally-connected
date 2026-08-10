@@ -108,8 +108,8 @@
         "slide_number": { "type": "integer", "minimum": 1, "maximum": 6 },
         "slide_role": {
           "type": "string",
-          "enum": ["cover", "insight", "statistic", "quote", "takeaway", "cta"],
-          "description": "DC-003-I032.1 — copied verbatim from the source Social Media Package's own carousel.slides[i].slide_role. Renderer-agnostic (never a Templated field/template name) — a chosen Renderer Adapter resolves this into its own real per-slide template selection (see templated-renderer-adapter.mjs's templateKeyForSlide())."
+          "enum": ["cover", "insight", "statistic", "quote", "evidence", "takeaway", "cta"],
+          "description": "DC-003-I032.1 — copied verbatim from the source Social Media Package's own carousel.slides[i].slide_role. Renderer-agnostic (never a Templated field/template name) — a chosen Renderer Adapter resolves this into its own real per-slide template selection (see templated-renderer-adapter.mjs's templateKeyForSlide()). DC-003-I032.6 — position 4 (0-indexed 3) is evidence-aware: \"quote\" only when the source's evidence lineage genuinely supports an attributable quotation (no canonical contract in this pipeline carries that today), otherwise \"evidence\" — source-grounded material, never presented as external testimony."
         },
         "headline_mapping": { "type": "string", "minLength": 1 },
         "body_copy_mapping": { "type": "string", "minLength": 1 },

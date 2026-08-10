@@ -74,7 +74,7 @@ test("buildSlideSequence() maps all 6 slides 1:1 from the Social Media Package's
   assert.equal(slideSequence.length, 6);
   assert.equal(templateId, "dc-carousel-v1");
   assert.equal(renderingMetadata.slideCount, 6);
-  assert.equal(renderingMetadata.mappingStrategy, "semantic-six-template-v1");
+  assert.equal(renderingMetadata.mappingStrategy, "semantic-six-template-v2");
   assert.equal(renderingMetadata.generator, "templated-renderer-adapter");
 
   slideSequence.forEach((slide, index) => {
@@ -162,6 +162,7 @@ function buildProductionSlideSequence() {
   const { slideSequence } = adapter.buildSlideSequence(buildSocialMediaPackage());
   return slideSequence.map((s) => ({
     slide_number: s.slideNumber,
+    slide_role: s.slideRole,
     headline_mapping: s.headlineMapping,
     body_copy_mapping: s.bodyCopyMapping,
     cta_mapping: s.ctaMapping,
@@ -276,7 +277,7 @@ test("mapToRendererPayload() throws RequiredRendererMappingMissingError when a s
   assert.throws(
     () =>
       adapter.mapToRendererPayload(
-        { slide_sequence: [{ slide_number: 1, headline_mapping: "", body_copy_mapping: "B", cta_mapping: null, structured_content: { statistic: null, quote: null, key_points: [] } }] },
+        { slide_sequence: [{ slide_number: 1, slide_role: "cover", headline_mapping: "", body_copy_mapping: "B", cta_mapping: null, structured_content: { statistic: null, quote: null, key_points: [] } }] },
         { templatesConfig: FAKE_TEMPLATES_CONFIG }
       ),
     RequiredRendererMappingMissingError
@@ -288,9 +289,39 @@ test("mapToRendererPayload() throws RequiredRendererMappingMissingError when the
   assert.throws(
     () =>
       adapter.mapToRendererPayload(
-        { slide_sequence: [{ slide_number: 6, headline_mapping: "H", body_copy_mapping: "B", cta_mapping: null, structured_content: { statistic: null, quote: null, key_points: [] } }] },
+        { slide_sequence: [{ slide_number: 6, slide_role: "cta", headline_mapping: "H", body_copy_mapping: "B", cta_mapping: null, structured_content: { statistic: null, quote: null, key_points: [] } }] },
         { templatesConfig: FAKE_TEMPLATES_CONFIG }
       ),
     RequiredRendererMappingMissingError
   );
+});
+
+// --- DC-003-I032.6 — position 4 is evidence-aware: templateKeyForSlide()
+// now resolves by the slide's own slide_role (not by position), so
+// "evidence" and "quote" at position 4 must each deterministically
+// resolve to their own real template. This is the direct I033
+// compatibility proof this milestone's own brief asked for: the
+// fallback role maps onto an EXISTING template (the same "content"
+// template "insight" already uses, confirmed attribution-free via a
+// real Templated get_template_layers call), no template redesign
+// involved.
+
+test('mapToRendererPayload() resolves slide_role:"evidence" at position 4 onto the SAME "content" template "insight" already uses', () => {
+  const adapter = createTemplatedRendererAdapter();
+  const slides = buildProductionSlideSequence();
+  slides[3] = { ...slides[3], slide_role: "evidence", structured_content: { statistic: null, quote: null, key_points: [] } };
+  const payloads = adapter.mapToRendererPayload({ slide_sequence: slides }, { templatesConfig: FAKE_TEMPLATES_CONFIG });
+  assert.equal(payloads[3].slide_type, "content");
+  assert.equal(payloads[3].template_id, "content-template-id");
+  assert.equal(payloads[3].layers.headline_text.text, slides[3].headline_mapping);
+  assert.equal(payloads[3].layers.body_text.text, slides[3].body_copy_mapping);
+  assert.equal("quote_text" in payloads[3].layers, false, "the content template has no quote_text layer at all");
+});
+
+test('mapToRendererPayload() still resolves slide_role:"quote" at position 4 onto the real Quote template — genuinely attributable evidence remains mappable', () => {
+  const adapter = createTemplatedRendererAdapter();
+  const slides = buildProductionSlideSequence(); // default fixture already has "quote" at position 4
+  const payloads = adapter.mapToRendererPayload({ slide_sequence: slides }, { templatesConfig: FAKE_TEMPLATES_CONFIG });
+  assert.equal(payloads[3].slide_type, "quote");
+  assert.equal(payloads[3].template_id, "quote-template-id");
 });

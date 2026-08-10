@@ -63,7 +63,7 @@
     },
     "carousel": {
       "type": "object",
-      "description": "Six-slide carousel content. `headings`/`slide_copy`/`image_guidance` are the original DC-003-I032 parallel arrays (same length, same order) — preserved unchanged for backward compatibility with any existing consumer. `slides` (DC-003-I032.1, additive) carries the same six entries as structured, semantically-typed objects — one per fixed carousel position (cover/insight/statistic/quote/takeaway/cta, in that order) — so a Renderer Adapter can map each slide onto a visually-differentiated template without inventing structure this package doesn't have. `slides[i].heading`/`body`/`image_guidance` are always identical to `headings[i]`/`slide_copy[i]`/`image_guidance[i]` — the two shapes describe the same six slides, never diverging content.",
+      "description": "Six-slide carousel content. `headings`/`slide_copy`/`image_guidance` are the original DC-003-I032 parallel arrays (same length, same order) — preserved unchanged for backward compatibility with any existing consumer. `slides` (DC-003-I032.1, additive) carries the same six entries as structured, semantically-typed objects — one per carousel position (cover/insight/statistic/[quote or evidence]/takeaway/cta, in that order — position 4 is evidence-aware per DC-003-I032.6) — so a Renderer Adapter can map each slide onto a visually-differentiated template without inventing structure this package doesn't have. `slides[i].heading`/`body`/`image_guidance` are always identical to `headings[i]`/`slide_copy[i]`/`image_guidance[i]` — the two shapes describe the same six slides, never diverging content.",
       "required": ["headings", "slide_copy", "image_guidance", "slides"],
       "additionalProperties": false,
       "properties": {
@@ -72,7 +72,7 @@
         "image_guidance": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 6, "maxItems": 6 },
         "slides": {
           "type": "array",
-          "description": "Exactly 6 entries, in fixed positional order — slide 1 is always \"cover\", slide 2 \"insight\", slide 3 \"statistic\", slide 4 \"quote\", slide 5 \"takeaway\", slide 6 \"cta\". `statistic`/`quote` are null whenever the Editorial Package this package was derived from contains no genuine supporting evidence for that slide — see DC-003-I032.1 README \"No-fabrication policy\": a null here must never be papered over with invented data by any downstream consumer.",
+          "description": "6 entries, in fixed positional order — slide 1 is always \"cover\", slide 2 \"insight\", slide 3 \"statistic\", slide 5 \"takeaway\", slide 6 \"cta\". Slide 4 is evidence-aware (DC-003-I032.6): \"quote\" only when the Editorial Package's own evidence lineage genuinely supports an attributable quotation (no canonical contract in this pipeline carries external-attribution data today, so this is not currently reachable via honest generation), otherwise \"evidence\" — source-grounded material presented as ordinary carousel copy, never inside quotation marks as if it were third-party testimony. `statistic`/`quote` are null whenever the Editorial Package this package was derived from contains no genuine supporting evidence for that slide — see DC-003-I032.1 README \"No-fabrication policy\": a null here must never be papered over with invented data by any downstream consumer. `quote` must be null on every slide whose slide_role is not \"quote\" (DC-003-I032.6) — a quote object may never accompany the \"evidence\" role or any other.",
           "minItems": 6,
           "maxItems": 6,
           "items": { "$ref": "#/$defs/carouselSlide" }
@@ -101,7 +101,7 @@
       "additionalProperties": false,
       "properties": {
         "slide_number": { "type": "integer", "minimum": 1, "maximum": 6 },
-        "slide_role": { "type": "string", "enum": ["cover", "insight", "statistic", "quote", "takeaway", "cta"] },
+        "slide_role": { "type": "string", "enum": ["cover", "insight", "statistic", "quote", "evidence", "takeaway", "cta"] },
         "heading": { "type": "string", "minLength": 1 },
         "body": { "type": "string", "minLength": 1 },
         "image_guidance": { "type": "string", "minLength": 1 },

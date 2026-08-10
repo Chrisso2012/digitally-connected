@@ -122,6 +122,64 @@ test("assertValidSocialMediaResult() throws when a slide's slideRole deviates fr
   assert.throws(() => assertValidSocialMediaResult({ ...VALID_RESULT, carousel: { ...VALID_RESULT.carousel, slides } }), MalformedSocialMediaResultError);
 });
 
+// --- DC-003-I032.6 — position 4 is evidence-aware: "quote" (genuinely
+// attributable evidence) or "evidence" (source-grounded, no attribution
+// claimed) — never anything else, and a quote object may never
+// accompany any role but "quote". This is the direct regression coverage
+// for the rejected carousel (car_3479ca8ac2af40b8): a fabricated
+// "Operations Lead" attribution must be structurally impossible through
+// this contract regardless of what any provider tries to submit.
+
+test('assertValidSocialMediaResult() accepts slideRole:"evidence" at position 4 with quote: null — the honest fallback', () => {
+  const slides = VALID_RESULT.carousel.slides.map((s, i) => (i === 3 ? { ...s, slideRole: "evidence", quote: null } : s));
+  assert.doesNotThrow(() => assertValidSocialMediaResult({ ...VALID_RESULT, carousel: { ...VALID_RESULT.carousel, slides } }));
+});
+
+test('assertValidSocialMediaResult() still accepts slideRole:"quote" at position 4 with a real quote object — genuinely attributable evidence remains supported', () => {
+  // VALID_RESULT's own position-4 slide is already role "quote" with a
+  // real quote object — this asserts that baseline stays valid unchanged.
+  assert.doesNotThrow(() => assertValidSocialMediaResult(VALID_RESULT));
+  assert.equal(VALID_RESULT.carousel.slides[3].slideRole, "quote");
+  assert.notEqual(VALID_RESULT.carousel.slides[3].quote, null);
+});
+
+test('assertValidSocialMediaResult() throws when position 4\'s slideRole is anything other than "quote" or "evidence"', () => {
+  const slides = VALID_RESULT.carousel.slides.map((s, i) => (i === 3 ? { ...s, slideRole: "insight", quote: null } : s));
+  try {
+    assertValidSocialMediaResult({ ...VALID_RESULT, carousel: { ...VALID_RESULT.carousel, slides } });
+    assert.fail("expected MalformedSocialMediaResultError");
+  } catch (error) {
+    assert.ok(error instanceof MalformedSocialMediaResultError);
+    assert.equal(error.field, "carousel.slides[3].slideRole");
+  }
+});
+
+test('assertValidSocialMediaResult() throws when a quote object accompanies slideRole:"evidence" — a fabricated-looking quote may never be smuggled in under a different label', () => {
+  const slides = VALID_RESULT.carousel.slides.map((s, i) =>
+    i === 3 ? { ...s, slideRole: "evidence", quote: { quoteText: "A real-sounding line presented as if it were external testimony." } } : s
+  );
+  try {
+    assertValidSocialMediaResult({ ...VALID_RESULT, carousel: { ...VALID_RESULT.carousel, slides } });
+    assert.fail("expected MalformedSocialMediaResultError");
+  } catch (error) {
+    assert.ok(error instanceof MalformedSocialMediaResultError);
+    assert.equal(error.field, "carousel.slides[3].quote");
+  }
+});
+
+test('assertValidSocialMediaResult() throws when a quote object accompanies any non-"quote" role, not only "evidence" — the cross-check applies everywhere', () => {
+  const slides = VALID_RESULT.carousel.slides.map((s, i) => (i === 0 ? { ...s, quote: { quoteText: "Smuggled onto the cover slide." } } : s));
+  assert.throws(() => assertValidSocialMediaResult({ ...VALID_RESULT, carousel: { ...VALID_RESULT.carousel, slides } }), MalformedSocialMediaResultError);
+});
+
+test("assertValidSocialMediaResult() still requires exactly 6 slides regardless of which role position 4 uses — the sixth slide is never removed", () => {
+  const evidenceSlides = VALID_RESULT.carousel.slides.map((s, i) => (i === 3 ? { ...s, slideRole: "evidence", quote: null } : s));
+  assert.equal(evidenceSlides.length, 6);
+  assert.doesNotThrow(() => assertValidSocialMediaResult({ ...VALID_RESULT, carousel: { ...VALID_RESULT.carousel, slides: evidenceSlides } }));
+  const truncated = evidenceSlides.slice(0, 5);
+  assert.throws(() => assertValidSocialMediaResult({ ...VALID_RESULT, carousel: { ...VALID_RESULT.carousel, slides: truncated } }), MalformedSocialMediaResultError);
+});
+
 for (const field of ["heading", "body", "imageGuidance"]) {
   test(`assertValidSocialMediaResult() throws when a slide's ${field} is blank`, () => {
     const slides = VALID_RESULT.carousel.slides.map((s, i) => (i === 0 ? { ...s, [field]: "" } : s));

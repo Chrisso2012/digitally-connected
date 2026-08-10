@@ -14,17 +14,20 @@
 // "mark anything illustrative as illustrative" mock-content discipline.
 //
 // DC-003-I032.1 — the six carousel slides are now semantically typed
-// (cover/insight/statistic/quote/takeaway/cta, fixed positional order —
-// see social-media-provider.mjs's own CAROUSEL_SLIDE_ROLE_ORDER), not a
-// uniform six-item pool. No-fabrication policy: the "statistic" and
-// "quote" roles' own structured evidence fields are populated ONLY when
-// the Editorial Package genuinely contains a detectable, real value —
-// detectStatistic()/selectQuote() below never invent a figure, a
-// quotation, or an attribution. When no real evidence exists for a role,
-// that role's structured field is null and its heading/body fall back to
-// a different, still-genuine piece of Editorial Package content (a real
+// (cover/insight/statistic/[quote or evidence]/takeaway/cta, position 4
+// evidence-aware — see social-media-provider.mjs's own
+// CAROUSEL_SLIDE_ROLE_ORDER), not a uniform six-item pool. No-fabrication
+// policy: the "statistic" role's own structured evidence field is
+// populated ONLY when the Editorial Package genuinely contains a
+// detectable, real value — detectStatistic() below never invents a
+// figure. When no real evidence exists for a role, that role's
+// structured field is null and its heading/body fall back to a
+// different, still-genuine piece of Editorial Package content (a real
 // key insight) — an honest degradation, never a fabricated substitute.
-// See DC-003-I032.1 README "No-fabrication policy" for the full rationale.
+// See DC-003-I032.1 README "No-fabrication policy" for the full
+// rationale, and DC-003-I032.6 for why position 4 is now "evidence"
+// (never "quote") — this pipeline has no genuine external-attribution
+// data for any quote, in any article, in any industry.
 
 const MOCK_PROVIDER_NAME = "mock-social-media-provider-v1";
 const X_CHARACTER_LIMIT = 280;
@@ -60,18 +63,6 @@ function detectStatistic(ep) {
 }
 
 /**
- * Selects a real pull quote for the "quote" role. Returns
- * { quoteText } drawn verbatim from pull_quotes, or null if the
- * Editorial Package genuinely has none (defensive — the schema
- * guarantees minItems 1, but this module never trusts that alone).
- */
-function selectQuote(ep) {
-  const quotes = (ep.pull_quotes ?? []).filter(isNonEmptyString);
-  if (quotes.length === 0) return null;
-  return { quoteText: quotes[0] };
-}
-
-/**
  * Up to 4 real key insights for the "takeaway" role — never padded with
  * invented content when fewer than 4 exist.
  */
@@ -96,12 +87,25 @@ function imageGuidanceFor(slideNumber, sourceText) {
   return `Slide ${slideNumber}: an image evoking "${truncate(sourceText, 40)}" — illustrative guidance only, not a real creative brief [mock]`;
 }
 
-// One entry per fixed carousel position, each drawing on a distinct real
+// One entry per carousel position, each drawing on a distinct real
 // Editorial Package field so slides read as genuinely different content,
-// never a repeated pool cycled through. The "statistic" and "quote"
-// entries carry their own real-evidence-or-null fallback logic; every
-// other role always has real source text (schema-guaranteed non-empty
-// fields), so no fallback is needed for them.
+// never a repeated pool cycled through. The "statistic" entry carries
+// its own real-evidence-or-null fallback logic; every other role always
+// has real source text (schema-guaranteed non-empty fields), so no
+// fallback is needed for them.
+//
+// DC-003-I032.6 — position 4 is now "evidence", never "quote": this
+// pipeline's own canonical contracts (Ingested Content, Editorial
+// Package) never carry genuine external-attribution metadata for any
+// pull quote — pullQuotes are article/author excerpts, never third-party
+// testimony (see editorial-package-prompt-builder.mjs's own "quotable
+// sentences drawn from the article body"). A deterministic mock has no
+// way to verify attribution even if it existed, so it never claims
+// "quote" at all — "evidence" reuses a second real, distinct key insight
+// as ordinary body copy (never inside quotation marks, never attributed
+// to anyone), falling back to a real pull quote's own plain text (still
+// never quotation-styled) and finally to core_message. `quote` stays
+// null on this slide exactly like every non-quote role already does.
 function buildCarouselSlides(ep) {
   const insightSource = (ep.key_insights ?? []).filter(isNonEmptyString)[0] ?? ep.core_message;
   const detectedStatistic = detectStatistic(ep);
@@ -110,14 +114,14 @@ function buildCarouselSlides(ep) {
   // alone, though reusing real content is honest either way.
   const statisticFallbackSource = (ep.key_insights ?? []).filter(isNonEmptyString)[1] ?? insightSource;
   const statisticSourceText = detectedStatistic ? detectedStatistic.context : statisticFallbackSource;
-  const quote = selectQuote(ep);
-  const quoteSourceText = quote ? quote.quoteText : ep.core_message;
+  const evidenceSource =
+    (ep.key_insights ?? []).filter(isNonEmptyString)[1] ?? (ep.pull_quotes ?? []).filter(isNonEmptyString)[0] ?? ep.core_message;
 
   const slides = [
     { slideRole: "cover", sourceText: ep.core_message, heading: sanitize(ep.primary_headline) },
     { slideRole: "insight", sourceText: insightSource },
     { slideRole: "statistic", sourceText: statisticSourceText, statistic: detectedStatistic },
-    { slideRole: "quote", sourceText: quoteSourceText, quote },
+    { slideRole: "evidence", sourceText: evidenceSource },
     { slideRole: "takeaway", sourceText: ep.desired_outcome, keyPoints: selectKeyPoints(ep) },
     { slideRole: "cta", sourceText: ep.call_to_action },
   ];
