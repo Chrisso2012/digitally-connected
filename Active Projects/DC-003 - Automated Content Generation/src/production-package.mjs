@@ -16,7 +16,8 @@
 import { randomUUID, createHash } from "node:crypto";
 import { createValidator } from "./validator.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
-import { InvalidProductionPackageInputError, ProductionPackageValidationError } from "./production-package-errors.mjs";
+import { InvalidProductionPackageInputError, ProductionPackageValidationError, TemplateCapacityExceededError } from "./production-package-errors.mjs";
+import { validateSlideSequenceCapacity } from "./template-capacity-contract.mjs";
 
 const SOCIAL_MEDIA_PACKAGE_ID_PATTERN = /^sm_[A-Za-z0-9]+$/;
 const SLIDE_COUNT = 6;
@@ -200,6 +201,22 @@ export function createProductionPackage(fields = {}, options = {}) {
   checkNonEmptyString(fields.designId, "designId");
   checkNonEmptyString(fields.templateId, "templateId");
   checkSlideSequence(fields.slideSequence);
+
+  // DC-003-I033.1 — the pre-render capacity gate. Runs only after
+  // checkSlideSequence() has already confirmed structural validity —
+  // this is the earliest point in the real pipeline where a Production
+  // Package's own content can be checked against physical Templated
+  // layout capacity, strictly before any I034 render/Templated-transport
+  // call ever happens (createProductionPackage() always runs before
+  // renderProductionPackage() in every real invocation of this
+  // pipeline). Deterministic rejection, never silent truncation,
+  // rewriting, shrinking, or dropping — see TemplateCapacityExceededError's
+  // own header comment.
+  const capacityCheck = validateSlideSequenceCapacity(fields.slideSequence);
+  if (!capacityCheck.compliant) {
+    throw new TemplateCapacityExceededError(capacityCheck.violations);
+  }
+
   checkNonEmptyString(fields.schemaVersion, "schemaVersion");
 
   const renderingMetadata = fields.renderingMetadata;

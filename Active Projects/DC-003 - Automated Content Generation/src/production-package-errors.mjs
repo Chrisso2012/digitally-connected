@@ -102,6 +102,24 @@ export class InvalidTemplateMappingError extends Error {
   }
 }
 
+// DC-003-I033.1 — thrown by createProductionPackage() when any slide's
+// text exceeds its real, geometry-derived Template Capacity Contract
+// limit (template-capacity-contract.mjs). Deterministic, pre-render,
+// never silently truncated/rewritten/shrunk — the whole point of this
+// milestone. `violations` names every offending field with its actual
+// length and real limit (never the offending string content itself —
+// this error must be safe to log).
+export class TemplateCapacityExceededError extends Error {
+  constructor(violations) {
+    const summary = violations
+      .map((v) => `  - slide ${v.slideIndex + 1} (${v.slideRole}) ${v.field}: ${v.maxItems != null ? `${v.length} items (max ${v.maxItems})` : `${v.length} chars (max ${v.maxChars})`}`)
+      .join("\n");
+    super(`Content exceeds the Template Capacity Contract for ${violations.length} field(s):\n${summary}`);
+    this.name = "TemplateCapacityExceededError";
+    this.violations = violations;
+  }
+}
+
 // --- Service-layer errors (production-package-generator.mjs) --------
 
 export class DuplicateProductionPackageError extends Error {

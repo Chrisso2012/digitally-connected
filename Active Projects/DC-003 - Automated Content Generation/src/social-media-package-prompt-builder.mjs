@@ -11,8 +11,9 @@
 // only the Editorial Package" boundary at the prompt-building layer.
 
 import { SocialMediaPromptBuilderError } from "./social-media-analysis-errors.mjs";
+import { describeCapacityForPrompt } from "./template-capacity-contract.mjs";
 
-export const PROMPT_VERSION = "social-media-package.v4";
+export const PROMPT_VERSION = "social-media-package.v5";
 
 const REQUIRED_FIELDS = ["primary_headline", "core_message", "call_to_action"];
 
@@ -94,6 +95,11 @@ export function buildSocialMediaPackagePrompt(editorialPackage) {
     "- Because of this, slideRole \"quote\" is not available in the current version of this system — always choose slideRole \"evidence\" for position 4 instead. \"quote\" remains a defined role for a future version of this pipeline that provides genuine external-attribution data; do not use it now, under any circumstances, for any industry.",
     "- The \"evidence\" role: a second real, substantive insight from the editorial intelligence above — distinct from position 2's insight — written as ordinary carousel body copy (heading + body, exactly like the \"insight\" or \"takeaway\" roles). Its `quote` field MUST be null. Never wrap this content in quotation marks, and never present it as if it were said by, or attributed to, any person, title, or organisation — invented or otherwise.",
     "- If you were ever instructed in a future version to use \"quote\": its `quote` field must be null unless a real quote genuinely exists in the pull quotes above, and even then, never invent a speaker name, job title, or organisation to accompany it. This instruction is not in effect today.",
+    "",
+    "## Template capacity constraints — read carefully, this is a hard constraint",
+    "Every slide is rendered onto a real, fixed-size visual template — text longer than its real physical capacity WILL visually overlap other elements. These limits are derived directly from each template's own real layout geometry (font size and container dimensions), not arbitrary. Write within them from the start — do not write a longer draft and expect it to be shortened afterwards; nothing downstream will resize, wrap, or truncate this content for you.",
+    describeCapacityForPrompt(),
+    "The most common failure: `callToAction` is not only marketing copy — it is also rendered VERBATIM onto the CTA slide's own small, fixed-size button. Keep it to the character limit above regardless of how much more you could otherwise say about the call to action.",
     "",
     "## Evidence-only policy — read carefully, this is a hard constraint",
     "- The \"statistic\" slide's `statistic` field MUST be null unless a real number, percentage, or figure is ALREADY PRESENT somewhere in the editorial intelligence above (the key insights, pull quotes, executive summary, core message, primary problem, or desired outcome). If no such figure exists, set `statistic` to null and instead use another real key insight as that slide's heading/body — do NOT invent, estimate, round, or paraphrase a number into existence.",

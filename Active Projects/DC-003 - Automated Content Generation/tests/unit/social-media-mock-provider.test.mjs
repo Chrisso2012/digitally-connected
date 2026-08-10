@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSocialMediaMockProvider } from "../../src/social-media-mock-provider.mjs";
 import { assertValidSocialMediaResult } from "../../src/social-media-provider.mjs";
+import { TEMPLATE_CAPACITY_CONTRACT, checkFieldCapacity } from "../../src/template-capacity-contract.mjs";
 
 function buildEditorialPackage(overrides = {}) {
   return {
@@ -256,4 +257,55 @@ test("industryContext is always null from the mock provider, even for a strongly
   const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
   const parsed = JSON.parse(raw);
   assert.equal(parsed.industryContext, null);
+});
+
+// --- DC-003-I033.1 — the mock provider generates capacity-compliant
+// content BY CONSTRUCTION (mechanical truncation, never a fabricated
+// substitute), exactly like the real Anthropic provider is now
+// instructed to do from the start. Uses genuinely long, realistic
+// source content (matching the real GS01 article's own scale) to prove
+// this holds for real-world-length input, not only short test strings.
+
+test("every rendered field the mock provider produces stays within its own real Template Capacity Contract limit, even for long real-world-length source content", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({
+    primary_headline: "A very long primary headline that runs on well past what any cover slide could ever comfortably display on screen",
+    core_message: "A long core message full of real editorial detail that would, if reused verbatim as body copy on several different carousel slides, run far past what those slides' own body_text containers can actually hold without visually overlapping other elements on the same slide.",
+    desired_outcome: "A long desired outcome sentence that, like the core message above, would overflow the takeaway slide's own heading if it were ever used there without being shortened first.",
+    call_to_action: "A long call to action sentence describing exactly what the reader should do next, written the way a real marketer would write full CTA copy rather than a short three-word button label.",
+    key_insights: [
+      "The first real key insight, written at a normal editorial sentence length rather than an artificially short test string.",
+      "A second real key insight, also written at normal length, that will become the evidence slide's own body copy.",
+      "A third, fourth, and effectively unlimited number of real key insights could exist here, each at full editorial length.",
+      "A fourth real key insight, at the same normal length as all the others above it in this list.",
+    ],
+  });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  const parsed = JSON.parse(raw);
+
+  const ctaCheck = checkFieldCapacity(parsed.callToAction, TEMPLATE_CAPACITY_CONTRACT.cta.ctaMapping);
+  assert.equal(ctaCheck.compliant, true, `callToAction (${ctaCheck.length} chars) must fit the button_label limit (${ctaCheck.maxChars})`);
+
+  parsed.carousel.slides.forEach((slide) => {
+    const contract = TEMPLATE_CAPACITY_CONTRACT[slide.slideRole];
+    const headingCheck = checkFieldCapacity(slide.heading, contract.heading);
+    assert.equal(headingCheck.compliant, true, `${slide.slideRole} heading (${headingCheck.length} chars) must fit (max ${headingCheck.maxChars})`);
+    const bodyCheck = checkFieldCapacity(slide.body, contract.body);
+    assert.equal(bodyCheck.compliant, true, `${slide.slideRole} body (${bodyCheck.length} chars) must fit (max ${bodyCheck.maxChars})`);
+    if (slide.slideRole === "takeaway") {
+      for (const point of slide.keyPoints) {
+        const itemCheck = checkFieldCapacity(point, { maxChars: contract.keyPoints.itemMaxChars });
+        assert.equal(itemCheck.compliant, true, `keyPoints item (${itemCheck.length} chars) must fit (max ${itemCheck.maxChars})`);
+      }
+    }
+  });
+});
+
+test("mock provider's own capacity-compliant output still passes assertValidSocialMediaResult() unchanged — truncation never breaks structural validity", async () => {
+  const provider = createSocialMediaMockProvider();
+  const ep = buildEditorialPackage({
+    core_message: "A long core message that will be mechanically truncated to fit its destination template's own real capacity by the mock provider itself.",
+  });
+  const raw = await provider.generateSocialMedia("prompt", { editorialPackage: ep });
+  assert.doesNotThrow(() => assertValidSocialMediaResult(JSON.parse(raw)));
 });

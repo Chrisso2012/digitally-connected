@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSocialMediaPackagePrompt, PROMPT_VERSION } from "../../src/social-media-package-prompt-builder.mjs";
 import { SocialMediaPromptBuilderError } from "../../src/social-media-analysis-errors.mjs";
+import { TEMPLATE_CAPACITY_CONTRACT } from "../../src/template-capacity-contract.mjs";
 
 function buildEditorialPackage(overrides = {}) {
   return {
@@ -54,7 +55,7 @@ test("never reads ingested content or raw article fields — only Editorial Pack
 });
 
 test("PROMPT_VERSION is exported and stable", () => {
-  assert.equal(PROMPT_VERSION, "social-media-package.v4");
+  assert.equal(PROMPT_VERSION, "social-media-package.v5");
 });
 
 // --- DC-003-I032.1 — six semantic roles / evidence-only policy in the prompt
@@ -182,4 +183,39 @@ test('never mentions a fabricated attribution example like a job title or compan
   const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
   assert.doesNotMatch(prompt, /Operations Lead/);
   assert.doesNotMatch(prompt, /Mid-market services business/);
+});
+
+// --- DC-003-I033.1 — I032 receives the Template Capacity Contract's own
+// constraints explicitly, and the generated-contract instructions
+// reflect them — the direct architectural response to schema-valid
+// content that still visually collided (car_3479ca8ac2af40b8).
+
+test("prompt includes a dedicated Template capacity constraints section", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /## Template capacity constraints/);
+  assert.match(prompt, /derived directly from each template's own real layout geometry/);
+});
+
+test("prompt's capacity section is generated FROM the canonical contract itself, not a second independently-typed copy of the numbers", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, new RegExp(`heading max ${TEMPLATE_CAPACITY_CONTRACT.cover.heading.maxChars} characters`));
+  assert.match(prompt, new RegExp(`statistic\\.value max ${TEMPLATE_CAPACITY_CONTRACT.statistic.statisticValue.maxChars} characters`));
+  assert.match(prompt, new RegExp(`keyPoints: max ${TEMPLATE_CAPACITY_CONTRACT.takeaway.keyPoints.maxItems} items, each max ${TEMPLATE_CAPACITY_CONTRACT.takeaway.keyPoints.itemMaxChars} characters`));
+});
+
+test('prompt explicitly instructs that callToAction is a short button label, not a full sentence — the single most consequential capacity finding', () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, new RegExp(`callToAction max ${TEMPLATE_CAPACITY_CONTRACT.cta.ctaMapping.maxChars} characters`));
+  assert.match(prompt, /rendered VERBATIM onto the CTA slide's own small, fixed-size button/);
+});
+
+test("prompt explicitly warns that a comparison-style statistic value (like the real rejected \"80% vs 20%\") never fits", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /NEVER a comparison or multi-figure string/);
+});
+
+test("prompt instructs writing within capacity from the start, never expecting downstream truncation", () => {
+  const prompt = buildSocialMediaPackagePrompt(buildEditorialPackage());
+  assert.match(prompt, /do not write a longer draft and expect it to be shortened afterwards/);
+  assert.match(prompt, /nothing downstream will resize, wrap, or truncate this content for you/);
 });
