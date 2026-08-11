@@ -104,6 +104,13 @@ const SCHEMA_FILES = {
   // Control Centre's own Production Package section embeds a lean
   // summary shape, not a $ref to this schema.
   productionPackage: "production-package.schema.json",
+  // DC-003-I032.10.1 — a genuinely new, independent object: the final
+  // CEO-approved production specification for one carousel, authored
+  // entirely upstream (Claude Cowork) — never derived from, and never
+  // referencing, editorialPackage/socialMediaPackage/productionPackage
+  // above. Registered before controlCentre for consistency with every
+  // other domain object.
+  carouselContentPackage: "carousel-content-package.schema.json",
   // DC-003-I024, extended by DC-003-I028/I029/I029.1/I029.3 — the Control
   // Centre's in-memory read model. Must be compiled AFTER
   // finishedCarousel/productionMetrics/publisherResult/socialAnalyticsSnapshot/engineeringDeliveryReport/bridgeTransportRecord/engineeringStrategyReview
@@ -115,7 +122,7 @@ const SCHEMA_FILES = {
 export const SCHEMA_IDS = Object.keys(SCHEMA_FILES);
 
 /**
- * Loads all twenty-three schemas and returns them keyed by identifier, e.g.
+ * Loads all twenty-four schemas and returns them keyed by identifier, e.g.
  * `registry.topicPackage`. Fails fast on the first missing or malformed
  * schema file.
  */

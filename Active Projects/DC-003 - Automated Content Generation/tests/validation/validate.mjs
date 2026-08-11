@@ -40,6 +40,7 @@ const APPROVED_FIXTURES = [
   ["editorialPackage", "editorial-package.example.json"],
   ["socialMediaPackage", "social-media-package.example.json"],
   ["productionPackage", "production-package.example.json"],
+  ["carouselContentPackage", "carousel-content-package.example.json"],
 ];
 
 const validator = createValidator();

@@ -8896,6 +8896,161 @@ mutation is attempted; none is skippable by any flag.
 tests across the same module set. I033/I034/I014/I015/I025/I027/I028/DC-004
 are unmodified.
 
+## Carousel Content Package V1 (DC-003-I032.10.1)
+
+Follows a Strategy-Office-approved architectural decision (I032.10's own
+investigation report): carousel editorial/content decisions move
+entirely upstream into Claude Cowork, CEO-approved before Claude Code
+ever sees them. This milestone implements the **contract and persistence
+boundary only** — a genuinely new, independent object, never a variant
+or extension of `social-media-package.schema.json`. No template capacity
+numbers, no Templated mapping, no rendering, no Production Package V2:
+those are explicitly later milestones, gated on the four real V2
+Templated templates existing.
+
+### Architecture
+
+A Carousel Content Package (CCP) is the final CEO-approved production
+specification for one carousel — authored entirely upstream, approved
+before Claude Code receives it. By the time Claude Code holds one, no
+editorial or creative decision remains: every field is either carried
+through verbatim or checked only for internal, mechanical consistency.
+
+- `schemas/carousel-content-package.schema.json` (new, schema `1.0`) —
+  `package_type` (const), `package_version` (const `"v1"`, deliberately
+  distinct from `schema_version` — the content-contract version vs. this
+  JSON schema's own structural version), `carousel_content_package_id`
+  (`ccp_...`, machine-generated), `source_article_title`/
+  `source_article_reference` (nullable — an opaque upstream reference,
+  never dereferenced), `industry_name`/`industry_series`/`carousel_title`,
+  `total_slides` (const `7`), `slides` (exactly 7, `oneOf` coverSlide/
+  contentSlide/closeSlide), `approval` (`approved: const true` — mirrors
+  `social-publishing-manifest.schema.json`'s own identical precedent;
+  no draft/review lifecycle exists, `approved_by`/`approved_at` describe
+  the real, upstream, already-happened CEO approval, never ingestion
+  time), `production_authority` (8 `const`-locked enforcement flags —
+  schema-level, not decorative), `created_at`, `schema_version`,
+  `checksum`.
+- `src/carousel-content-package.mjs` (new) — `createCarouselContentPackage()`.
+  No camelCase-provider-JSON translation layer (unlike every I030-I032
+  factory): this object has no AI-generation step to translate from, so
+  `fields` is already close to the final record shape. Enforces the
+  fixed positional sequence (`cover_black, content_white, content_orange,
+  content_white, content_orange, content_white, close_black`) by
+  position, never inferred; cross-checks every slide's own
+  `industry_series` against the package-level value; enforces
+  `content_orange`'s fixed no-image design (`image.mode`/`image_layout`
+  both forced to `"none"`); stamps `production_authority` internally —
+  never accepted as caller input, the same "hardcoded, never
+  caller-suppliable" discipline `social-media-package.mjs` already
+  applies to its own `corrections: []` default.
+- `src/carousel-content-package-emphasis.mjs` (new) — the one genuinely
+  new *mechanical judgment* this milestone performs: confirming an
+  already-decided emphasis phrase is a literal substring of its own
+  slide's text, and that no two instructions on one slide claim
+  overlapping text. Documented, conservative normalisation (smart
+  quotes → straight, whitespace collapsed) — never case-folding, never
+  fuzzy/semantic matching, never a substitute phrase chosen by Claude
+  Code.
+- `src/carousel-content-package-store.mjs` + adapter — mirrors
+  `editorial-package-store.mjs` exactly (save/get/list/exists, no
+  replace/revision — no correction mechanism exists for CCP in this
+  milestone). No `findBy*()` duplicate-protection lookup either: a CCP
+  doesn't derive from any other DC-003 object by identifier (sourced
+  from an article title/reference, never an `editorial_package_id`).
+- CLI: `npm run carousel-content-package -- import|inspect|list`.
+  `import <fieldsFilePath> <storeDirectory>` reads a **fields**-shaped
+  JSON file (the same shape the factory itself accepts — not an
+  already-fully-formed record) and persists it. No `--live` flag exists
+  anywhere on this CLI; no AI-provider import appears in its source
+  (verified by a dedicated regression test scanning the source itself).
+
+### Image contract
+
+Claude Code never sources, generates, or chooses an image.
+`{ mode: "none"|"provided", asset_reference, direction }` —
+`asset_reference` required (non-empty) iff `mode` is `"provided"`,
+required `null` iff `"none"`. `direction` is optional descriptive
+provenance text only, never used to generate or search for anything. A
+future `"generate"` mode is deliberately NOT implemented, tested, or
+reachable in V1.
+
+### Emphasis contract
+
+```
+{ phrase: string, style: "highlight" | "strike" }
+```
+`phrase` must be a literal substring (after normalisation) of that
+slide's own headline+body — checked deterministically, never inferred.
+Overlapping/conflicting instructions on the same slide fail explicitly
+(`ConflictingEmphasisInstructionsError`), never resolved creatively.
+
+### Production authority
+
+Eight `const`-locked flags on every record — enforced at the schema
+level (a record claiming otherwise fails validation outright) and at
+the factory level (never accepted as caller input at all, always
+internally stamped). `publishing_authorized` is always `false` for this
+production contract; publishing remains a separate, later, explicitly
+authorised act.
+
+### Canonical fixture
+
+`tests/fixtures/carousel-content-package.example.json` — "The Myth of
+the Dead Database," the same real-estate CRM-reactivation narrative as
+the OC-002 lineage, newly authored for the 7-slide/4-template V1
+structure (never copied from `sm_3b859b1d314c4c41`, which is a
+structurally different, six-semantic-role object). Genuinely generated
+by running real fields through the real factory (not hand-typed), so
+its `checksum` is authentic. Exercises: a `content_white` slide with a
+`corner` image, a `content_orange` slide with no image, two
+non-overlapping emphasis instructions on one `content_orange` slide
+(the exact phrases from this milestone's own brief — "ready or not
+ready yet" / "interested or not"), and a highlighted closing question on
+the `close_black` slide.
+
+### Historical protection
+
+Zero changes to `social-media-package.schema.json`/
+`production-package.schema.json`/`finished-carousel.schema.json` or
+their generators/stores. `ep_94f5e7667b834673`, `sm_cb4c4bcf72b14c9f`,
+`sm_3b859b1d314c4c41`, `pp_95be2c6a4b424803`, `pp_02ba89296fc348de`,
+`car_3479ca8ac2af40b8`, `car_84ede384bdbf49ef` are all untouched — the
+CCP Store is an entirely separate object/directory.
+
+### Verification performed
+
+Docker `npm test` 2504/2504 (was 2435, +69), `npm run validate` 24/24
+fixtures (new `carousel-content-package.example.json`). Manual CLI
+smoke test (mock fields file → `import` → `list` → `inspect`, plus a
+deliberate emphasis-phrase-not-found rejection) behaved exactly as
+designed.
+
+### Files changed
+
+`schemas/carousel-content-package.schema.json` (new),
+`config/versions.json`, `src/schema-registry.mjs`,
+`src/carousel-content-package.mjs` (new),
+`src/carousel-content-package-emphasis.mjs` (new),
+`src/carousel-content-package-errors.mjs` (new),
+`src/carousel-content-package-store.mjs` (new),
+`src/carousel-content-package-store-adapter.mjs` (new),
+`src/local-json-carousel-content-package-store-adapter.mjs` (new),
+`tests/validation/carousel-content-package.mjs` (new CLI),
+`tests/validation/validate.mjs`, `package.json`,
+`tests/fixtures/carousel-content-package.example.json` (new), plus new
+unit tests across the same module set. I032/I032.x, I033, I034, DC-004
+are unmodified.
+
+### Not yet done, deliberately, per this milestone's own scope
+
+Template capacity calculations for the four V2 templates (blocked —
+they don't exist yet in `config/templates.json` or, so far as this
+codebase's history shows, as real Templated assets), Production Package
+V2, Templated mapping, image upload/network transport, Finished
+Carousel V2 changes, publishing, and any correction/revision mechanism
+for CCP itself.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
