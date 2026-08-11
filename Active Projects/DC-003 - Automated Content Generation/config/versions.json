@@ -25,7 +25,8 @@
     "engineering_strategy_review": "1.0",
     "editorial_package": "1.0",
     "social_media_package": "1.5",
-    "production_package": "1.2"
+    "production_package": "1.2",
+    "carousel_content_package": "1.0"
   },
   "prompt_version": "carousel-copy.v1",
   "editorial_package_prompt_version": "editorial-package.v3",

@@ -1,0 +1,148 @@
+{
+  "package_type": "carousel_content_package",
+  "package_version": "v1",
+  "carousel_content_package_id": "ccp_a1b2c3d4e5f60708",
+  "source_article_title": "The Myth of the Dead Database: Why Timing, Not Interest, Killed Most of Your Lost Enquiries",
+  "source_article_reference": "cowork://articles/the-myth-of-the-dead-database",
+  "industry_name": "Real Estate",
+  "industry_series": "Real Estate Industry Series",
+  "carousel_title": "The Myth of the Dead Database",
+  "total_slides": 7,
+  "slides": [
+    {
+      "slide_number": 1,
+      "role": "cover",
+      "template": "cover_black",
+      "industry_series": "Real Estate Industry Series",
+      "headline": "The Myth of the Dead Database",
+      "supporting_line": "Why timing, not interest, is the real reason old enquiries go quiet.",
+      "image": {
+        "mode": "provided",
+        "asset_reference": "fixtures/images/myth-dead-database-cover.png",
+        "direction": "Filing cabinet drawer transitioning into a glowing pipeline graphic."
+      }
+    },
+    {
+      "slide_number": 2,
+      "role": "content",
+      "template": "content_white",
+      "industry_series": "Real Estate Industry Series",
+      "headline": "Every Enquiry Already Cost You Something",
+      "body": "Marketing spend, staff time and trust were already paid for the moment someone reached out — none of that disappears just because the conversation went cold.",
+      "image": {
+        "mode": "provided",
+        "asset_reference": "fixtures/images/myth-dead-database-slide-02.png",
+        "direction": "Small corner image, a calendar with faded dates."
+      },
+      "image_layout": "corner",
+      "emphasis_instructions": []
+    },
+    {
+      "slide_number": 3,
+      "role": "content",
+      "template": "content_orange",
+      "industry_series": "Real Estate Industry Series",
+      "headline": "Speed Wins New Leads, Not Old Ones",
+      "body": "Agencies that respond within 24 hours convert far more often than those that don't — but that same urgency trains attention away from enquiries that are only a few months old.",
+      "image": {
+        "mode": "none",
+        "asset_reference": null,
+        "direction": null
+      },
+      "image_layout": "none",
+      "emphasis_instructions": []
+    },
+    {
+      "slide_number": 4,
+      "role": "content",
+      "template": "content_white",
+      "industry_series": "Real Estate Industry Series",
+      "headline": "A CRM Is Not a Filing Cabinet",
+      "body": "Owning a database and actively working it are two different things — without a reason to revisit older enquiries, they simply sit there unused.",
+      "image": {
+        "mode": "none",
+        "asset_reference": null,
+        "direction": null
+      },
+      "image_layout": "none",
+      "emphasis_instructions": []
+    },
+    {
+      "slide_number": 5,
+      "role": "content",
+      "template": "content_orange",
+      "industry_series": "Real Estate Industry Series",
+      "headline": "Ready vs. Not Ready Yet",
+      "body": "The old lens was interested or not — write it off and move on. The better lens is ready or not ready yet, because circumstances change and today's silence isn't tomorrow's answer.",
+      "image": {
+        "mode": "none",
+        "asset_reference": null,
+        "direction": null
+      },
+      "image_layout": "none",
+      "emphasis_instructions": [
+        {
+          "phrase": "ready or not ready yet",
+          "style": "highlight"
+        },
+        {
+          "phrase": "interested or not",
+          "style": "strike"
+        }
+      ]
+    },
+    {
+      "slide_number": 6,
+      "role": "content",
+      "template": "content_white",
+      "industry_series": "Real Estate Industry Series",
+      "headline": "Reopen the Conversation",
+      "body": "A stalled enquiry from someone who already knows your agency isn't a cold approach — it's a conversation picking back up where it paused.",
+      "image": {
+        "mode": "provided",
+        "asset_reference": "fixtures/images/myth-dead-database-slide-06.png",
+        "direction": "Full-width strip image, two people mid-conversation in warm tones."
+      },
+      "image_layout": "strip",
+      "emphasis_instructions": []
+    },
+    {
+      "slide_number": 7,
+      "role": "close",
+      "template": "close_black",
+      "industry_series": "Real Estate Industry Series",
+      "headline": "One Question Reopens the Conversation",
+      "body": "Before you spend more on new leads, ask every old enquiry the same simple question: has anything changed since we last spoke?",
+      "soft_cta": "See what's already in your CRM.",
+      "image": {
+        "mode": "provided",
+        "asset_reference": "fixtures/images/myth-dead-database-close.png",
+        "direction": "Magnifying glass hovering over a CRM dashboard."
+      },
+      "emphasis_instructions": [
+        {
+          "phrase": "has anything changed since we last spoke",
+          "style": "highlight"
+        }
+      ]
+    }
+  ],
+  "approval": {
+    "approved": true,
+    "approved_by": "chris@digitallyconnected.net",
+    "approved_at": "2026-08-11T09:00:00.000Z"
+  },
+  "production_authority": {
+    "preserve_copy_exactly": true,
+    "allow_editorial_rewriting": false,
+    "allow_copy_truncation": false,
+    "allow_template_substitution": false,
+    "allow_unapproved_content_generation": false,
+    "capacity_validation_required": true,
+    "visual_approval_required": true,
+    "publishing_authorized": false
+  },
+  "created_at": "2026-08-11T09:05:00.000Z",
+  "schema_version": "1.0",
+  "checksum": "b7d8319381740fdd4a82b77e3acdd54d5efd23ea0bdd4cdb689163e20d9d40bd"
+}

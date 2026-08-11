@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://digitallyconnected.net/schemas/dc-003/carousel-content-package.schema.json",
+  "title": "Carousel Content Package",
+  "description": "DC-003-I032.10.1 — the final CEO-approved production specification for one carousel, authored entirely upstream (Claude Cowork) and approved by the CEO BEFORE it ever reaches Claude Code. A genuinely new, independent object — deliberately NOT a variant or extension of social-media-package.schema.json (that object is upstream, AI-generated, PRE-approval; this object is downstream, human-authored-and-approved, and carries no llm_model/prompt_version-style generation provenance at all). By the time Claude Code holds a Carousel Content Package, no editorial or creative decision remains: every field here is either copied through verbatim by downstream stages or checked only for internal, mechanical consistency (does a phrase exist verbatim in its own slide's text, does the positional template sequence match) — never rewritten, shortened, or reinterpreted. Always exactly 7 slides in a fixed positional sequence: cover_black, content_white, content_orange, content_white, content_orange, content_white, close_black. Immutable after creation: no update path exists in this milestone (no revision/correction mechanism is implemented for CCP V1 — see this milestone's own report). Unrelated to and never referencing social-media-package.schema.json/production-package.schema.json/editorial-package.schema.json — this object stands on its own, sourced from an article title/reference, not a DC-003 editorial_package_id.",
+  "type": "object",
+  "required": [
+    "package_type",
+    "package_version",
+    "carousel_content_package_id",
+    "source_article_title",
+    "source_article_reference",
+    "industry_name",
+    "industry_series",
+    "carousel_title",
+    "total_slides",
+    "slides",
+    "approval",
+    "production_authority",
+    "created_at",
+    "schema_version",
+    "checksum"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "package_type": {
+      "const": "carousel_content_package",
+      "description": "Self-documenting, fixed today — reserved for a future sibling package_type without inventing a second object family prematurely."
+    },
+    "package_version": {
+      "type": "string",
+      "const": "v1",
+      "description": "The CONTENT-CONTRACT version this record was authored against (the canonical seven-slide, four-template sequence defined in this milestone) — deliberately distinct from `schema_version` below, which is this JSON schema's own structural version. A future carousel sequence/template-family change would introduce package_version \"v2\" (and very possibly a new schema alongside it), independent of whether this schema's own structure also needs to change at the same time."
+    },
+    "carousel_content_package_id": {
+      "type": "string",
+      "pattern": "^ccp_[A-Za-z0-9]+$",
+      "description": "Machine-generated, independent of every other DC-003 identifier — mirrors the ep_/sm_/pp_ convention. Deliberately not human-assigned (unlike content-asset.schema.json's own asset_id) since, unlike a Content Asset, nothing about this identifier is meant to be recognisable/curated by hand."
+    },
+    "source_article_title": { "type": "string", "minLength": 1 },
+    "source_article_reference": {
+      "type": ["string", "null"],
+      "description": "An opaque upstream reference to the source article (e.g. a Cowork document identifier or URL) — never interpreted, never dereferenced by this pipeline. Null when no such reference is available."
+    },
+    "industry_name": { "type": "string", "minLength": 1, "description": "e.g. \"Real Estate\" — the industry this carousel targets." },
+    "industry_series": {
+      "type": "string",
+      "minLength": 1,
+      "description": "e.g. \"Real Estate Industry Series\" — the label rendered on-slide. Must equal every slide's own `industry_series` value exactly (checked mechanically at construction, not merely documented) — the same \"flat value and per-slide value must stay identical\" discipline social-media-package.schema.json's own headings[]/slides[].heading pair already established."
+    },
+    "carousel_title": { "type": "string", "minLength": 1 },
+    "total_slides": { "const": 7, "description": "Always exactly 7 for package_version \"v1\" — the canonical sequence is fixed, never caller-configurable." },
+    "slides": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "description": "Exactly 7 entries in the fixed positional sequence: [0] coverSlide (cover_black), [1] contentSlide (content_white), [2] contentSlide (content_orange), [3] contentSlide (content_white), [4] contentSlide (content_orange), [5] contentSlide (content_white), [6] closeSlide (close_black). Position determines template — never inferred from content, never caller-chosen.",
+      "items": {
+        "oneOf": [{ "$ref": "#/$defs/coverSlide" }, { "$ref": "#/$defs/contentSlide" }, { "$ref": "#/$defs/closeSlide" }]
+      }
+    },
+    "approval": {
+      "type": "object",
+      "description": "This object represents ONLY an already-approved package — there is no draft/review lifecycle in this schema (mirrors social-publishing-manifest.schema.json's own identical `approval.approved: const true` precedent). `approved_by`/`approved_at` describe the CEO's real, external approval event, which happened upstream in Cowork BEFORE this record ever reaches Claude Code — never the moment this record was ingested into DC-003 (see `created_at` for that).",
+      "required": ["approved", "approved_by", "approved_at"],
+      "additionalProperties": false,
+      "properties": {
+        "approved": { "const": true },
+        "approved_by": { "type": "string", "minLength": 1 },
+        "approved_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "production_authority": {
+      "type": "object",
+      "description": "DC-003-I032.10.1 — enforceable contract behaviour, not decorative metadata: every value here is schema-locked via `const`, so a record claiming otherwise fails validation outright, and the domain factory (carousel-content-package.mjs) never accepts this object as caller input at all — it is always stamped internally with exactly these values, the same discipline social-media-package.mjs already applies to its own `corrections: []` default.",
+      "required": [
+        "preserve_copy_exactly",
+        "allow_editorial_rewriting",
+        "allow_copy_truncation",
+        "allow_template_substitution",
+        "allow_unapproved_content_generation",
+        "capacity_validation_required",
+        "visual_approval_required",
+        "publishing_authorized"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "preserve_copy_exactly": { "const": true },
+        "allow_editorial_rewriting": { "const": false },
+        "allow_copy_truncation": { "const": false },
+        "allow_template_substitution": { "const": false },
+        "allow_unapproved_content_generation": { "const": false },
+        "capacity_validation_required": { "const": true },
+        "visual_approval_required": { "const": true },
+        "publishing_authorized": { "const": false, "description": "Always false for this production contract — publishing is a separate, later, explicitly-authorised act (see social-publishing-manifest.schema.json), never implied by carousel approval." }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time", "description": "When this record was ingested into DC-003 — distinct from approval.approved_at (the CEO's real, earlier, external approval event)." },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hex digest of every other field on this record, computed by createCarouselContentPackage() immediately before the record is frozen — mirrors every other domain object's own checksum field exactly."
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "description": "Claude Code never sources, generates, or chooses an image — this object either names an already-approved asset or explicitly states none is intended. DC-003-I032.10.1 deliberately implements `mode` \"none\"/\"provided\" only; a future \"generate\" mode is structurally anticipated by this being a closed enum (extend deliberately, not implicitly) but is NOT implemented, tested, or reachable in this milestone.",
+      "required": ["mode", "asset_reference", "direction"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["none", "provided"] },
+        "asset_reference": {
+          "type": ["string", "null"],
+          "description": "An opaque reference to an already-approved image asset (e.g. a local fixture path or an upstream asset handle) — never interpreted, never dereferenced, never used to generate or search for anything. Required (non-null, non-empty) when mode is \"provided\"; required null when mode is \"none\" (checked mechanically by the domain factory, not only by this schema's own conditional below)."
+        },
+        "direction": {
+          "type": ["string", "null"],
+          "description": "Optional descriptive provenance text retained from the upstream approval — informational only, never used by Claude Code to generate, search for, or select an asset."
+        }
+      },
+      "if": { "properties": { "mode": { "const": "provided" } } },
+      "then": { "properties": { "asset_reference": { "type": "string", "minLength": 1 } } },
+      "else": { "properties": { "asset_reference": { "const": null } } }
+    },
+    "emphasisInstruction": {
+      "type": "object",
+      "description": "DC-003-I032.10.1 — a single, mechanical emphasis instruction. `phrase` must be a literal (normalised) substring of the slide's own headline/body — verified deterministically by the domain factory, never chosen or inferred by Claude Code. See this milestone's own report for the exact normalisation rule and the overlap-rejection rule.",
+      "required": ["phrase", "style"],
+      "additionalProperties": false,
+      "properties": {
+        "phrase": { "type": "string", "minLength": 1 },
+        "style": { "type": "string", "enum": ["highlight", "strike"] }
+      }
+    },
+    "coverSlide": {
+      "type": "object",
+      "required": ["slide_number", "role", "template", "industry_series", "headline", "supporting_line", "image"],
+      "additionalProperties": false,
+      "properties": {
+        "slide_number": { "const": 1 },
+        "role": { "const": "cover" },
+        "template": { "const": "cover_black" },
+        "industry_series": { "type": "string", "minLength": 1 },
+        "headline": { "type": "string", "minLength": 1 },
+        "supporting_line": { "type": "string", "minLength": 1 },
+        "image": { "$ref": "#/$defs/image" }
+      }
+    },
+    "contentSlide": {
+      "type": "object",
+      "description": "Covers both content_white (slide positions 2/4/6) and content_orange (positions 3/5) — the domain factory enforces which template is legal at which position, and that content_orange slides always declare image.mode \"none\" and image_layout \"none\" (that variant's own fixed no-image design), never at the schema layer alone.",
+      "required": ["slide_number", "role", "template", "industry_series", "headline", "body", "image", "image_layout", "emphasis_instructions"],
+      "additionalProperties": false,
+      "properties": {
+        "slide_number": { "type": "integer", "enum": [2, 3, 4, 5, 6] },
+        "role": { "const": "content" },
+        "template": { "type": "string", "enum": ["content_white", "content_orange"] },
+        "industry_series": { "type": "string", "minLength": 1 },
+        "headline": { "type": "string", "minLength": 1 },
+        "body": { "type": "string", "minLength": 1 },
+        "image": { "$ref": "#/$defs/image" },
+        "image_layout": { "type": "string", "enum": ["none", "corner", "strip"] },
+        "emphasis_instructions": { "type": "array", "items": { "$ref": "#/$defs/emphasisInstruction" }, "default": [] }
+      }
+    },
+    "closeSlide": {
+      "type": "object",
+      "required": ["slide_number", "role", "template", "industry_series", "headline", "body", "soft_cta", "image", "emphasis_instructions"],
+      "additionalProperties": false,
+      "properties": {
+        "slide_number": { "const": 7 },
+        "role": { "const": "close" },
+        "template": { "const": "close_black" },
+        "industry_series": { "type": "string", "minLength": 1 },
+        "headline": { "type": "string", "minLength": 1 },
+        "body": { "type": "string", "minLength": 1 },
+        "soft_cta": { "type": "string", "minLength": 1 },
+        "image": { "$ref": "#/$defs/image" },
+        "emphasis_instructions": { "type": "array", "items": { "$ref": "#/$defs/emphasisInstruction" }, "default": [] }
+      }
+    }
+  }
+}
