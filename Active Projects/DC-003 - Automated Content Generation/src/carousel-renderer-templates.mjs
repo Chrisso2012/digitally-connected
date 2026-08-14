@@ -42,6 +42,7 @@ import {
   FONT_WEIGHT_BODY,
   EMPHASIS_HIGHLIGHT_BACKGROUND,
   EMPHASIS_HIGHLIGHT_TEXT,
+  EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE,
 } from "./carousel-renderer-brand.mjs";
 
 function escapeHtml(text) {
@@ -274,7 +275,7 @@ export function buildContentSlideHtml(slide, { imageDataUri } = {}) {
   const contentTop = slide.image_layout === "strip" ? 260 : slide.image_layout === "corner" ? 190 : 0;
 
   const content = `
-  <section class="slide" style="background:${background};color:${textPrimary}">
+  <section class="slide${isOrange ? " slide-content-orange" : ""}" style="background:${background};color:${textPrimary}">
     ${imageRegion}
     ${logoOnLight}
     <div class="content-block" style="position:absolute;left:${SAFE_MARGIN_X_PX}px;right:${SAFE_MARGIN_X_PX}px;top:${hasImage ? contentTop : 0}px;bottom:40px;display:flex;flex-direction:column;justify-content:${hasImage ? "flex-start" : "center"};z-index:2;">
@@ -291,6 +292,17 @@ export function buildContentSlideHtml(slide, { imageDataUri } = {}) {
     .image-corner img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; border-radius: 4px; }
     .image-strip { position: absolute; left: 0; right: 0; top: 0; height: 220px; overflow: hidden; z-index: 1; }
     .image-strip img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; }
+    ${isOrange ? `
+    /* DC-003-I035 — regression fix: EMPHASIS_HIGHLIGHT_BACKGROUND (ACCENT)
+       is identical to this template's own page background
+       (ORANGE_BACKGROUND === ACCENT), making a highlight mark invisible
+       here. Smallest possible background-specific override — only the
+       background changes (a pale cream, EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE),
+       scoped to content_orange alone via .slide-content-orange; every
+       other property (text colour, padding, border-radius) still comes
+       from the shared .emphasis-highlight rule above, and .emphasis-strike
+       and every other template are completely untouched. */
+    .slide-content-orange .emphasis-highlight { background: ${EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE}; }` : ""}
   `;
 
   return `<!doctype html>

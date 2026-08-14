@@ -1,7 +1,7 @@
 // DC-003-I035 — regression coverage for carousel-renderer-templates.mjs:
 // template dispatch by the slide's own `template` field, image_layout
 // none/corner/strip markup, content_orange rendering without an image, and
-// direct regression tests for two CSS bugs found and fixed during this
+// direct regression tests for three CSS bugs found and fixed during this
 // milestone's own development: (1) FONT_FAMILY's literal double quotes
 // silently truncated an inline style="..." attribute — fixed by moving
 // the soft_cta's styling into a real .soft-cta CSS class; (2) the
@@ -9,7 +9,14 @@
 // ACCENT in the shared stylesheet, so on content_orange (background ===
 // ACCENT) it rendered orange-on-orange and disappeared — fixed by always
 // giving it the same labelColor already computed for its sibling label
-// text.
+// text; (3) the highlight emphasis mark's background (EMPHASIS_HIGHLIGHT_BACKGROUND,
+// also ACCENT) was likewise invisible against content_orange's own page
+// background — found during the first real production render — fixed
+// with a smallest-possible, background-specific override
+// (.slide-content-orange .emphasis-highlight) that swaps in a pale
+// cream (EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE) only on that one
+// template, leaving the strike treatment and every other template's
+// highlight untouched.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -19,7 +26,7 @@ import {
   buildContentSlideHtml,
   buildCloseBlackSlideHtml,
 } from "../../src/carousel-renderer-templates.mjs";
-import { ACCENT, TEXT_PRIMARY_ON_ORANGE } from "../../src/carousel-renderer-brand.mjs";
+import { ACCENT, TEXT_PRIMARY_ON_ORANGE, EMPHASIS_HIGHLIGHT_BACKGROUND, EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE } from "../../src/carousel-renderer-brand.mjs";
 
 function labelRowColors(html) {
   const labelMatch = html.match(/<span class="label" style="color:([^"]+)"/);
@@ -166,4 +173,56 @@ test("the shared stylesheet no longer hardcodes a rule-icon background (colour i
   const html = buildContentSlideHtml(contentSlide("content_orange"), {});
   assert.doesNotMatch(html, /\.rule-icon \.tick \{[^}]*background/);
   assert.doesNotMatch(html, /\.rule-icon \.bar \{[^}]*background/);
+});
+
+test("regression: content_orange's own EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE is visibly distinct from its own page background", () => {
+  // The bug this guards against: EMPHASIS_HIGHLIGHT_BACKGROUND === ACCENT
+  // === ORANGE_BACKGROUND, so the base highlight colour is invisible on
+  // a content_orange page. The override token must not be that same
+  // colour, and must not be the plain base highlight colour either
+  // (otherwise the override would be a no-op).
+  assert.notEqual(EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE, ACCENT);
+  assert.notEqual(EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE, EMPHASIS_HIGHLIGHT_BACKGROUND);
+});
+
+test("regression: highlight emphasis on content_orange renders with the cream override, scoped to that slide only", () => {
+  const slide = contentSlide("content_orange", {
+    body: "The old lens was interested or not. The better lens is ready or not ready yet.",
+    emphasis_instructions: [
+      { phrase: "ready or not ready yet", style: "highlight" },
+      { phrase: "interested or not", style: "strike" },
+    ],
+  });
+  const html = buildContentSlideHtml(slide, {});
+
+  // The slide's own <section> carries the scoping class.
+  assert.match(html, /<section class="slide slide-content-orange"/);
+
+  // The mark itself is still the same shared .emphasis-highlight element
+  // (text colour/padding/border-radius untouched) — only its background
+  // is overridden, and only inside a .slide-content-orange scope.
+  assert.match(html, /<mark class="emphasis-highlight">ready or not ready yet<\/mark>/);
+  assert.match(html, new RegExp(`\\.slide-content-orange \\.emphasis-highlight \\{ background: ${EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE} ?; ?\\}`));
+
+  // Strike treatment is completely unaffected by this fix.
+  assert.match(html, /<s class="emphasis-strike">interested or not<\/s>/);
+});
+
+test("regression: highlight emphasis on content_white and close_black is unchanged by the content_orange fix", () => {
+  const whiteHtml = buildContentSlideHtml(
+    contentSlide("content_white", { body: "Speed matters most.", emphasis_instructions: [{ phrase: "matters most", style: "highlight" }] }),
+    {}
+  );
+  const closeHtml = buildCloseBlackSlideHtml(
+    closeSlide({ body: "Ask every old enquiry a question.", emphasis_instructions: [{ phrase: "a question", style: "highlight" }] })
+  );
+
+  for (const html of [whiteHtml, closeHtml]) {
+    // No content_orange scoping class or override rule leaks into other templates.
+    assert.doesNotMatch(html, /slide-content-orange/);
+    assert.doesNotMatch(html, new RegExp(EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE));
+  }
+  // The shared, un-scoped rule (still ACCENT) is what actually applies here.
+  assert.match(whiteHtml, new RegExp(`\\.emphasis-highlight \\{\\s*background: ${EMPHASIS_HIGHLIGHT_BACKGROUND};`));
+  assert.match(closeHtml, new RegExp(`\\.emphasis-highlight \\{\\s*background: ${EMPHASIS_HIGHLIGHT_BACKGROUND};`));
 });
