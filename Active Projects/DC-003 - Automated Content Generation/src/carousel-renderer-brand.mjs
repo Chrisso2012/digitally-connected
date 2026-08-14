@@ -81,3 +81,20 @@ export const FONT_WEIGHT_BODY = 400;
 // Highlight/strike emphasis treatment — deterministic, brand-accent-based.
 export const EMPHASIS_HIGHLIGHT_BACKGROUND = ACCENT;
 export const EMPHASIS_HIGHLIGHT_TEXT = TEXT_PRIMARY_ON_LIGHT;
+
+// DC-003-I035 — regression fix, found during the first real production
+// render: EMPHASIS_HIGHLIGHT_BACKGROUND is ACCENT, and content_orange's
+// own page background is ORANGE_BACKGROUND (also ACCENT) — so a
+// highlight mark rendered on a content_orange slide was visually
+// invisible (identical colour to its own background), the same class of
+// bug as the rule-icon fix above, here in the emphasis treatment
+// instead. No approved "highlight on orange" token exists yet, so this
+// is a new, conservative, pale cream chosen specifically to read as a
+// highlighter mark against the warm DC orange accent without clashing
+// with it — reuses the EXISTING EMPHASIS_HIGHLIGHT_TEXT (dark ink) for
+// the mark's text colour unchanged, only the background differs.
+// Applies ONLY to content_orange's own highlight marks (see
+// carousel-renderer-templates.mjs's `.slide-content-orange
+// .emphasis-highlight` override) — every other template keeps the
+// unmodified EMPHASIS_HIGHLIGHT_BACKGROUND above.
+export const EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE = "#fff6e8";
