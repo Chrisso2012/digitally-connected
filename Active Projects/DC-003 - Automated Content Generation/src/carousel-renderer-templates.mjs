@@ -59,10 +59,24 @@ function buildLogoHtml() {
   return `<div class="logo"><span>DC</span></div>`;
 }
 
+// DC-003-I035 — regression fix: the rule-icon (tick/bar/tick) must always
+// share the same contrasting colour as its own label text. It previously
+// had its background hardcoded to ACCENT in the shared stylesheet, so on
+// content_orange (background: ORANGE_BACKGROUND === ACCENT) the icon
+// rendered orange-on-orange and effectively disappeared. Fixed by giving
+// it the SAME labelColor already computed per-slide for contrast — never
+// a new colour, just applied consistently. Safe as an inline style here:
+// every colour token ever passed as labelColor (ACCENT / TEXT_PRIMARY_ON_ORANGE)
+// is a quote-free hex string, so it cannot hit the FONT_FAMILY-style
+// quote-truncation hazard documented on .soft-cta above.
 function buildLabelRowHtml(industrySeries, labelColor) {
   return `
     <div class="label-row" data-capacity-field="industry_series" data-capacity-axis="horizontal">
-      <span class="rule-icon"><span class="tick"></span><span class="bar"></span><span class="tick"></span></span>
+      <span class="rule-icon">
+        <span class="tick" style="background:${labelColor}"></span>
+        <span class="bar" style="background:${labelColor}"></span>
+        <span class="tick" style="background:${labelColor}"></span>
+      </span>
       <span class="label" style="color:${labelColor}">${escapeHtml(industrySeries)}</span>
     </div>`;
 }
@@ -119,8 +133,13 @@ function sharedStyles() {
       white-space: nowrap;
     }
     .rule-icon { display: flex; align-items: center; width: 14px; height: 6px; flex: none; }
-    .rule-icon .tick { width: 1px; height: 6px; background: ${ACCENT}; }
-    .rule-icon .bar { flex: 1; height: 1px; background: ${ACCENT}; }
+    /* DC-003-I035 — no default background here on purpose: the tick/bar
+       colour is always set inline by buildLabelRowHtml() to match its
+       own slide's labelColor (see that function's own comment) — a
+       stylesheet default previously hardcoded to ACCENT caused the
+       icon to render orange-on-orange on content_orange slides. */
+    .rule-icon .tick { width: 1px; height: 6px; }
+    .rule-icon .bar { flex: 1; height: 1px; }
     .label {
       font-family: ${FONT_FAMILY};
       font-weight: ${FONT_WEIGHT_LABEL};
