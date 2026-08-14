@@ -9051,6 +9051,137 @@ V2, Templated mapping, image upload/network transport, Finished
 Carousel V2 changes, publishing, and any correction/revision mechanism
 for CCP itself.
 
+## HTML Carousel Renderer V1 (DC-003-I035)
+
+The first production-capable deterministic renderer for the CCP
+pathway: an approved Carousel Content Package (I032.10.1's own
+unmodified contract) mechanically converted to 7 x 1080x1350 PNGs via
+HTML/CSS + Chromium (Playwright's Node API). Replaces further Templated
+development for the CCP pathway; the legacy Templated renderer/payload
+mapper and every historical Social Media Package/Production
+Package/Finished Carousel record are untouched.
+
+### System requirement — a real Chromium binary
+
+`playwright-core` (not the full `playwright` package) is used
+deliberately — Playwright's own bundled-browser downloads require glibc
+and do not run on this codebase's canonical Alpine/musl Docker image.
+Instead, Alpine's own musl-compiled `chromium` package is driven via an
+explicit `executablePath`:
+
+```bash
+apk add --no-cache chromium font-noto
+```
+
+`font-noto` supplies deterministic local typography (Noto Sans
+Regular/Bold) — no remote Google Fonts call is ever made in production;
+this is a documented, conservative substitution for the DC brand's
+eventual approved font assets, which are not yet available as local
+project inputs. `src/carousel-renderer-config.mjs` resolves the binary
+path from `CHROMIUM_EXECUTABLE_PATH`, defaulting to
+`/usr/bin/chromium-browser` (the same "env var with a documented
+default" convention `LLM_API_KEY`/`TEMPLATED_API_KEY` already use for
+genuine infrastructure config).
+
+### Architecture
+
+- Fixed CSS canvas (`carousel-renderer-brand.mjs`): 420x525 CSS px,
+  rendered via a Playwright viewport of that exact size with
+  `deviceScaleFactor = 1080/420 ≈ 2.5714`, producing an exact
+  1080x1350 (4:5) PNG — never redesigned at 1080px width. One isolated
+  page per slide, a full-page screenshot (never an element screenshot —
+  avoids the sub-pixel clip-rect edge-bleed a prior proof-of-concept
+  documented), `document.fonts.ready` plus a fixed 150ms settle delay
+  before every screenshot. Every value in `carousel-renderer-brand.mjs`
+  documents its own provenance (prior POC pixel-sampling, existing
+  brand-token memory, or a conservative documented default) in its
+  header comment.
+- `src/carousel-renderer-templates.mjs` — four deterministic HTML/CSS
+  template families (`cover_black`, `content_white`, `content_orange`,
+  `close_black`), dispatched purely by each slide's own `template`
+  field. Pure functions of already-approved data: every text field is
+  escaped and placed verbatim, with only its own approved emphasis
+  markup applied. Visual rules (colour, type, layout) live entirely
+  here and in `carousel-renderer-brand.mjs`, never in the CCP itself.
+  `content_white`/`content_orange` support `image_layout`
+  `none`/`corner`/`strip`; `content_orange` never carries an image
+  (enforced upstream by the CCP factory itself).
+- `src/carousel-renderer-asset-resolver.mjs` — the one deterministic,
+  production-layer place a CCP's opaque `image.asset_reference` is
+  resolved to real bytes: a relative path against one caller-supplied
+  `assetsRootDir`, embedded as a base64 data URI so every rendered page
+  is self-contained. Absolute paths and path traversal are rejected; a
+  missing/unreadable file is a hard `CarouselAssetResolutionError` —
+  never substituted, never searched for elsewhere, never fetched from
+  the network. `image.mode: "none"` never touches the filesystem.
+- `src/carousel-renderer-emphasis-html.mjs` — reuses
+  `carousel-content-package-emphasis.mjs`'s own exported
+  `normalizeForEmphasisMatching()` **directly** (never a second
+  matching algorithm) to locate, in the original un-modified copy,
+  where each already-CCP-validated emphasis phrase falls, then wraps
+  only that literal span in `<mark class="emphasis-highlight">` or
+  `<s class="emphasis-strike">`. Everything else is escaped, unaltered
+  text.
+- `src/carousel-renderer-capacity.mjs` — implements the CCP's own
+  `production_authority.capacity_validation_required: true` promise for
+  real: after fonts and images are ready, every element the templates
+  mark `data-capacity-field`/`data-capacity-axis` is checked against
+  the real rendered DOM (`scrollHeight`/`clientHeight`,
+  `scrollWidth`/`clientWidth`) for vertical or horizontal overflow, with
+  a small empirically-measured tolerance (6px) absorbing harmless
+  font-glyph-metric noise, never a real extra line. Overflow throws
+  `CarouselCapacityValidationError` naming the exact slide/template/
+  field — content is never truncated, shrunk, or rewritten to fit.
+- `src/carousel-renderer.mjs` — orchestration only. Renders into a
+  sibling temp staging directory and promotes it via a single
+  `fs.renameSync` only after all 7 slides have rendered, passed
+  capacity validation, and been verified at exactly 1080x1350 (parsed
+  directly from each PNG's own IHDR chunk) — atomic, all-or-nothing; any
+  failure leaves the real output directory untouched and cleans up
+  staging. Writes a small `render-metadata.json` (CCP id, per-slide
+  filename/template/dimensions, timestamp, renderer name/version) — no
+  new large ledger/schema system.
+- CLI: `npm run render:html-carousel -- render <carouselContentPackageId> <ccpStoreDirectory> <assetsRootDir> <outputDir>`.
+
+### Determinism
+
+Two independent renders of the same approved CCP, in the canonical
+Alpine/Chromium environment, produce byte-identical PNGs (verified via
+SHA-256 across all 7 slides — see "Verification performed" below and
+the automated regression test in `tests/unit/carousel-renderer.test.mjs`).
+
+### Historical protection
+
+Zero changes to the I032.10.1 CCP contract/schema, the legacy Templated
+renderer/payload-mapper pathway, or any historical Social Media
+Package/Production Package/Finished Carousel record. This renderer only
+adds a new, additive production path for CCP.
+
+### Verification performed
+
+Canonical ephemeral `docker run --rm node:20-alpine` (apk-installing
+`chromium font-noto` fresh each time, matching this milestone's own
+system requirement): full `npm test` 2536/2536 (was 2504, +32), `npm run
+validate` 24/24 fixtures (schema unchanged). A real local render of a
+full 7-slide CCP (the same "Myth of the Dead Database" narrative) run
+twice produced 7/7 PNGs at exactly 1080x1350 both times, with all 7
+slide files SHA-256-identical across the two runs.
+
+### Files changed
+
+`src/carousel-renderer.mjs` (new), `src/carousel-renderer-templates.mjs`
+(new), `src/carousel-renderer-brand.mjs` (new),
+`src/carousel-renderer-asset-resolver.mjs` (new),
+`src/carousel-renderer-emphasis-html.mjs` (new),
+`src/carousel-renderer-capacity.mjs` (new),
+`src/carousel-renderer-config.mjs` (new), `src/carousel-renderer-errors.mjs`
+(new), `tests/validation/render-carousel-content-package.mjs` (new CLI),
+`package.json` (`playwright-core` dependency, `render:html-carousel`
+script), `tests/fixtures/carousel-renderer-assets/` (new, two small
+fixture PNGs), plus new unit tests across the same module set. The CCP
+schema/factory, the legacy Templated renderer, and DC-004 are
+unmodified.
+
 ## Running tests
 
 Two independent commands, both using Node's built-in `node:test` runner —
