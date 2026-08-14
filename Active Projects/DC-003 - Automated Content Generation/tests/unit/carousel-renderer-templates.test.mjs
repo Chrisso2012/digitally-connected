@@ -226,3 +226,83 @@ test("regression: highlight emphasis on content_white and close_black is unchang
   assert.match(whiteHtml, new RegExp(`\\.emphasis-highlight \\{\\s*background: ${EMPHASIS_HIGHLIGHT_BACKGROUND};`));
   assert.match(closeHtml, new RegExp(`\\.emphasis-highlight \\{\\s*background: ${EMPHASIS_HIGHLIGHT_BACKGROUND};`));
 });
+
+// --- DC-003-I035.1 — headline emphasis (fixes a real render crash) --------
+// A real production render of ccp_c1894dc4d8b04563 threw because the
+// renderer used to apply emphasis only to slide.body — an approved phrase
+// living only in the headline crashed renderTextWithEmphasisHtml()'s own
+// defensive "should never happen" check. Fixed by resolving each
+// instruction to whichever field (headline/body) it actually matches
+// (carousel-content-package-emphasis.mjs's partitionEmphasisInstructionsByField,
+// the SAME resolver the factory validates against) and rendering each
+// field with only its own instructions.
+
+test("regression: a highlight phrase in a content-slide headline renders successfully (the real production defect)", () => {
+  const slide = contentSlide("content_white", {
+    headline: "Your appraisal history is a source of future listings.",
+    body: "Not a record of past misses.",
+    emphasis_instructions: [{ phrase: "source of future listings", style: "highlight" }],
+  });
+  const html = buildContentSlideHtml(slide, {});
+  assert.match(html, /<h2 class="headline"[^>]*>Your appraisal history is a <mark class="emphasis-highlight">source of future listings<\/mark>\.<\/h2>/);
+});
+
+test("regression: a strike phrase in a content-slide headline renders successfully", () => {
+  const slide = contentSlide("content_white", {
+    headline: "A stalled appraisal doesn't look like a dead end.",
+    body: "It looks like an asset waiting on timing.",
+    emphasis_instructions: [{ phrase: "dead end", style: "strike" }],
+  });
+  const html = buildContentSlideHtml(slide, {});
+  assert.match(html, /<h2 class="headline"[^>]*>A stalled appraisal doesn&#39;t look like a <s class="emphasis-strike">dead end<\/s>\.<\/h2>/);
+});
+
+test("regression: headline and body emphasis both render correctly on the same slide", () => {
+  const slide = contentSlide("content_white", {
+    headline: "Your appraisal history is a source of future listings.",
+    body: "Not a record of past misses. Who is ready today?",
+    emphasis_instructions: [
+      { phrase: "source of future listings", style: "highlight" },
+      { phrase: "ready today", style: "strike" },
+    ],
+  });
+  const html = buildContentSlideHtml(slide, {});
+  assert.match(html, /<mark class="emphasis-highlight">source of future listings<\/mark>/);
+  assert.match(html, /<s class="emphasis-strike">ready today<\/s>/);
+});
+
+test("regression: existing body-only highlight/strike still render exactly as before (no headline instructions present)", () => {
+  const slide = contentSlide("content_white", {
+    headline: "Plain headline with no emphasis field at all.",
+    body: "The old lens was interested or not. The better lens is ready or not ready yet.",
+    emphasis_instructions: [
+      { phrase: "interested or not", style: "strike" },
+      { phrase: "ready or not ready yet", style: "highlight" },
+    ],
+  });
+  const html = buildContentSlideHtml(slide, {});
+  assert.match(html, /<h2 class="headline"[^>]*>Plain headline with no emphasis field at all\.<\/h2>/);
+  assert.match(html, /<s class="emphasis-strike">interested or not<\/s>/);
+  assert.match(html, /<mark class="emphasis-highlight">ready or not ready yet<\/mark>/);
+});
+
+test("regression: close-slide headline emphasis renders correctly", () => {
+  const slide = closeSlide({
+    headline: "Not mass outreach. Not pressure.",
+    body: "Just a structured, respectful way of asking.",
+    emphasis_instructions: [{ phrase: "Not mass outreach", style: "highlight" }],
+  });
+  const html = buildCloseBlackSlideHtml(slide);
+  assert.match(html, /<h1 class="headline"[^>]*><mark class="emphasis-highlight">Not mass outreach<\/mark>\. Not pressure\.<\/h1>/);
+});
+
+test("cover_black remains unsupported for emphasis — supporting_line always renders as plain escaped text", () => {
+  // cover_black has no emphasis_instructions field in the CCP schema at
+  // all; buildCoverBlackSlideHtml() never reads or applies one, even if
+  // a caller hands it a slide-like object that happens to carry one.
+  const slide = { ...coverSlide(), emphasis_instructions: [{ phrase: "interest", style: "highlight" }] };
+  const html = buildCoverBlackSlideHtml(slide);
+  assert.doesNotMatch(html, /<mark class="emphasis-highlight">/);
+  assert.doesNotMatch(html, /<s class="emphasis-strike">/);
+  assert.match(html, /Why timing, not interest, is the real reason old enquiries go quiet\./);
+});

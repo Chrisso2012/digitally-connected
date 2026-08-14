@@ -23,7 +23,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { createValidator } from "./validator.mjs";
 import { deepFreezeClone } from "./immutable.mjs";
-import { validateEmphasisInstructions } from "./carousel-content-package-emphasis.mjs";
+import { validateEmphasisInstructionsAcrossFields } from "./carousel-content-package-emphasis.mjs";
 import { InvalidCarouselContentPackageInputError, CarouselContentPackageValidationError } from "./carousel-content-package-errors.mjs";
 
 const SLIDE_COUNT = 7;
@@ -174,9 +174,14 @@ function buildContentSlide(slide, label, template) {
   }
 
   const emphasisInstructions = buildEmphasisInstructions(slide.emphasis_instructions, label);
-  validateEmphasisInstructions({
+  // DC-003-I035.1 — validated per-field (headline/body checked
+  // independently), not against a concatenated string: an instruction
+  // must match a real, renderable span within ONE of those fields, the
+  // same rule the renderer itself now applies (see this module's own
+  // header comment and carousel-content-package-emphasis.mjs).
+  validateEmphasisInstructionsAcrossFields({
     slideNumber: slide.slide_number,
-    searchableText: `${slide.headline} ${slide.body}`,
+    fields: { headline: slide.headline, body: slide.body },
     emphasisInstructions,
   });
 
@@ -200,9 +205,11 @@ function buildCloseSlide(slide, label) {
   const image = buildImage(slide.image, label);
 
   const emphasisInstructions = buildEmphasisInstructions(slide.emphasis_instructions, label);
-  validateEmphasisInstructions({
+  // DC-003-I035.1 — see the identical comment in buildContentSlide()
+  // above: validated per-field, matching what the renderer now applies.
+  validateEmphasisInstructionsAcrossFields({
     slideNumber: 7,
-    searchableText: `${slide.headline} ${slide.body}`,
+    fields: { headline: slide.headline, body: slide.body },
     emphasisInstructions,
   });
 
