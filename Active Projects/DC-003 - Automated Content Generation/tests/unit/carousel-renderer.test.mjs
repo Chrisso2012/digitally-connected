@@ -169,6 +169,34 @@ test("renderCarousel produces exactly 7 correctly-templated, correctly-dimension
   });
 });
 
+// DC-003-I035.2 — end-to-end regression: a real 2-line headline with a
+// highlighted phrase on the wrapped second line (the exact shape of the
+// real production defect on ccp_c1894dc4d8b04563, slide 6) must render
+// successfully through the FULL pipeline — capacity validation included
+// — proving the collision fix's larger line-height doesn't introduce a
+// false-positive overflow rejection for genuinely-fitting headlines.
+test("renderCarousel succeeds end-to-end for a real 2-line headline with a highlighted phrase on the wrapped second line, and produces correctly-dimensioned output", async () => {
+  await withTempOutputDir(async (outputDir) => {
+    const renderer = createCarouselRenderer({ assetsRootDir: ASSETS_ROOT_DIR });
+    const ccp = buildCcp({
+      slides: buildFields().slides.map((slide) =>
+        slide.slide_number === 6
+          ? {
+              ...slide,
+              headline: "Your appraisal history is a source of future listings.",
+              emphasis_instructions: [{ phrase: "source of future listings", style: "highlight" }],
+            }
+          : slide
+      ),
+    });
+
+    const result = await renderer.renderCarousel(ccp, outputDir);
+    assert.equal(result.files.length, 7);
+    const dims = readPngDimensions(path.join(outputDir, "slide_06.png"));
+    assert.deepEqual(dims, { width: 1080, height: 1350 });
+  });
+});
+
 test("renderCarousel hard-fails on a missing image asset and never creates the output directory", async () => {
   await withTempOutputDir(async (outputDir) => {
     const renderer = createCarouselRenderer({ assetsRootDir: ASSETS_ROOT_DIR });

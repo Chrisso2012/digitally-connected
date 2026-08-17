@@ -98,3 +98,29 @@ export const EMPHASIS_HIGHLIGHT_TEXT = TEXT_PRIMARY_ON_LIGHT;
 // .emphasis-highlight` override) — every other template keeps the
 // unmodified EMPHASIS_HIGHLIGHT_BACKGROUND above.
 export const EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE = "#fff6e8";
+
+// DC-003-I035.2 — regression fix, found during Gate 5 visual review of a
+// real production render: the headline's own `line-height: 1.15` (see
+// carousel-renderer-templates.mjs's sharedStyles()) is TIGHTER than Noto
+// Sans 700's own natural per-line content height at 26px. Measured
+// directly in real Chromium via Range.getClientRects() on a genuine
+// two-line headline: each line's own glyph content occupies ~36px
+// (36/26 = 1.3846 of the font size), while the CSS line-height box is
+// only 26 * 1.15 = 29.9px — a line's own descender ink already extends
+// ~6.1px past its nominal CSS line box on EVERY multi-line headline.
+// This is completely invisible for plain text (nothing paints in that
+// margin), but a <mark>'s own inline background paints across that same
+// natural per-line box, so on the second (or later) line it visibly
+// bled upward into the line above's descenders.
+//
+// HEADLINE_LINE_HEIGHT_WITH_EMPHASIS is a scoped override — applied
+// ONLY to a headline that actually contains an emphasis mark (see
+// `.headline-has-emphasis` in carousel-renderer-templates.mjs), never
+// to the vast majority of headlines with no emphasis, which keep the
+// original, already-capacity-validated 1.15 unchanged. 1.45 (26 * 1.45
+// = 37.7px) was chosen as the smallest round value clearing the
+// measured 36px natural content height with a small safety margin for
+// other glyph combinations, then re-verified empirically (real Chromium
+// geometry, same Range-based measurement) to produce zero collision on
+// the real production headline that originally exposed this defect.
+export const HEADLINE_LINE_HEIGHT_WITH_EMPHASIS = 1.45;

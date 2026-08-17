@@ -44,6 +44,7 @@ import {
   EMPHASIS_HIGHLIGHT_BACKGROUND,
   EMPHASIS_HIGHLIGHT_TEXT,
   EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE,
+  HEADLINE_LINE_HEIGHT_WITH_EMPHASIS,
 } from "./carousel-renderer-brand.mjs";
 
 function escapeHtml(text) {
@@ -157,6 +158,20 @@ function sharedStyles() {
       line-height: 1.15;
       letter-spacing: -0.01em;
       overflow: hidden;
+    }
+    /* DC-003-I035.2 — regression fix: 1.15 is TIGHTER than Noto Sans
+       700's own natural per-line content height at this font size
+       (measured in real Chromium: ~1.3846x font-size vs 1.15x line-box)
+       — invisible for plain text, but a <mark>'s own inline background
+       paints across that same natural per-line box, so on a multi-line
+       headline it visibly bled into the descenders of the line above.
+       Scoped via this class (added only when a headline actually
+       contains emphasis — see buildContentSlideHtml()/
+       buildCloseBlackSlideHtml()) so the vast majority of headlines,
+       which have no emphasis at all, keep the original, already
+       capacity-validated 1.15 line-height completely unchanged. */
+    .headline.headline-has-emphasis {
+      line-height: ${HEADLINE_LINE_HEIGHT_WITH_EMPHASIS};
     }
     .body-copy {
       font-family: ${FONT_FAMILY};
@@ -294,7 +309,7 @@ export function buildContentSlideHtml(slide, { imageDataUri } = {}) {
     ${logoOnLight}
     <div class="content-block" style="position:absolute;left:${SAFE_MARGIN_X_PX}px;right:${SAFE_MARGIN_X_PX}px;top:${hasImage ? contentTop : 0}px;bottom:40px;display:flex;flex-direction:column;justify-content:${hasImage ? "flex-start" : "center"};z-index:2;">
       ${buildLabelRowHtml(slide.industry_series, labelColor)}
-      <h2 class="headline" data-capacity-field="headline" data-capacity-axis="vertical"
+      <h2 class="headline${headlineInstructions.length > 0 ? " headline-has-emphasis" : ""}" data-capacity-field="headline" data-capacity-axis="vertical"
           style="font-size:26px;max-height:130px;margin-top:12px;color:${textPrimary}">${headlineHtml}</h2>
       <p class="body-copy" data-capacity-field="body" data-capacity-axis="vertical"
          style="font-size:13.5px;max-height:${hasImage ? 130 : 170}px;margin-top:14px;color:${textSecondary}">${bodyHtml}</p>
@@ -355,7 +370,7 @@ export function buildCloseBlackSlideHtml(slide, { imageDataUri } = {}) {
     ${buildLogoHtml()}
     <div class="close-content" style="position:absolute;left:${SAFE_MARGIN_X_PX}px;right:${SAFE_MARGIN_X_PX}px;bottom:44px;z-index:2;">
       ${buildLabelRowHtml(slide.industry_series, ACCENT)}
-      <h1 class="headline" data-capacity-field="headline" data-capacity-axis="vertical"
+      <h1 class="headline${headlineInstructions.length > 0 ? " headline-has-emphasis" : ""}" data-capacity-field="headline" data-capacity-axis="vertical"
           style="font-size:26px;max-height:120px;margin-top:12px;color:${TEXT_PRIMARY_ON_DARK}">${headlineHtml}</h1>
       <p class="body-copy" data-capacity-field="body" data-capacity-axis="vertical"
          style="font-size:13.5px;max-height:100px;margin-top:14px;color:${TEXT_SECONDARY_ON_DARK}">${bodyHtml}</p>

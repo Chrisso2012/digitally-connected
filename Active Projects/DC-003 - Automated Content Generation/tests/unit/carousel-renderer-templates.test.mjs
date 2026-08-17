@@ -26,7 +26,13 @@ import {
   buildContentSlideHtml,
   buildCloseBlackSlideHtml,
 } from "../../src/carousel-renderer-templates.mjs";
-import { ACCENT, TEXT_PRIMARY_ON_ORANGE, EMPHASIS_HIGHLIGHT_BACKGROUND, EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE } from "../../src/carousel-renderer-brand.mjs";
+import {
+  ACCENT,
+  TEXT_PRIMARY_ON_ORANGE,
+  EMPHASIS_HIGHLIGHT_BACKGROUND,
+  EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE,
+  HEADLINE_LINE_HEIGHT_WITH_EMPHASIS,
+} from "../../src/carousel-renderer-brand.mjs";
 
 function labelRowColors(html) {
   const labelMatch = html.match(/<span class="label" style="color:([^"]+)"/);
@@ -244,7 +250,7 @@ test("regression: a highlight phrase in a content-slide headline renders success
     emphasis_instructions: [{ phrase: "source of future listings", style: "highlight" }],
   });
   const html = buildContentSlideHtml(slide, {});
-  assert.match(html, /<h2 class="headline"[^>]*>Your appraisal history is a <mark class="emphasis-highlight">source of future listings<\/mark>\.<\/h2>/);
+  assert.match(html, /<h2 class="headline headline-has-emphasis"[^>]*>Your appraisal history is a <mark class="emphasis-highlight">source of future listings<\/mark>\.<\/h2>/);
 });
 
 test("regression: a strike phrase in a content-slide headline renders successfully", () => {
@@ -254,7 +260,7 @@ test("regression: a strike phrase in a content-slide headline renders successful
     emphasis_instructions: [{ phrase: "dead end", style: "strike" }],
   });
   const html = buildContentSlideHtml(slide, {});
-  assert.match(html, /<h2 class="headline"[^>]*>A stalled appraisal doesn&#39;t look like a <s class="emphasis-strike">dead end<\/s>\.<\/h2>/);
+  assert.match(html, /<h2 class="headline headline-has-emphasis"[^>]*>A stalled appraisal doesn&#39;t look like a <s class="emphasis-strike">dead end<\/s>\.<\/h2>/);
 });
 
 test("regression: headline and body emphasis both render correctly on the same slide", () => {
@@ -293,7 +299,57 @@ test("regression: close-slide headline emphasis renders correctly", () => {
     emphasis_instructions: [{ phrase: "Not mass outreach", style: "highlight" }],
   });
   const html = buildCloseBlackSlideHtml(slide);
-  assert.match(html, /<h1 class="headline"[^>]*><mark class="emphasis-highlight">Not mass outreach<\/mark>\. Not pressure\.<\/h1>/);
+  assert.match(html, /<h1 class="headline headline-has-emphasis"[^>]*><mark class="emphasis-highlight">Not mass outreach<\/mark>\. Not pressure\.<\/h1>/);
+});
+
+// --- DC-003-I035.2 — multi-line headline highlight collision fix --------
+// See carousel-renderer-brand.mjs's own HEADLINE_LINE_HEIGHT_WITH_EMPHASIS
+// comment for the full root-cause account (Noto Sans 700's natural
+// per-line content height exceeds the base 1.15 line-height, so a
+// <mark>'s background bled into the line above on multi-line headlines).
+// Genuine physical non-overlap cannot be proven by string-matching HTML —
+// see carousel-renderer-headline-emphasis-geometry.test.mjs for the real
+// Chromium geometry proof. These tests cover the structural wiring only.
+
+test("regression: headline-has-emphasis class is added only when the headline itself has a resolved instruction", () => {
+  const withHeadlineEmphasis = buildContentSlideHtml(
+    contentSlide("content_white", { headline: "A source of future listings.", body: "Plain body.", emphasis_instructions: [{ phrase: "source of future listings", style: "highlight" }] }),
+    {}
+  );
+  assert.match(withHeadlineEmphasis, /<h2 class="headline headline-has-emphasis"/);
+
+  const bodyOnlyEmphasis = buildContentSlideHtml(
+    contentSlide("content_white", { headline: "Plain headline.", body: "A source of future listings.", emphasis_instructions: [{ phrase: "source of future listings", style: "highlight" }] }),
+    {}
+  );
+  assert.match(bodyOnlyEmphasis, /<h2 class="headline"[^-]/); // no "headline-has-emphasis" following
+
+  const noEmphasisAtAll = buildContentSlideHtml(contentSlide("content_white"), {});
+  assert.match(noEmphasisAtAll, /<h2 class="headline"[^-]/);
+});
+
+test("regression: a strike-only headline instruction also gets the safer line-height class (same collision risk, applied uniformly)", () => {
+  const html = buildContentSlideHtml(
+    contentSlide("content_white", { headline: "This is a dead end for now.", body: "Plain body.", emphasis_instructions: [{ phrase: "dead end", style: "strike" }] }),
+    {}
+  );
+  assert.match(html, /<h2 class="headline headline-has-emphasis"/);
+  // Strike's own styling is completely untouched by this fix.
+  assert.match(html, /<s class="emphasis-strike">dead end<\/s>/);
+});
+
+test("regression: close_black headline-has-emphasis wiring matches content slides", () => {
+  const withEmphasis = buildCloseBlackSlideHtml(closeSlide({ headline: "A structured way forward.", emphasis_instructions: [{ phrase: "structured way", style: "highlight" }] }));
+  assert.match(withEmphasis, /<h1 class="headline headline-has-emphasis"/);
+
+  const without = buildCloseBlackSlideHtml(closeSlide());
+  assert.match(without, /<h1 class="headline"[^-]/);
+});
+
+test("regression: the base .headline rule's line-height (1.15) is unchanged — only a new, separately-scoped rule was added", () => {
+  const html = buildContentSlideHtml(contentSlide("content_white"), {});
+  assert.match(html, /\.headline \{[^}]*line-height: 1\.15;/);
+  assert.match(html, new RegExp(`\\.headline\\.headline-has-emphasis \\{\\s*line-height: ${HEADLINE_LINE_HEIGHT_WITH_EMPHASIS};`));
 });
 
 test("cover_black remains unsupported for emphasis — supporting_line always renders as plain escaped text", () => {
