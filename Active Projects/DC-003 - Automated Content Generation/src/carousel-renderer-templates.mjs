@@ -22,6 +22,7 @@
 // bounded container fails the render instead of silently overlapping.
 
 import { renderTextWithEmphasisHtml } from "./carousel-renderer-emphasis-html.mjs";
+import { partitionEmphasisInstructionsByField } from "./carousel-content-package-emphasis.mjs";
 import {
   CANVAS_WIDTH_CSS_PX,
   CANVAS_HEIGHT_CSS_PX,
@@ -43,6 +44,7 @@ import {
   EMPHASIS_HIGHLIGHT_BACKGROUND,
   EMPHASIS_HIGHLIGHT_TEXT,
   EMPHASIS_HIGHLIGHT_BACKGROUND_ON_ORANGE,
+  HEADLINE_LINE_HEIGHT_WITH_EMPHASIS,
 } from "./carousel-renderer-brand.mjs";
 
 function escapeHtml(text) {
@@ -157,6 +159,20 @@ function sharedStyles() {
       letter-spacing: -0.01em;
       overflow: hidden;
     }
+    /* DC-003-I035.2 — regression fix: 1.15 is TIGHTER than Noto Sans
+       700's own natural per-line content height at this font size
+       (measured in real Chromium: ~1.3846x font-size vs 1.15x line-box)
+       — invisible for plain text, but a <mark>'s own inline background
+       paints across that same natural per-line box, so on a multi-line
+       headline it visibly bled into the descenders of the line above.
+       Scoped via this class (added only when a headline actually
+       contains emphasis — see buildContentSlideHtml()/
+       buildCloseBlackSlideHtml()) so the vast majority of headlines,
+       which have no emphasis at all, keep the original, already
+       capacity-validated 1.15 line-height completely unchanged. */
+    .headline.headline-has-emphasis {
+      line-height: ${HEADLINE_LINE_HEIGHT_WITH_EMPHASIS};
+    }
     .body-copy {
       font-family: ${FONT_FAMILY};
       font-weight: ${FONT_WEIGHT_BODY};
@@ -269,7 +285,20 @@ export function buildContentSlideHtml(slide, { imageDataUri } = {}) {
   const labelColor = isOrange ? TEXT_PRIMARY_ON_ORANGE : ACCENT;
   const logoOnLight = `<div class="logo" style="background:${isOrange ? TEXT_PRIMARY_ON_ORANGE : ACCENT}"><span style="color:${isOrange ? ORANGE_BACKGROUND : TEXT_PRIMARY_ON_LIGHT}">DC</span></div>`;
 
-  const bodyHtml = renderTextWithEmphasisHtml(slide.body, slide.emphasis_instructions);
+  // DC-003-I035.1 — emphasis instructions are resolved to whichever real
+  // field (headline or body) they actually match, using the SAME shared
+  // resolver the factory already validated every instruction against at
+  // import time (carousel-content-package-emphasis.mjs) — never a second,
+  // independently-guessed matching system. Each field is rendered with
+  // only its own instructions, so renderTextWithEmphasisHtml() never sees
+  // a phrase it can't find (that used to crash the render whenever an
+  // approved phrase happened to live in the headline instead of the body).
+  const { headline: headlineInstructions, body: bodyInstructions } = partitionEmphasisInstructionsByField(
+    { headline: slide.headline, body: slide.body },
+    slide.emphasis_instructions
+  );
+  const headlineHtml = renderTextWithEmphasisHtml(slide.headline, headlineInstructions);
+  const bodyHtml = renderTextWithEmphasisHtml(slide.body, bodyInstructions);
   const imageRegion = imageDataUri ? buildImageRegionHtml(slide.image_layout, imageDataUri) : "";
   const hasImage = imageDataUri && slide.image_layout !== "none";
   const contentTop = slide.image_layout === "strip" ? 260 : slide.image_layout === "corner" ? 190 : 0;
@@ -280,8 +309,8 @@ export function buildContentSlideHtml(slide, { imageDataUri } = {}) {
     ${logoOnLight}
     <div class="content-block" style="position:absolute;left:${SAFE_MARGIN_X_PX}px;right:${SAFE_MARGIN_X_PX}px;top:${hasImage ? contentTop : 0}px;bottom:40px;display:flex;flex-direction:column;justify-content:${hasImage ? "flex-start" : "center"};z-index:2;">
       ${buildLabelRowHtml(slide.industry_series, labelColor)}
-      <h2 class="headline" data-capacity-field="headline" data-capacity-axis="vertical"
-          style="font-size:26px;max-height:130px;margin-top:12px;color:${textPrimary}">${escapeHtml(slide.headline)}</h2>
+      <h2 class="headline${headlineInstructions.length > 0 ? " headline-has-emphasis" : ""}" data-capacity-field="headline" data-capacity-axis="vertical"
+          style="font-size:26px;max-height:130px;margin-top:12px;color:${textPrimary}">${headlineHtml}</h2>
       <p class="body-copy" data-capacity-field="body" data-capacity-axis="vertical"
          style="font-size:13.5px;max-height:${hasImage ? 130 : 170}px;margin-top:14px;color:${textSecondary}">${bodyHtml}</p>
     </div>
@@ -326,15 +355,23 @@ ${content}
 
 export function buildCloseBlackSlideHtml(slide, { imageDataUri } = {}) {
   const bg = imageDataUri ? buildBackgroundLayerHtml(imageDataUri) : "";
-  const bodyHtml = renderTextWithEmphasisHtml(slide.body, slide.emphasis_instructions);
+  // DC-003-I035.1 — see the identical comment in buildContentSlideHtml()
+  // above: instructions resolved per-field via the same shared resolver
+  // the factory already validated them against.
+  const { headline: headlineInstructions, body: bodyInstructions } = partitionEmphasisInstructionsByField(
+    { headline: slide.headline, body: slide.body },
+    slide.emphasis_instructions
+  );
+  const headlineHtml = renderTextWithEmphasisHtml(slide.headline, headlineInstructions);
+  const bodyHtml = renderTextWithEmphasisHtml(slide.body, bodyInstructions);
   const content = `
   <section class="slide" style="background:${DARK_BACKGROUND};color:${TEXT_PRIMARY_ON_DARK}">
     ${bg}
     ${buildLogoHtml()}
     <div class="close-content" style="position:absolute;left:${SAFE_MARGIN_X_PX}px;right:${SAFE_MARGIN_X_PX}px;bottom:44px;z-index:2;">
       ${buildLabelRowHtml(slide.industry_series, ACCENT)}
-      <h1 class="headline" data-capacity-field="headline" data-capacity-axis="vertical"
-          style="font-size:26px;max-height:120px;margin-top:12px;color:${TEXT_PRIMARY_ON_DARK}">${escapeHtml(slide.headline)}</h1>
+      <h1 class="headline${headlineInstructions.length > 0 ? " headline-has-emphasis" : ""}" data-capacity-field="headline" data-capacity-axis="vertical"
+          style="font-size:26px;max-height:120px;margin-top:12px;color:${TEXT_PRIMARY_ON_DARK}">${headlineHtml}</h1>
       <p class="body-copy" data-capacity-field="body" data-capacity-axis="vertical"
          style="font-size:13.5px;max-height:100px;margin-top:14px;color:${TEXT_SECONDARY_ON_DARK}">${bodyHtml}</p>
       <div class="soft-cta" data-capacity-field="soft_cta" data-capacity-axis="horizontal"

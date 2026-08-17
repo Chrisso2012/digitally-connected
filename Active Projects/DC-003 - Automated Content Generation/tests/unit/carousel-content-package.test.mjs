@@ -280,6 +280,53 @@ test("emphasis_instructions defaults to [] when omitted", () => {
   assert.deepEqual(record.slides[3].emphasis_instructions, []);
 });
 
+// --- DC-003-I035.1 — headline-only emphasis (the real production defect) ---
+// A real render of ccp_c1894dc4d8b04563 crashed because this factory used
+// to validate emphasis phrases against `${headline} ${body}` concatenated,
+// while the renderer only ever applied emphasis to `body` — a phrase
+// genuinely present only in the headline passed here but then crashed
+// rendering. These tests prove the factory now agrees with the renderer:
+// a headline-only phrase is valid, and a phrase that only exists by
+// spanning the headline/body boundary is rejected here instead of
+// surviving to crash a future render.
+
+test("a headline-only emphasis phrase on a content slide now validates successfully (the real reported defect)", () => {
+  const slides = buildDefaultSlides();
+  slides[5] = {
+    ...slides[5],
+    headline: "Your appraisal history is a source of future listings.",
+    body: "Not a record of past misses.",
+    emphasis_instructions: [{ phrase: "source of future listings", style: "highlight" }],
+  };
+  const record = createCarouselContentPackage(buildFields({ slides }));
+  assert.deepEqual(record.slides[5].emphasis_instructions, [{ phrase: "source of future listings", style: "highlight" }]);
+});
+
+test("a headline-only emphasis phrase on the close slide now validates successfully", () => {
+  const slides = buildDefaultSlides();
+  slides[6] = {
+    ...slides[6],
+    headline: "Not mass outreach. Not pressure.",
+    body: "Just a structured, respectful way of finding out who's still interested.",
+    emphasis_instructions: [{ phrase: "Not mass outreach", style: "highlight" }],
+  };
+  const record = createCarouselContentPackage(buildFields({ slides }));
+  assert.deepEqual(record.slides[6].emphasis_instructions, [{ phrase: "Not mass outreach", style: "highlight" }]);
+});
+
+test("throws EmphasisPhraseNotFoundError for a phrase that only matches by spanning the headline/body boundary (closes the latent edge case)", () => {
+  const slides = buildDefaultSlides();
+  slides[3] = {
+    ...slides[3],
+    headline: "Your appraisal is a",
+    body: "genuine asset worth revisiting.",
+    // "is a genuine" is not a real substring of either field alone — it
+    // only existed in the OLD concatenated `${headline} ${body}` check.
+    emphasis_instructions: [{ phrase: "is a genuine", style: "highlight" }],
+  };
+  assert.throws(() => createCarouselContentPackage(buildFields({ slides })), EmphasisPhraseNotFoundError);
+});
+
 // --- Production authority — enforced, never caller-suppliable -----------
 
 test("production_authority is always stamped with the fixed V1 contract values — publishing_authorized remains false", () => {
